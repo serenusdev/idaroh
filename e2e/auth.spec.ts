@@ -4,13 +4,8 @@ const email = process.env.E2E_EMAIL;
 const password = process.env.E2E_PASSWORD;
 
 test.describe("authentication boundary", () => {
-  test.beforeEach(async ({ page }) => {
-    await page.route("https://fonts.googleapis.com/**", (route) => route.abort());
-    await page.route("https://fonts.gstatic.com/**", (route) => route.abort());
-  });
-
   test("redirects an anonymous browser to login", async ({ page }) => {
-    await page.goto("/");
+    await page.goto("/", { waitUntil: "domcontentloaded" });
     await expect(page).toHaveURL(/\/login$/);
     await expect(page.getByRole("button", { name: "Masuk ke Sistem" })).toBeVisible();
   });
@@ -18,7 +13,7 @@ test.describe("authentication boundary", () => {
   test("allows an active seeded user to reach the dashboard", async ({ page }) => {
     test.skip(!email || !password, "E2E credentials are not configured");
 
-    await page.goto("/login");
+    await page.goto("/login", { waitUntil: "domcontentloaded" });
     await expect(page.locator("form[data-hydrated='true']")).toBeVisible();
     await page.getByLabel("Alamat Email").fill(email!);
     await page.getByLabel("Kata Sandi").fill(password!);
