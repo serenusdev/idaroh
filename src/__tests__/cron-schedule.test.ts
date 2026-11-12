@@ -71,11 +71,8 @@ describe("cron schedule migration and deployment heartbeat", () => {
     expect(migration).toContain("ON CONFLICT (job_key) DO NOTHING");
   });
 
-  it("runs both cron endpoints on a fixed heartbeat instead of hardcoded job times", () => {
+  it("keeps deployment crons empty so Hobby plans deploy; an external scheduler drives the heartbeat", () => {
     const vercel = JSON.parse(readFileSync(resolve(root, "vercel.json"), "utf8"));
-    expect(vercel.crons).toEqual([
-      { path: "/api/cron/notifications", schedule: "*/15 * * * *" },
-      { path: "/api/cron/backups", schedule: "*/15 * * * *" },
-    ]);
+    expect(vercel.crons).toEqual([]);
   });
 });

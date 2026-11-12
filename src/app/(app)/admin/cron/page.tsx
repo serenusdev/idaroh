@@ -81,7 +81,7 @@ export default function AdminCronPage() {
         <p className="text-sm text-muted-foreground mt-1">Atur kapan pengingat dan manifest database berjalan. Semua waktu dalam WIB dan berlaku untuk seluruh pengguna.</p>
       </header>
       <p role="note" className="rounded-xl border border-border bg-surface-container-low p-3 text-xs text-muted-foreground">
-        Publikasi pengumuman terjadwal, kedaluwarsa agenda, dan retry push tetap diproses setiap ±15 menit selama heartbeat cron aktif di deployment. Jadwal di halaman ini hanya mengatur job harian di bawah.
+        Publikasi pengumuman terjadwal, kedaluwarsa agenda, dan retry push tetap diproses setiap ±15 menit selama heartbeat cron eksternal (mis. cron-job.org) aktif. Jadwal di halaman ini hanya mengatur job harian di bawah.
       </p>
       {loading ? (
         <div className="rounded-2xl border border-border bg-card p-8 text-sm text-muted-foreground">Memuat jadwal…</div>
