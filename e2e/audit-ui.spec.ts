@@ -18,12 +18,13 @@ type Outcome =
   | { kind: "reject"; message: string }
   | { kind: "defer"; id: string };
 type Config = {
-  mode?: "inbox" | "identity" | "backup" | "dual";
+  mode?: "inbox" | "identity" | "backup" | "cron" | "dual";
   props?: Record<string, unknown>;
   data?: Record<string, Item[]>;
   queues?: Record<string, Outcome[]>;
   user?: Record<string, unknown> | null;
   runs?: Record<string, unknown>[];
+  schedules?: Record<string, unknown>[];
   realtimeUnavailable?: boolean;
 };
 type Snapshot = {
@@ -64,13 +65,14 @@ import { flushSync } from "react-dom";
 import { NotificationInbox } from "@/components/notifications/notification-inbox";
 import { AccountStateScreen } from "@/components/auth/account-state-screen";
 import AdminBackupPage from "@/app/(app)/admin/backup/page";
+import AdminCronPage from "@/app/(app)/admin/cron/page";
 
 const config = window.__auditConfig;
 const clone = value => value === undefined ? undefined : JSON.parse(JSON.stringify(value));
 const state = {
   data: clone(config.data || {}), queues: clone(config.queues || {}),
   user: config.user === undefined ? { id: "admin", role: "super_admin" } : config.user,
-  runs: clone(config.runs || []), calls: [], navigation: [], channels: [],
+  runs: clone(config.runs || []), schedules: clone(config.schedules || []), calls: [], navigation: [], channels: [],
   account: "account-a", pending: new Map(), listeners: new Map(),
 };
 const watched = ["focus", "online", "notifications:changed"];
@@ -116,6 +118,8 @@ window.__auditBoundaries = {
   currentUser: () => call("currentUser", [], state.user),
   runs: () => call("runs", [], state.runs),
   manifest: type => call("manifest", [type], { success: true, message: "Manifest dicatat; backup belum terverifikasi." }),
+  schedules: () => call("schedules", [], state.schedules),
+  saveSchedule: (key, input) => call("saveSchedule", [key, input], { success: true, message: "Jadwal disimpan. Perubahan berlaku pada tick berikutnya (maksimal ±15 menit)." }),
   pushCleanup: () => call("pushCleanup", [], undefined),
   router: {
     push: target => state.navigation.push({ kind: "push", target }),
@@ -143,6 +147,7 @@ function render(mode, props = {}, remount = false) {
   let component;
   if (mode === "identity") component = React.createElement(AccountStateScreen, { ...props, key: generation });
   else if (mode === "backup") component = React.createElement(AdminBackupPage, { key: generation });
+  else if (mode === "cron") component = React.createElement(AdminCronPage, { key: generation });
   else if (mode === "dual") component = React.createElement(React.Fragment, null,
     React.createElement("section", { "aria-label": "First inbox" }, React.createElement(NotificationInbox, { userId: "account-a" })),
     React.createElement("section", { "aria-label": "Second inbox" }, React.createElement(NotificationInbox, { userId: "account-a" })));
@@ -191,6 +196,9 @@ const boundaryModules: Record<string, string> = {
   "@/modules/operations/actions": `
     export const getBackupRunsAction = (...args) => window.__auditBoundaries.runs(...args);
     export const createBackupManifestAction = (...args) => window.__auditBoundaries.manifest(...args);`,
+  "@/modules/cron/actions": `
+    export const getCronJobSchedulesAction = (...args) => window.__auditBoundaries.schedules(...args);
+    export const updateCronJobScheduleAction = (...args) => window.__auditBoundaries.saveSchedule(...args);`,
   "@/modules/iam/actions": `export const getCurrentUserAction = () => window.__auditBoundaries.currentUser();`,
   "@/lib/supabase/client": `export const createClient = () => window.__auditBoundaries.client();`,
   "@/lib/notifications": `export const cleanupPushNotifications = () => window.__auditBoundaries.pushCleanup();`,
@@ -228,6 +236,7 @@ test.beforeAll(async () => {
     "src/components/notifications/use-notification-changes.ts",
     "src/components/auth/account-state-screen.tsx",
     "src/app/(app)/admin/backup/page.tsx",
+    "src/app/(app)/admin/cron/page.tsx",
     "src/lib/safe-url.ts",
   ]) expect(inputs.some(input => input.endsWith(required)), `Bundled actual ${required}`).toBe(true);
   expect(inputs.some(input => /src\/lib\/supabase\/|src\/modules\/.*\/actions\.ts/.test(input))).toBe(false);
@@ -650,5 +659,72 @@ test.describe("audit UI — actual components, mocked external dependencies (not
     await expect(page.getByText("peran: Super Admin", { exact: false })).toBeVisible();
     await expect(page.getByRole("button", { name: /Catat manifest database/ })).toHaveCount(0);
     expect(await callCount(page, "manifest")).toBe(0);
+  });
+
+  const cronSchedules = [
+    { jobKey: "attendance_reminder", label: "Pengingat presensi pagi", timeWib: "07:30", daysOfWeek: [1, 2, 3, 4, 5, 6], enabled: true },
+    { jobKey: "report_reminder", label: "Pengingat laporan harian", timeWib: "21:00", daysOfWeek: [1, 2, 3, 4, 5, 6], enabled: true },
+    { jobKey: "backup_manifest", label: "Manifest database harian", timeWib: "00:30", daysOfWeek: [0, 1, 2, 3, 4, 5, 6], enabled: true },
+  ];
+  const cronSection = (page: Page, label: string) => page.locator("#audit-ui-root section", { hasText: label });
+
+  test("cron page edits time, days and enabled flag, then saves through the real action boundary", async ({ page }) => {
+    const blocked = await mount(page, { mode: "cron", schedules: cronSchedules });
+    await expect(page.getByRole("heading", { name: "Jadwal otomatis", exact: true })).toBeVisible();
+    await expect(page.getByRole("note")).toContainText("setiap ±15 menit");
+    await expect(page.locator("#audit-ui-root section")).toHaveCount(3);
+    const attendance = cronSection(page, "Pengingat presensi pagi");
+    await expect(attendance.locator('input[type="time"]')).toHaveValue("07:30");
+    await expect(attendance.getByRole("button", { name: "Min", exact: true })).toHaveAttribute("aria-pressed", "false");
+    await attendance.locator('input[type="time"]').fill("08:15");
+    await attendance.getByRole("button", { name: "Min", exact: true }).click();
+    await expect(attendance.getByRole("button", { name: "Min", exact: true })).toHaveAttribute("aria-pressed", "true");
+    await attendance.getByRole("checkbox", { name: "Aktif" }).uncheck();
+    await attendance.getByRole("button", { name: "Simpan jadwal" }).click();
+    await expect(attendance.getByRole("status")).toContainText("Jadwal disimpan");
+    expect((await snapshot(page)).calls.filter(call => call.name === "saveSchedule").map(call => call.args)).toEqual([
+      ["attendance_reminder", { timeWib: "08:15", daysOfWeek: [0, 1, 2, 3, 4, 5, 6], enabled: false }],
+    ]);
+    expect(blocked).toEqual([]);
+  });
+
+  test("cron save failure and validation rejection surface alerts without losing the draft", async ({ page }) => {
+    await mount(page, {
+      mode: "cron", schedules: cronSchedules,
+      queues: { saveSchedule: [rejected(), resolved({ success: false, message: "Format jam harus HH:MM, antara 00:00 dan 23:59 WIB." })] },
+    });
+    const report = cronSection(page, "Pengingat laporan harian");
+    await report.locator('input[type="time"]').fill("21:30");
+    await report.getByRole("button", { name: "Simpan jadwal" }).click();
+    await expect(report.getByRole("alert")).toContainText("Jadwal belum tersimpan");
+    await expect(report.locator('input[type="time"]')).toHaveValue("21:30");
+    await report.getByRole("button", { name: "Simpan jadwal" }).click();
+    await expect(report.getByRole("alert")).toContainText("Format jam harus HH:MM");
+    expect(await callCount(page, "saveSchedule")).toBe(2);
+  });
+
+  test("cron role guard renders actual UnauthorizedState and never loads schedules", async ({ page }) => {
+    await mount(page, { mode: "cron", user: { id: "member", role: "santri" }, schedules: cronSchedules });
+    await expect(page.getByRole("heading", { name: "Akses Dibatasi" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Simpan jadwal" })).toHaveCount(0);
+    expect(await callCount(page, "schedules")).toBe(0);
+  });
+
+  test("cron identity failure retries into a working schedule editor", async ({ page }) => {
+    await mount(page, { mode: "cron", schedules: cronSchedules, queues: { currentUser: [rejected()] } });
+    await expect(page.getByRole("heading", { name: "Identitas Gagal Dimuat" })).toBeVisible();
+    expect(await callCount(page, "schedules")).toBe(0);
+    await page.getByRole("button", { name: "Muat Ulang Halaman" }).click();
+    await expect(page.getByRole("heading", { name: "Jadwal otomatis", exact: true })).toBeVisible();
+    expect(await callCount(page, "schedules")).toBe(1);
+  });
+
+  test("cron schedule load failure retries without reloading identity", async ({ page }) => {
+    await mount(page, { mode: "cron", schedules: cronSchedules, queues: { schedules: [rejected()] } });
+    await expect(page.getByRole("heading", { name: "Jadwal Gagal Dimuat" })).toBeVisible();
+    await page.getByRole("button", { name: "Muat Ulang Halaman" }).click();
+    await expect(page.locator("#audit-ui-root section")).toHaveCount(3);
+    expect(await callCount(page, "currentUser")).toBe(1);
+    expect(await callCount(page, "schedules")).toBe(2);
   });
 });

@@ -5,15 +5,20 @@ import { GET } from "@/app/api/cron/backups/route";
 const mocks = vi.hoisted(() => ({
   createAdminClient: vi.fn(),
   requireRole: vi.fn(),
+  jakarta: vi.fn(),
 }));
 
 vi.mock("@/lib/supabase/admin", () => ({ createAdminClient: mocks.createAdminClient }));
 vi.mock("@/lib/supabase/server", () => ({ createClient: vi.fn() }));
-vi.mock("@/lib/auth/guards", () => ({ requireRole: mocks.requireRole, requireAuthUser: vi.fn() }));
+vi.mock("@/lib/auth/guards", () => ({ requireRole: mocks.requireRole, requireAuthUser: vi.fn(), getJakartaTime: mocks.jakarta }));
 vi.mock("@/lib/fcm", () => ({ sendPushToUsers: vi.fn() }));
 
 const tables = ["profiles", "attendance_records", "daily_reports", "tasks", "events", "announcements"];
 const rowCounts = Object.fromEntries(tables.map((table) => [table, 7]));
+
+let scheduleRow: { time_wib: string; days_of_week: number[]; enabled: boolean } | null;
+let scheduleError: Error | null;
+let claimTaken: boolean;
 
 function mockDatabase() {
   const single = vi.fn().mockResolvedValue({ data: { id: "manifest-1" }, error: null });
@@ -22,9 +27,23 @@ function mockDatabase() {
   const updateEq = vi.fn().mockResolvedValue({ error: null });
   const update = vi.fn(() => ({ eq: updateEq }));
   const countSelect = vi.fn().mockResolvedValue({ count: 7, error: null });
-  const from = vi.fn((table: string) => table === "backup_runs" ? { insert, update } : { select: countSelect });
+  const scheduleMaybeSingle = vi.fn(async () => ({ data: scheduleRow, error: scheduleError }));
+  const scheduleEq = vi.fn(() => ({ maybeSingle: scheduleMaybeSingle }));
+  const scheduleSelect = vi.fn(() => ({ eq: scheduleEq }));
+  const claimMaybeSingle = vi.fn(async () => claimTaken
+    ? { data: null, error: { code: "23505" } }
+    : { data: { job_key: "backup-manifest:2026-11-12" }, error: null });
+  const claimInsert = vi.fn(() => ({ select: () => ({ maybeSingle: claimMaybeSingle }) }));
+  const jobUpdateEq = vi.fn().mockResolvedValue({ error: null });
+  const jobUpdate = vi.fn(() => ({ eq: jobUpdateEq }));
+  const from = vi.fn((table: string) => {
+    if (table === "backup_runs") return { insert, update };
+    if (table === "cron_job_schedules") return { select: scheduleSelect };
+    if (table === "cron_job_runs") return { insert: claimInsert, update: jobUpdate };
+    return { select: countSelect };
+  });
   mocks.createAdminClient.mockReturnValue({ from });
-  return { single, insert, update, updateEq, countSelect, from };
+  return { single, insert, update, updateEq, countSelect, from, scheduleMaybeSingle, claimInsert, claimMaybeSingle, jobUpdate, jobUpdateEq };
 }
 
 let database: ReturnType<typeof mockDatabase>;
@@ -35,6 +54,10 @@ beforeEach(() => {
   vi.stubEnv("VITEST", "");
   vi.stubEnv("CRON_SECRET", "local-test-secret");
   mocks.requireRole.mockResolvedValue({ id: "admin-1", role: "super_admin" });
+  mocks.jakarta.mockReturnValue({ dateStr: "2026-11-12", hours: 0, minutes: 30 });
+  scheduleRow = { time_wib: "00:30", days_of_week: [0, 1, 2, 3, 4, 5, 6], enabled: true };
+  scheduleError = null;
+  claimTaken = false;
   database = mockDatabase();
 });
 
@@ -117,12 +140,15 @@ describe("Scheduled database manifest", () => {
     const body = await response.json();
 
     expect(response.status).toBe(200);
+    expect(database.claimInsert).toHaveBeenCalledExactlyOnceWith({ job_key: "backup-manifest:2026-11-12" });
     expect(database.insert).toHaveBeenCalledExactlyOnceWith({ run_type: "database", status: "started", artifact_ref: null });
     expect(database.countSelect).toHaveBeenCalledTimes(6);
-    expect(database.from.mock.calls.map(([table]) => table)).toEqual(["backup_runs", ...tables, "backup_runs"]);
+    expect(database.from.mock.calls.map(([table]) => table)).toEqual(["cron_job_schedules", "cron_job_runs", "backup_runs", ...tables, "backup_runs", "cron_job_runs"]);
     expect(database.update).toHaveBeenCalledExactlyOnceWith({
       status: "manifest_only", row_counts: rowCounts, artifact_ref: null, completed_at: expect.any(String),
     });
+    expect(database.jobUpdate).toHaveBeenCalledExactlyOnceWith({ status: "completed", completed_at: expect.any(String) });
+    expect(database.jobUpdateEq).toHaveBeenCalledWith("job_key", "backup-manifest:2026-11-12");
     expect(body).toMatchObject({ success: true, runId: "manifest-1", status: "manifest_only", artifactRef: null, rowCounts });
     expect(body.note).toContain("not a backup");
     expect(body.note).toContain("No database/storage backup or restore was executed or verified");
@@ -146,6 +172,44 @@ describe("Scheduled database manifest", () => {
     expect(response.status).toBe(500);
     expect(database.countSelect).not.toHaveBeenCalled();
     expect(database.update).not.toHaveBeenCalled();
+    expect(database.jobUpdate).toHaveBeenCalledExactlyOnceWith({
+      status: "failed", error_message: "Backup run could not be started", completed_at: expect.any(String),
+    });
+  });
+
+  it("skips outside the admin-configured window without claiming or counting", async () => {
+    mocks.jakarta.mockReturnValue({ dateStr: "2026-11-12", hours: 12, minutes: 0 });
+    const response = await GET(cronRequest());
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({ success: true, skipped: true, reason: "not_scheduled" });
+    expect(database.claimInsert).not.toHaveBeenCalled();
+    expect(database.insert).not.toHaveBeenCalled();
+    expect(database.countSelect).not.toHaveBeenCalled();
+  });
+
+  it("skips when the schedule is disabled or missing", async () => {
+    scheduleRow = { ...scheduleRow!, enabled: false };
+    expect(await (await GET(cronRequest())).json()).toMatchObject({ skipped: true, reason: "not_scheduled" });
+    scheduleRow = null;
+    expect(await (await GET(cronRequest())).json()).toMatchObject({ skipped: true, reason: "not_scheduled" });
+    expect(database.insert).not.toHaveBeenCalled();
+  });
+
+  it("runs at most once per day even when the heartbeat ticks twice in the window", async () => {
+    expect((await GET(cronRequest())).status).toBe(200);
+    claimTaken = true;
+    const response = await GET(cronRequest());
+    expect(await response.json()).toMatchObject({ success: true, skipped: true, reason: "already_processed" });
+    expect(database.insert).toHaveBeenCalledTimes(1);
+    expect(database.countSelect).toHaveBeenCalledTimes(6);
+  });
+
+  it("fails closed when the schedule cannot be read", async () => {
+    scheduleError = new Error("Schedule unavailable");
+    const response = await GET(cronRequest());
+    expect(response.status).toBe(500);
+    expect(database.insert).not.toHaveBeenCalled();
   });
 
   it("rejects unauthorized requests before creating a run", async () => {

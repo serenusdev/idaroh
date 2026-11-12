@@ -242,6 +242,10 @@ export function MoreSheet({ isOpen, onClose, user }: MoreSheetProps) {
                 <span className="material-symbols-outlined text-primary text-[22px]">notifications_active</span>
                 <div className="flex-1"><span className="font-label-md text-label-md block">Uji Notifikasi</span><span className="font-body-sm text-[11px] text-muted-foreground block">Kirim push ke perangkat sendiri</span></div>
               </Link>}
+              {user.role === "super_admin" && <Link href="/admin/cron" onClick={onClose} className="flex items-center gap-3 px-3 py-2.5 rounded-xl text-on-surface hover:bg-accent/40 active:bg-accent transition-colors">
+                <span className="material-symbols-outlined text-primary text-[22px]">schedule</span>
+                <div className="flex-1"><span className="font-label-md text-label-md block">Jadwal Otomatis</span><span className="font-body-sm text-[11px] text-muted-foreground block">Jam pengingat dan manifest database</span></div>
+              </Link>}
               {user.role === "super_admin" && <Link href="/admin/backup" onClick={onClose} className="flex items-center gap-3 px-3 py-2.5 rounded-xl text-on-surface hover:bg-accent/40 active:bg-accent transition-colors">
                 <span className="material-symbols-outlined text-primary text-[22px]">backup</span>
                 <div className="flex-1"><span className="font-label-md text-label-md block">Backup &amp; Pemulihan</span><span className="font-body-sm text-[11px] text-muted-foreground block">Manifest dan uji restore</span></div>

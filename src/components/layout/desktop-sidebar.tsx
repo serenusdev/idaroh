@@ -57,6 +57,7 @@ export function DesktopSidebar({ user }: DesktopSidebarProps) {
     { label: "Anggota & Reviewer", href: "/admin/people", icon: "groups" },
     { label: "Backup & Pemulihan", href: "/admin/backup", icon: "backup" },
     { label: "Uji Notifikasi", href: "/admin/notifications", icon: "notifications_active" },
+    { label: "Jadwal Otomatis", href: "/admin/cron", icon: "schedule" },
     { label: "Kelola Pengguna IAM", href: "/admin/users", icon: "manage_accounts" },
     { label: "Kelola Jadwal & Siaran", href: "/admin/jadwal", icon: "edit_calendar" },
     { label: "Kelola Resource Library", href: "/admin/resources", icon: "library_books" },

@@ -13,11 +13,14 @@ let dueIds: string[];
 let events: string[];
 let claimed: Set<string>;
 let dueError: Error | null;
+let scheduleRows: { job_key: string; time_wib: string; days_of_week: number[]; enabled: boolean }[];
+let scheduleError: Error | null;
 function query(table: string) {
   let operation = "select";
   let id: string | undefined;
   let jobKey = "";
   const result = () => {
+    if (table === "cron_job_schedules") return { data: scheduleRows, error: scheduleError };
     if (table === "announcements") {
       if (operation === "select") return { data: dueIds.map((id) => ({ id })), error: dueError };
       if (id) { events.push(`publish:${id}`); return { data: { id }, error: null }; }
@@ -48,7 +51,11 @@ function request(auth = true) {
 }
 beforeEach(() => {
   vi.stubEnv("CRON_SECRET", "cron-test");
-  dueIds = []; events = []; claimed = new Set(); dueError = null;
+  dueIds = []; events = []; claimed = new Set(); dueError = null; scheduleError = null;
+  scheduleRows = [
+    { job_key: "attendance_reminder", time_wib: "07:30", days_of_week: [1, 2, 3, 4, 5, 6], enabled: true },
+    { job_key: "report_reminder", time_wib: "21:00", days_of_week: [1, 2, 3, 4, 5, 6], enabled: true },
+  ];
   mocks.admin.mockReturnValue({ from: query, rpc: vi.fn(async () => ({ data: null, error: null })) });
   mocks.jakarta.mockReturnValue({ dateStr: "2026-11-12", hours: 12, minutes: 0 });
   mocks.drain.mockReset(); mocks.send.mockReset();
@@ -94,6 +101,47 @@ describe("notification cron outbox integration", () => {
       ["ATTENDANCE_REMINDER", "2026-11-12"], ["ATTENDANCE_REMINDER", "2026-11-13"], ["REPORT_DEADLINE_REMINDER", "2026-11-13"],
     ]);
   });
+  it("honors admin-edited schedule times instead of hardcoded windows", async () => {
+    scheduleRows[0].time_wib = "08:15";
+    mocks.jakarta.mockReturnValue({ dateStr: "2026-11-12", hours: 7, minutes: 30 });
+    expect(await (await GET(request())).json()).toMatchObject({ skipped: true });
+    expect(mocks.send).not.toHaveBeenCalled();
+    mocks.jakarta.mockReturnValue({ dateStr: "2026-11-12", hours: 8, minutes: 15 });
+    expect((await GET(request())).status).toBe(200);
+    expect(mocks.send.mock.calls.map(([, message]) => message.type)).toEqual(["ATTENDANCE_REMINDER"]);
+  });
+
+  it("skips disabled schedules, unselected weekdays and missing rows", async () => {
+    mocks.jakarta.mockReturnValue({ dateStr: "2026-11-12", hours: 7, minutes: 30 });
+    scheduleRows[0].enabled = false;
+    expect(await (await GET(request())).json()).toMatchObject({ skipped: true });
+    scheduleRows[0].enabled = true;
+    mocks.jakarta.mockReturnValue({ dateStr: "2026-11-15", hours: 7, minutes: 30 });
+    expect(await (await GET(request())).json()).toMatchObject({ skipped: true });
+    mocks.jakarta.mockReturnValue({ dateStr: "2026-11-12", hours: 7, minutes: 30 });
+    scheduleRows = scheduleRows.filter((row) => row.job_key !== "attendance_reminder");
+    expect(await (await GET(request())).json()).toMatchObject({ skipped: true });
+    expect(mocks.send).not.toHaveBeenCalled();
+  });
+
+  it("fires inside the grace window and stops at its boundary", async () => {
+    mocks.jakarta.mockReturnValue({ dateStr: "2026-11-12", hours: 7, minutes: 49 });
+    expect((await GET(request())).status).toBe(200);
+    expect(mocks.send).toHaveBeenCalledTimes(1);
+    claimed.clear();
+    mocks.jakarta.mockReturnValue({ dateStr: "2026-11-12", hours: 7, minutes: 50 });
+    expect(await (await GET(request())).json()).toMatchObject({ skipped: true });
+    expect(mocks.send).toHaveBeenCalledTimes(1);
+  });
+
+  it("fails closed on schedule read errors but still drains the outbox", async () => {
+    mocks.jakarta.mockReturnValue({ dateStr: "2026-11-12", hours: 7, minutes: 30 });
+    scheduleError = new Error("schedule read failed");
+    expect((await GET(request())).status).toBe(500);
+    expect(mocks.send).not.toHaveBeenCalled();
+    expect(mocks.drain).toHaveBeenCalledTimes(1);
+  });
+
   it("keeps manual publication delivery trigger-owned, including draft transitions", () => {
     const actions = readFileSync(new URL("../modules/schedules/actions.ts", import.meta.url), "utf8");
     expect(actions).not.toMatch(/type: "ANNOUNCEMENT_PUBLISHED"/);

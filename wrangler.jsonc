@@ -6,6 +6,9 @@
   "compatibility_flags": [
     "nodejs_compat"
   ],
+  "vars": {
+    "NEXT_PUBLIC_SUPABASE_URL": "https://iahicretctdwpjhxohio.supabase.co"
+  },
   "assets": {
     "directory": ".open-next/assets",
     "binding": "ASSETS"

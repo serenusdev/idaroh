@@ -1,7 +1,6 @@
 {
   "crons": [
-    { "path": "/api/cron/backups", "schedule": "30 17 * * 1-6" },
-    { "path": "/api/cron/notifications", "schedule": "30 0 * * 1-6" },
-    { "path": "/api/cron/notifications", "schedule": "0 14 * * 1-6" }
+    { "path": "/api/cron/notifications", "schedule": "*/15 * * * *" },
+    { "path": "/api/cron/backups", "schedule": "*/15 * * * *" }
   ]
 }

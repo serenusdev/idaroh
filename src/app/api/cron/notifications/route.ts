@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { drainNotificationOutbox, sendPushToUsers } from "@/lib/fcm";
 import { getJakartaTime } from "@/lib/auth/guards";
+import { isCronJobDue } from "@/lib/cron-schedule";
 import { timingSafeEqual } from "node:crypto";
 
 export const dynamic = "force-dynamic";
@@ -58,8 +59,20 @@ export async function GET(request: Request) {
       .select("id");
     if (expiryError) throw expiryError;
     expiredArchived = expired?.length || 0;
-    const sendAttendanceReminder = jakarta.hours === 7 && jakarta.minutes >= 25 && jakarta.minutes <= 35;
-    const sendReportReminder = jakarta.hours === 21 && jakarta.minutes <= 5;
+    const { data: scheduleRows, error: scheduleError } = await admin
+      .from("cron_job_schedules")
+      .select("job_key, time_wib, days_of_week, enabled")
+      .in("job_key", ["attendance_reminder", "report_reminder"]);
+    if (scheduleError) throw scheduleError;
+    const schedules = new Map<string, { time_wib: string; days_of_week: number[]; enabled: boolean }>(
+      (scheduleRows || []).map((row: { job_key: string; time_wib: string; days_of_week: number[]; enabled: boolean }) => [row.job_key, row]),
+    );
+    const due = (key: string) => {
+      const row = schedules.get(key);
+      return row ? isCronJobDue({ timeWib: row.time_wib, daysOfWeek: row.days_of_week, enabled: row.enabled }, jakarta) : false;
+    };
+    const sendAttendanceReminder = due("attendance_reminder");
+    const sendReportReminder = due("report_reminder");
     const { error: snapshotError } = await admin.rpc("refresh_attendance_effective", { p_date: today });
     if (snapshotError) console.error("Attendance effective snapshot failed:", snapshotError);
     if (!sendAttendanceReminder && !sendReportReminder) {
