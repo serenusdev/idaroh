@@ -20,6 +20,8 @@ import {
   type ActiveUserItem,
 } from "@/modules/iam/actions";
 import { importMembersCsvAction } from "@/modules/operations/actions";
+import { getTeamsAction } from "@/modules/people/actions";
+import type { TeamStructureItem } from "@/modules/people/types";
 import { exportAuditedDataAction } from "@/modules/analytics/actions";
 
 export default function AdminUsersPage() {
@@ -75,18 +77,26 @@ export default function AdminUsersPage() {
   const [isExportingUsers, setIsExportingUsers] = React.useState(false);
   const [exportFeedback, setExportFeedback] = React.useState<string | null>(null);
 
-  // Role select per applicant
+  // Role and team picked per applicant, plus the reason an approval failed
   const [applicantRoles, setApplicantRoles] = React.useState<Record<string, string>>({});
+  const [applicantTeams, setApplicantTeams] = React.useState<Record<string, string>>({});
+  const [approveErrors, setApproveErrors] = React.useState<Record<string, string>>({});
+  const [teams, setTeams] = React.useState<TeamStructureItem[]>([]);
 
   const loadData = React.useCallback(async () => {
     setIsLoading(true);
     try {
-      const [requests, users] = await Promise.all([
+      const [requests, users, teamList] = await Promise.all([
         getAccountRequestsAction(),
         getActiveUsersAction(),
+        getTeamsAction().catch((teamsError) => {
+          console.error("Failed to load teams for approval:", teamsError);
+          return [] as TeamStructureItem[];
+        }),
       ]);
       setAccountRequests(requests);
       setActiveUsers(users);
+      setTeams(teamList);
     } catch (err) {
       console.error("Failed to load IAM data:", err);
     } finally {
@@ -137,16 +147,49 @@ export default function AdminUsersPage() {
     return <UnauthorizedState requiredRole="Super Admin / Pengurus / Yayasan" />;
   }
 
-  const handleApprove = async (cardId: string) => {
+  const roleOptions = [
+    { value: "santri", label: "Santri" },
+    { value: "koordinator", label: "Koordinator" },
+    // Only an approver above Pengurus may grant Pengurus.
+    ...(currentUser?.role === "super_admin" || currentUser?.role === "yayasan"
+      ? [{ value: "pengurus", label: "Pengurus" }]
+      : []),
+  ];
+
+  // Default to the team the applicant asked for, else the first team, so an
+  // approved member always lands in a real team.
+  const defaultTeamId = (applicant: AccountRequestItem) => {
+    const requested = applicant.teamRequested.trim().toLowerCase();
+    return teams.find((team) => team.name.trim().toLowerCase() === requested)?.id ?? teams[0]?.id ?? "";
+  };
+
+  const handleApprove = async (applicant: AccountRequestItem) => {
+    const cardId = applicant.id;
     if (processingCards[cardId]) return; // guard double-click
     setProcessingCards((prev) => ({ ...prev, [cardId]: true }));
-    const role = applicantRoles[cardId] || "Santri • Sentra Digitalpreneur";
-    const res = await approveAccountApplicationAction(cardId, role);
-    if (res.success) {
-      setApprovedCards((prev) => ({ ...prev, [cardId]: role }));
-      await loadData();
+    setApproveErrors((prev) => {
+      const next = { ...prev };
+      delete next[cardId];
+      return next;
+    });
+    const role = applicantRoles[cardId] || "santri";
+    const teamId = applicantTeams[cardId] ?? defaultTeamId(applicant);
+    const roleLabel = roleOptions.find((option) => option.value === role)?.label || role;
+    const teamName = teams.find((team) => team.id === teamId)?.name;
+    try {
+      const res = await approveAccountApplicationAction(cardId, role, teamId || null);
+      if (res.success) {
+        setApprovedCards((prev) => ({ ...prev, [cardId]: teamName ? `${roleLabel} • ${teamName}` : roleLabel }));
+        await loadData();
+      } else {
+        setApproveErrors((prev) => ({ ...prev, [cardId]: res.message }));
+      }
+    } catch (err) {
+      console.error("Failed to approve account:", err);
+      setApproveErrors((prev) => ({ ...prev, [cardId]: "Gagal menyetujui akun. Silakan coba lagi." }));
+    } finally {
+      setProcessingCards((prev) => ({ ...prev, [cardId]: false }));
     }
-    setProcessingCards((prev) => ({ ...prev, [cardId]: false }));
   };
 
   const openRejectDialog = (cardId: string) => {
@@ -496,40 +539,54 @@ export default function AdminUsersPage() {
                         <span className="material-symbols-outlined text-[15px]">badge</span>
                         Alokasi Peran RBAC &amp; Penugasan Sentra:
                       </label>
-                      <div className="relative">
-                        <select
-                          className="w-full h-11 px-3 pr-8 rounded-lg bg-surface-container font-label-md text-label-md text-on-surface appearance-none focus:outline-none focus:ring-2 focus:ring-primary transition-all border border-border"
-                          id={`role-select-${applicant.id}`}
-                          value={
-                            applicantRoles[applicant.id] ||
-                            `${applicant.roleRequested} • ${applicant.teamRequested}`
-                          }
-                          onChange={(e) =>
-                            setApplicantRoles({
-                              ...applicantRoles,
-                              [applicant.id]: e.target.value,
-                            })
-                          }
-                        >
-                          <option value="Santri • Sentra Digitalpreneur">
-                            Santri • Sentra Digitalpreneur
-                          </option>
-                          <option value="Santri • Sentra Dakwah Media">
-                            Santri • Sentra Dakwah Media
-                          </option>
-                          <option value="Santri • Sentra Agropreneur">
-                            Santri • Sentra Agropreneur
-                          </option>
-                          <option value="Pengurus • Ustadz Pembina">
-                            Pengurus • Ustadz Pembina
-                          </option>
-                          <option value="Koordinator Divisi (Santri Senior)">
-                            Koordinator Divisi (Santri Senior)
-                          </option>
-                        </select>
-                        <span className="material-symbols-outlined absolute right-2.5 top-1/2 -translate-y-1/2 text-muted-foreground pointer-events-none text-[20px]">
-                          arrow_drop_down
-                        </span>
+                      <div className="grid grid-cols-2 gap-2">
+                        <div className="relative">
+                          <select
+                            className="w-full h-11 px-3 pr-8 rounded-lg bg-surface-container font-label-md text-label-md text-on-surface appearance-none focus:outline-none focus:ring-2 focus:ring-primary transition-all border border-border"
+                            id={`role-select-${applicant.id}`}
+                            aria-label="Peran"
+                            value={applicantRoles[applicant.id] || "santri"}
+                            onChange={(e) =>
+                              setApplicantRoles({
+                                ...applicantRoles,
+                                [applicant.id]: e.target.value,
+                              })
+                            }
+                          >
+                            {roleOptions.map((option) => (
+                              <option key={option.value} value={option.value}>
+                                {option.label}
+                              </option>
+                            ))}
+                          </select>
+                          <span className="material-symbols-outlined absolute right-2.5 top-1/2 -translate-y-1/2 text-muted-foreground pointer-events-none text-[20px]">
+                            arrow_drop_down
+                          </span>
+                        </div>
+                        <div className="relative">
+                          <select
+                            className="w-full h-11 px-3 pr-8 rounded-lg bg-surface-container font-label-md text-label-md text-on-surface appearance-none focus:outline-none focus:ring-2 focus:ring-primary transition-all border border-border"
+                            id={`team-select-${applicant.id}`}
+                            aria-label="Tim / Sentra"
+                            value={applicantTeams[applicant.id] ?? defaultTeamId(applicant)}
+                            onChange={(e) =>
+                              setApplicantTeams({
+                                ...applicantTeams,
+                                [applicant.id]: e.target.value,
+                              })
+                            }
+                          >
+                            {teams.map((team) => (
+                              <option key={team.id} value={team.id}>
+                                {team.name}
+                              </option>
+                            ))}
+                            <option value="">Tanpa tim</option>
+                          </select>
+                          <span className="material-symbols-outlined absolute right-2.5 top-1/2 -translate-y-1/2 text-muted-foreground pointer-events-none text-[20px]">
+                            arrow_drop_down
+                          </span>
+                        </div>
                       </div>
                     </div>
 
@@ -546,7 +603,7 @@ export default function AdminUsersPage() {
                       </button>
                       <button
                         className="h-11 rounded-lg bg-primary text-on-primary font-label-md text-label-md flex items-center justify-center gap-1.5 shadow-sm active:scale-95 transition-all disabled:opacity-60"
-                        onClick={() => handleApprove(applicant.id)}
+                        onClick={() => handleApprove(applicant)}
                         type="button"
                         disabled={!!processingCards[applicant.id]}
                       >
@@ -563,6 +620,12 @@ export default function AdminUsersPage() {
                         )}
                       </button>
                     </div>
+                    {approveErrors[applicant.id] && (
+                      <p className="text-[13px] text-error flex items-start gap-1.5" role="alert">
+                        <span className="material-symbols-outlined text-[16px] mt-px">error</span>
+                        <span>{approveErrors[applicant.id]}</span>
+                      </p>
+                    )}
                   </>
                 )}
               </div>

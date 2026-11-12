@@ -378,7 +378,8 @@ export async function getActiveUsersAction(): Promise<ActiveUserItem[]> {
  */
 export async function approveAccountApplicationAction(
   applicantId: string,
-  assignedRole: string
+  assignedRole: string,
+  teamId?: string | null
 ): Promise<ActionResult> {
   if (!applicantId) {
     return { success: false, message: "ID Pemohon tidak valid." };
@@ -434,6 +435,7 @@ export async function approveAccountApplicationAction(
       p_auth_user_id: authUserId,
       p_role_key: canonicalRole,
       p_approver_id: approver.id,
+      p_team_id: teamId || null,
     });
     if (provisionError) throw provisionError;
     if (!provisioned?.success) return { success: false, message: provisioned?.message || "Persetujuan akun gagal." };
