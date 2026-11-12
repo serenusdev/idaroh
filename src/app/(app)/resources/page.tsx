@@ -4,50 +4,40 @@ import * as React from "react";
 import { Illustration } from "@/components/ui/illustration";
 import { CategorySummary, ResourceItem } from "@/modules/library/types";
 import { getResourcesAction, getCategoriesAction, getResourceStatsAction, getFavoriteResourceIdsAction, toggleFavoriteAction } from "@/modules/library/actions";
+import { useIdentity } from "@/components/auth/identity-context";
+import { useCachedData } from "@/hooks/use-cached-data";
+import { writeCache } from "@/lib/data-cache";
 
 export default function ResourceLibraryPage() {
+  const { user } = useIdentity();
   const [selectedCategory, setSelectedCategory] = React.useState("all");
   const [searchQuery, setSearchQuery] = React.useState("");
   const [onlyFavorites, setOnlyFavorites] = React.useState(false);
   const [onlyComplete, setOnlyComplete] = React.useState(false);
   const [selectedTag, setSelectedTag] = React.useState<string | null>(null);
 
-  const [resources, setResources] = React.useState<ResourceItem[]>([]);
-  const [categories, setCategories] = React.useState<CategorySummary[]>([]);
-  const [stats, setStats] = React.useState<{ totalCount: number; validCount: number; validPercent: number } | null>(null);
-  const [statsError, setStatsError] = React.useState(false);
-  const [loadError, setLoadError] = React.useState<string | null>(null);
+  const resourcesQuery = useCachedData(`resources:list:${selectedCategory}:${searchQuery}`, () => getResourcesAction(searchQuery, selectedCategory));
+  const categoriesQuery = useCachedData("resources:categories", getCategoriesAction);
+  const statsQuery = useCachedData("resources:stats", getResourceStatsAction);
+  const favoritesQuery = useCachedData(`resources:favorites:${user.id}`, getFavoriteResourceIdsAction);
 
+  const resources: ResourceItem[] = React.useMemo(() => resourcesQuery.data ?? [], [resourcesQuery.data]);
+  const categories: CategorySummary[] = categoriesQuery.data ?? [];
+  const stats = statsQuery.data ?? null;
+  const statsError = Boolean(statsQuery.error);
+  const loadError = resourcesQuery.error?.message || categoriesQuery.error?.message || null;
+
+  const [favorites, setFavorites] = React.useState<Record<string, boolean>>(() =>
+    Object.fromEntries((favoritesQuery.data ?? []).map((id) => [id, true]))
+  );
   React.useEffect(() => {
-    let isMounted = true;
-    async function loadData() {
-      setLoadError(null);
-      try {
-        const [resData, catData, statsData, favoriteIds] = await Promise.all([
-          getResourcesAction(searchQuery, selectedCategory),
-          getCategoriesAction(),
-          getResourceStatsAction(),
-          getFavoriteResourceIdsAction(),
-        ]);
-        if (isMounted) {
-          setResources(resData);
-          setCategories(catData);
-          setStats(statsData);
-          setFavorites(Object.fromEntries(favoriteIds.map((id) => [id, true])));
-        }
-      } catch (err) {
-        console.error("Failed to load resources:", err);
-        if (isMounted) {
-          setStatsError(true);
-          setLoadError(err instanceof Error ? err.message : "Data pustaka gagal dimuat.");
-        }
-      }
+    if (favoritesQuery.data) {
+      setFavorites(Object.fromEntries(favoritesQuery.data.map((id) => [id, true])));
     }
-    loadData();
-    return () => {
-      isMounted = false;
-    };
-  }, [searchQuery, selectedCategory]);
+  }, [favoritesQuery.data]);
+  React.useEffect(() => {
+    writeCache(`resources:favorites:${user.id}`, Object.keys(favorites).filter((id) => favorites[id]));
+  }, [favorites, user.id]);
 
   React.useEffect(() => {
     const resourceId = new URLSearchParams(window.location.search).get("resource");
@@ -57,7 +47,6 @@ export default function ResourceLibraryPage() {
   }, [resources]);
 
   const [expandedFields, setExpandedFields] = React.useState<Record<string, boolean>>({});
-  const [favorites, setFavorites] = React.useState<Record<string, boolean>>({});
   const [copyFeedback, setCopyFeedback] = React.useState<Record<string, boolean>>({});
   const [detailModalItem, setDetailModalItem] = React.useState<ResourceItem | null>(null);
 

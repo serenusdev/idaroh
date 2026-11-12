@@ -3,7 +3,9 @@
 import * as React from "react";
 import { LoadingSpinner } from "@/components/ui/loading-spinner";
 import { UnauthorizedState } from "@/components/ui/unauthorized-state";
-import { getCurrentUserAction } from "@/modules/iam/actions";
+import { useIdentity } from "@/components/auth/identity-context";
+import { useCachedData } from "@/hooks/use-cached-data";
+import { invalidateCache } from "@/lib/data-cache";
 import {
   getResourceAdminListAction,
   getResourceCategoryOptionsAction,
@@ -14,7 +16,6 @@ import {
   setResourceArchiveAction,
 } from "@/modules/library/actions";
 import type { ResourceAdminInput, ResourceRevisionItem } from "@/modules/library/types";
-import type { UserProfile } from "@/lib/auth/types";
 
 const EMPTY_FORM: ResourceAdminInput = {
   name: "",
@@ -34,31 +35,33 @@ const EMPTY_FORM: ResourceAdminInput = {
 };
 
 export default function AdminResourcesPage() {
-  const [user, setUser] = React.useState<UserProfile | null>(null);
-  const [resources, setResources] = React.useState<Array<ResourceAdminInput & { id: string; updatedAt: string }>>([]);
-  const [categories, setCategories] = React.useState<Array<{ id: string; name: string; slug: string }>>([]);
+  const { user } = useIdentity();
+  const listQuery = useCachedData("admin:resources-list", getResourceAdminListAction);
+  const categoriesQuery = useCachedData("admin:resource-categories", getResourceCategoryOptionsAction);
+  const resources = listQuery.data ?? [];
+  const categories = categoriesQuery.data ?? [];
   const [form, setForm] = React.useState<ResourceAdminInput>(EMPTY_FORM);
   const [editingId, setEditingId] = React.useState<string | null>(null);
   const [revisions, setRevisions] = React.useState<ResourceRevisionItem[]>([]);
-  const [loading, setLoading] = React.useState(true);
   const [saving, setSaving] = React.useState(false);
   const [notice, setNotice] = React.useState<string | null>(null);
   const [importCsv, setImportCsv] = React.useState("");
   const [importFileName, setImportFileName] = React.useState("resources.csv");
   const [importFeedback, setImportFeedback] = React.useState<string | null>(null);
 
-  const load = React.useCallback(async () => {
-    const [items, categoryOptions] = await Promise.all([getResourceAdminListAction(), getResourceCategoryOptionsAction()]);
-    setResources(items);
-    setCategories(categoryOptions);
-  }, []);
-
+  const loading = listQuery.isLoading || categoriesQuery.isLoading;
+  const loadError = listQuery.error ?? categoriesQuery.error;
   React.useEffect(() => {
-    Promise.all([getCurrentUserAction(), load()]).then(([currentUser]) => setUser(currentUser)).finally(() => setLoading(false));
-  }, [load]);
+    if (loadError) setNotice("Data resource belum dapat dimuat. Silakan coba lagi.");
+  }, [loadError]);
+
+  const invalidateUserResources = () => {
+    invalidateCache("resources:list");
+    invalidateCache("resources:stats");
+  };
 
   if (loading) return <div className="min-h-[360px] grid place-items-center"><LoadingSpinner size="lg" /></div>;
-  if (!user || !["super_admin", "yayasan", "pengurus"].includes(user.role)) {
+  if (!["super_admin", "yayasan", "pengurus"].includes(user.role)) {
     return <UnauthorizedState requiredRole="Super Admin / Yayasan / Pengurus" />;
   }
 
@@ -78,13 +81,14 @@ export default function AdminResourcesPage() {
     const result = await saveResourceAction(editingId, { ...form, tags: form.tags });
     setNotice(result.message);
     if (result.success) {
-      await load();
+      const items = await listQuery.refresh();
       setEditingId(result.id || editingId);
       if (result.id) {
-        const saved = (await getResourceAdminListAction()).find((item) => item.id === result.id);
+        const saved = items?.find((item) => item.id === result.id);
         if (saved) setForm(saved);
         setRevisions(await getResourceRevisionsAction(result.id));
       }
+      invalidateUserResources();
     }
     setSaving(false);
   };
@@ -92,7 +96,10 @@ export default function AdminResourcesPage() {
   const archive = async (resource: ResourceAdminInput & { id: string; updatedAt: string }) => {
     const result = await setResourceArchiveAction(resource.id, resource.status !== "archived");
     setNotice(result.message);
-    if (result.success) await load();
+    if (result.success) {
+      await listQuery.refresh();
+      invalidateUserResources();
+    }
   };
 
   const restoreRevision = async (revision: ResourceRevisionItem) => {
@@ -100,10 +107,11 @@ export default function AdminResourcesPage() {
     const result = await restoreResourceRevisionAction(editingId, revision.id);
     setNotice(result.message);
     if (result.success) {
-      await load();
-      const saved = (await getResourceAdminListAction()).find((item) => item.id === editingId);
+      const items = await listQuery.refresh();
+      const saved = items?.find((item) => item.id === editingId);
       if (saved) setForm(saved);
       setRevisions(await getResourceRevisionsAction(editingId));
+      invalidateUserResources();
     }
   };
 
@@ -112,8 +120,9 @@ export default function AdminResourcesPage() {
     const result = await importResourcesCsvAction(importFileName, importCsv);
     setImportFeedback(`${result.message}${result.errors.length ? ` ${result.errors.slice(0, 3).join(" ")}` : ""}`);
     if (result.importedRows > 0) {
-      await load();
+      await listQuery.refresh();
       setImportCsv("");
+      invalidateUserResources();
     }
   };
 

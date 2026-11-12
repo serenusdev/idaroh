@@ -2,8 +2,7 @@
 
 import * as React from "react";
 import Link from "next/link";
-import { getCurrentUserAction } from "@/modules/iam/actions";
-import { UserProfile } from "@/lib/auth/types";
+import { useIdentity } from "@/components/auth/identity-context";
 import { UnauthorizedState } from "@/components/ui/unauthorized-state";
 import { LoadingSpinner } from "@/components/ui/loading-spinner";
 import { Illustration } from "@/components/ui/illustration";
@@ -19,6 +18,8 @@ import {
   deleteAnnouncementAction,
 } from "@/modules/schedules/actions";
 import type { ScheduleEventItem, AnnouncementItem, AudienceConfig } from "@/modules/schedules/types";
+import { useCachedData } from "@/hooks/use-cached-data";
+import { invalidateCache } from "@/lib/data-cache";
 
 function toJakartaDateTimeLocal(value?: string) {
   if (!value) return "";
@@ -36,14 +37,15 @@ function toJakartaDateTimeLocal(value?: string) {
 }
 
 export default function AdminJadwalPage() {
-  const [currentUser, setCurrentUser] = React.useState<UserProfile | null>(null);
-  const [isLoadingAuth, setIsLoadingAuth] = React.useState(true);
+  const { user: currentUser } = useIdentity();
   const [activeTab, setActiveTab] = React.useState<"agenda" | "pengumuman">("agenda");
 
   // Data states
-  const [events, setEvents] = React.useState<ScheduleEventItem[]>([]);
-  const [announcements, setAnnouncements] = React.useState<AnnouncementItem[]>([]);
-  const [isLoadingData, setIsLoadingData] = React.useState(true);
+  const eventsQuery = useCachedData(`events:${currentUser.id}`, getEventsAction);
+  const announcementsQuery = useCachedData(`admin:announcements:${currentUser.id}`, getAdminAnnouncementsAction);
+  const events: ScheduleEventItem[] = eventsQuery.data ?? [];
+  const announcements: AnnouncementItem[] = announcementsQuery.data ?? [];
+  const isLoadingData = eventsQuery.isLoading || announcementsQuery.isLoading;
   const [feedbackNotice, setFeedbackNotice] = React.useState<{
     type: "success" | "error";
     message: string;
@@ -81,42 +83,10 @@ export default function AdminJadwalPage() {
     expiresAt: "",
   });
 
-  const loadData = React.useCallback(async () => {
-    setIsLoadingData(true);
-    try {
-      const [evList, anList] = await Promise.all([
-        getEventsAction(),
-        getAdminAnnouncementsAction(),
-      ]);
-      setEvents(evList || []);
-      setAnnouncements(anList || []);
-    } catch (err) {
-      console.error("Gagal memuat agenda/pengumuman:", err);
-    } finally {
-      setIsLoadingData(false);
-    }
-  }, []);
-
-  React.useEffect(() => {
-    getCurrentUserAction()
-      .then((user) => {
-        setCurrentUser(user);
-      })
-      .finally(() => {
-        setIsLoadingAuth(false);
-      });
-
-    loadData();
-  }, [loadData]);
-
-  if (isLoadingAuth) {
-    return (
-      <div className="flex flex-col items-center justify-center min-h-[350px] gap-3">
-        <LoadingSpinner size="lg" />
-        <p className="font-body-sm text-sm text-muted-foreground">Memverifikasi hak akses...</p>
-      </div>
-    );
-  }
+  const refreshAnnouncements = () => {
+    announcementsQuery.refresh();
+    invalidateCache("announcements:");
+  };
 
   const isAdminOrPengurus =
     currentUser?.role === "super_admin" ||
@@ -165,7 +135,7 @@ export default function AdminJadwalPage() {
         recurrenceRule: "none",
         recurrenceUntil: "",
       });
-      loadData();
+      eventsQuery.refresh();
     } else {
       setFeedbackNotice({ type: "error", message: res.message });
     }
@@ -177,7 +147,7 @@ export default function AdminJadwalPage() {
     const res = await deleteEventAction(id);
     if (res.success) {
       setFeedbackNotice({ type: "success", message: res.message });
-      loadData();
+      eventsQuery.refresh();
     } else {
       setFeedbackNotice({ type: "error", message: res.message });
     }
@@ -236,7 +206,7 @@ export default function AdminJadwalPage() {
         scheduledFor: "",
         expiresAt: "",
       });
-      loadData();
+      refreshAnnouncements();
     } else {
       setFeedbackNotice({ type: "error", message: res.message });
     }
@@ -263,7 +233,7 @@ export default function AdminJadwalPage() {
     const res = await deleteAnnouncementAction(id);
     if (res.success) {
       setFeedbackNotice({ type: "success", message: res.message });
-      loadData();
+      refreshAnnouncements();
     } else {
       setFeedbackNotice({ type: "error", message: res.message });
     }

@@ -2,36 +2,33 @@
 
 import * as React from "react";
 import { UnauthorizedState } from "@/components/ui/unauthorized-state";
-import { LoadingSpinner } from "@/components/ui/loading-spinner";
 import { Illustration } from "@/components/ui/illustration";
-import { getCurrentUserAction } from "@/modules/iam/actions";
-import { UserProfile } from "@/lib/auth/types";
+import { useIdentity } from "@/components/auth/identity-context";
+import { useCachedData } from "@/hooks/use-cached-data";
+import { invalidateCache, writeCache } from "@/lib/data-cache";
 import { DailyReport, ReviewStatus } from "@/modules/reports/types";
 import { reviewReportAction, getReviewQueueAction } from "@/modules/reports/actions";
 
 type QueueTab = "pending" | "revision" | "resubmitted" | "approved" | "unassigned";
 
 export default function ReviewPage() {
-  const [currentUser, setCurrentUser] = React.useState<UserProfile | null>(null);
-  const [isLoadingAuth, setIsLoadingAuth] = React.useState(true);
+  const { user: currentUser } = useIdentity();
   const [activeTab, setActiveTab] = React.useState<QueueTab>("pending");
   const [searchQuery, setSearchQuery] = React.useState("");
-  const [reports, setReports] = React.useState<DailyReport[]>([]);
-  const [selectedReportId, setSelectedReportId] = React.useState<string>("");
+  const queueQuery = useCachedData(`review:queue:${currentUser.id}`, getReviewQueueAction);
+  const [reports, setReports] = React.useState<DailyReport[]>(queueQuery.data ?? []);
+  const [selectedReportId, setSelectedReportId] = React.useState<string>(queueQuery.data?.[0]?.id ?? "");
 
   React.useEffect(() => {
-    getCurrentUserAction()
-      .then((user) => setCurrentUser(user))
-      .finally(() => setIsLoadingAuth(false));
-
-    getReviewQueueAction().then((data) => {
-      const list = data || [];
+    if (queueQuery.data) {
+      const list = queueQuery.data;
       setReports(list);
-      if (list.length > 0) {
-        setSelectedReportId(list[0].id);
-      }
-    });
-  }, []);
+      setSelectedReportId((current) => current || list[0]?.id || "");
+    }
+  }, [queueQuery.data]);
+  React.useEffect(() => {
+    writeCache(`review:queue:${currentUser.id}`, reports);
+  }, [reports, currentUser.id]);
 
   // Compute live counts from reports
   const filterCounts = React.useMemo(() => {
@@ -83,15 +80,6 @@ export default function ReviewPage() {
 
   const selectedReport =
     reports.find((r) => r.id === selectedReportId) || filteredReports[0] || reports[0];
-
-  if (isLoadingAuth) {
-    return (
-      <div className="flex flex-col items-center justify-center min-h-[350px] gap-3">
-        <LoadingSpinner size="lg" />
-        <p className="font-body-sm text-sm text-muted-foreground">Memverifikasi hak akses...</p>
-      </div>
-    );
-  }
 
   const canReview =
     currentUser?.role === "super_admin" ||
@@ -146,6 +134,7 @@ export default function ReviewPage() {
           })
         );
         setFeedbackNotes("");
+        invalidateCache("admin:dashboard-stats");
       } else {
         setAlertNotice({ type: "error", message: res.message });
       }

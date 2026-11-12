@@ -64,6 +64,7 @@ import { createRoot } from "react-dom/client";
 import { flushSync } from "react-dom";
 import { NotificationInbox } from "@/components/notifications/notification-inbox";
 import { AccountStateScreen } from "@/components/auth/account-state-screen";
+import { IdentityProvider } from "@/components/auth/identity-context";
 import AdminBackupPage from "@/app/(app)/admin/backup/page";
 import AdminCronPage from "@/app/(app)/admin/cron/page";
 import BerandaPage from "@/app/(app)/page";
@@ -153,9 +154,9 @@ function render(mode, props = {}, remount = false) {
   state.account = props.userId || "account-a";
   let component;
   if (mode === "identity") component = React.createElement(AccountStateScreen, { ...props, key: generation });
-  else if (mode === "backup") component = React.createElement(AdminBackupPage, { key: generation });
-  else if (mode === "cron") component = React.createElement(AdminCronPage, { key: generation });
-  else if (mode === "beranda") component = React.createElement(BerandaPage, { key: generation });
+  else if (mode === "backup") component = React.createElement(IdentityProvider, { initialUser: state.user, key: generation }, React.createElement(AdminBackupPage));
+  else if (mode === "cron") component = React.createElement(IdentityProvider, { initialUser: state.user, key: generation }, React.createElement(AdminCronPage));
+  else if (mode === "beranda") component = React.createElement(IdentityProvider, { initialUser: state.user, key: generation }, React.createElement(BerandaPage));
   else if (mode === "dual") component = React.createElement(React.Fragment, null,
     React.createElement("section", { "aria-label": "First inbox" }, React.createElement(NotificationInbox, { userId: "account-a" })),
     React.createElement("section", { "aria-label": "Second inbox" }, React.createElement(NotificationInbox, { userId: "account-a" })));
@@ -252,9 +253,12 @@ test.beforeAll(async () => {
     "src/components/notifications/notification-inbox.tsx",
     "src/components/notifications/use-notification-changes.ts",
     "src/components/auth/account-state-screen.tsx",
+    "src/components/auth/identity-context.tsx",
     "src/app/(app)/admin/backup/page.tsx",
     "src/app/(app)/admin/cron/page.tsx",
     "src/app/(app)/page.tsx",
+    "src/hooks/use-cached-data.ts",
+    "src/lib/data-cache.ts",
     "src/lib/safe-url.ts",
   ]) expect(inputs.some(input => input.endsWith(required)), `Bundled actual ${required}`).toBe(true);
   expect(inputs.some(input => /src\/lib\/supabase\/|src\/modules\/.*\/actions\.ts/.test(input))).toBe(false);
@@ -728,12 +732,10 @@ test.describe("audit UI — actual components, mocked external dependencies (not
     expect(await callCount(page, "schedules")).toBe(0);
   });
 
-  test("cron identity failure retries into a working schedule editor", async ({ page }) => {
-    await mount(page, { mode: "cron", schedules: cronSchedules, queues: { currentUser: [rejected()] } });
-    await expect(page.getByRole("heading", { name: "Identitas Gagal Dimuat" })).toBeVisible();
-    expect(await callCount(page, "schedules")).toBe(0);
-    await page.getByRole("button", { name: "Muat Ulang Halaman" }).click();
+  test("cron renders the schedule editor from seeded identity without an identity round-trip", async ({ page }) => {
+    await mount(page, { mode: "cron", schedules: cronSchedules });
     await expect(page.getByRole("heading", { name: "Jadwal otomatis", exact: true })).toBeVisible();
+    expect(await callCount(page, "currentUser")).toBe(0);
     expect(await callCount(page, "schedules")).toBe(1);
   });
 
@@ -742,8 +744,25 @@ test.describe("audit UI — actual components, mocked external dependencies (not
     await expect(page.getByRole("heading", { name: "Jadwal Gagal Dimuat" })).toBeVisible();
     await page.getByRole("button", { name: "Muat Ulang Halaman" }).click();
     await expect(page.locator("#audit-ui-root section")).toHaveCount(3);
-    expect(await callCount(page, "currentUser")).toBe(1);
+    expect(await callCount(page, "currentUser")).toBe(0);
     expect(await callCount(page, "schedules")).toBe(2);
+  });
+
+  test("cron revisit renders cached schedules instantly while revalidation is pending", async ({ page }) => {
+    await mount(page, { mode: "cron", schedules: cronSchedules });
+    await expect(page.locator("#audit-ui-root section")).toHaveCount(3);
+    expect(await callCount(page, "schedules")).toBe(1);
+    await page.evaluate(() => {
+      window.__auditUI.queue("schedules", { kind: "defer", id: "cron-revisit" });
+      window.__auditUI.render("cron", {}, true);
+    });
+    await expect(page.locator("#audit-ui-root section")).toHaveCount(3);
+    await expect(page.getByText("Memuat jadwal…")).toHaveCount(0);
+    await expect.poll(() => callCount(page, "schedules")).toBe(2);
+    expect((await snapshot(page)).pending).toContain("cron-revisit");
+    await page.evaluate(() => window.__auditUI.settle("cron-revisit", window.__auditConfig.schedules));
+    await expect(page.locator("#audit-ui-root section")).toHaveCount(3);
+    expect(await callCount(page, "currentUser")).toBe(0);
   });
 });
 

@@ -26,21 +26,35 @@ import {
   archiveProjectAction,
 } from "@/modules/tasks/actions";
 import { TaskDiscussion } from "@/components/tasks/task-discussion";
+import { useIdentity } from "@/components/auth/identity-context";
+import { useCachedData } from "@/hooks/use-cached-data";
+import { writeCache } from "@/lib/data-cache";
 
 type ViewTab = "my_tasks" | "kanban" | "projects";
 
 export default function TugasPage() {
+  const { user } = useIdentity();
   const [activeTab, setActiveTab] = React.useState<ViewTab>("my_tasks");
   const [timeFilter, setTimeFilter] = React.useState<TaskTimeFilter>("all");
-  const [tasks, setTasks] = React.useState<TaskItem[]>([]);
-  const [projects, setProjects] = React.useState<ProjectItem[]>([]);
+  const tasksQuery = useCachedData(`tasks:list:${user.id}`, getTasksAction);
+  const projectsQuery = useCachedData(`tasks:projects:${user.id}`, getProjectsAction);
+  const [tasks, setTasks] = React.useState<TaskItem[]>(tasksQuery.data ?? []);
+  const [projects, setProjects] = React.useState<ProjectItem[]>(projectsQuery.data ?? []);
 
   React.useEffect(() => {
-    Promise.all([getTasksAction(), getProjectsAction()]).then(([tData, pData]) => {
-      setTasks(tData || []);
-      setProjects(pData || []);
-    });
-  }, []);
+    if (tasksQuery.data) setTasks(tasksQuery.data);
+  }, [tasksQuery.data]);
+  React.useEffect(() => {
+    if (projectsQuery.data) setProjects(projectsQuery.data);
+  }, [projectsQuery.data]);
+  // Sinkronkan salinan kerja ke cache agar kunjungan ulang langsung menampilkan
+  // perubahan terakhir tanpa menunggu revalidasi.
+  React.useEffect(() => {
+    writeCache(`tasks:list:${user.id}`, tasks);
+  }, [tasks, user.id]);
+  React.useEffect(() => {
+    writeCache(`tasks:projects:${user.id}`, projects);
+  }, [projects, user.id]);
   const [toastMessage, setToastMessage] = React.useState<{
     type: "success" | "error" | "info";
     text: string;
@@ -265,8 +279,7 @@ export default function TugasPage() {
       : await createProjectAction(projectForm);
     setToastMessage({ type: result.success ? "success" : "error", text: result.message });
     if (result.success) {
-      const latestProjects = await getProjectsAction();
-      setProjects(latestProjects);
+      await projectsQuery.refresh();
       setIsProjectDialogOpen(false);
     }
     setIsSavingProject(false);

@@ -2,8 +2,8 @@
 
 import * as React from "react";
 import { LoadingSpinner } from "@/components/ui/loading-spinner";
+import { useIdentity } from "@/components/auth/identity-context";
 import {
-  getCurrentUserAction,
   updateProfileAction,
   uploadAvatarAction,
   deleteAvatarAction,
@@ -14,16 +14,14 @@ import {
   unenrollMfaAction,
   type MfaFactorItem,
 } from "@/modules/iam/actions";
-import { UserProfile } from "@/lib/auth/types";
 
 export default function ProfileSettingsPage() {
-  const [currentUser, setCurrentUser] = React.useState<UserProfile | null>(null);
-  const [isLoadingAuth, setIsLoadingAuth] = React.useState(true);
+  const { user: currentUser } = useIdentity();
 
   // Profile form
-  const [fullName, setFullName] = React.useState("");
-  const [phoneNumber, setPhoneNumber] = React.useState("");
-  const [avatarUrl, setAvatarUrl] = React.useState<string | null>(null);
+  const [fullName, setFullName] = React.useState(currentUser.full_name || "");
+  const [phoneNumber, setPhoneNumber] = React.useState(currentUser.phone_number || "");
+  const [avatarUrl, setAvatarUrl] = React.useState<string | null>(currentUser.avatar_url || null);
   const [avatarFile, setAvatarFile] = React.useState<File | null>(null);
   const [avatarPreview, setAvatarPreview] = React.useState<string | null>(null);
   const [isSavingProfile, setIsSavingProfile] = React.useState(false);
@@ -41,16 +39,6 @@ export default function ProfileSettingsPage() {
   const [mfaMsg, setMfaMsg] = React.useState<{ type: "success" | "error"; text: string } | null>(null);
 
   React.useEffect(() => {
-    getCurrentUserAction()
-      .then((user) => {
-        setCurrentUser(user);
-        if (user) {
-          setFullName(user.full_name || "");
-          setPhoneNumber(user.phone_number || "");
-          setAvatarUrl(user.avatar_url || null);
-        }
-      })
-      .finally(() => setIsLoadingAuth(false));
     listMfaFactorsAction().then(setMfaFactors).catch(() => setMfaFactors([]));
   }, []);
 
@@ -152,23 +140,6 @@ export default function ProfileSettingsPage() {
     }
     setIsChangingPassword(false);
   };
-
-  if (isLoadingAuth) {
-    return (
-      <div className="flex flex-col items-center justify-center min-h-[350px] gap-3">
-        <LoadingSpinner size="lg" />
-        <p className="font-body-sm text-sm text-muted-foreground">Memuat profil...</p>
-      </div>
-    );
-  }
-
-  if (!currentUser) {
-    return (
-      <div className="flex items-center justify-center min-h-[350px]">
-        <p className="text-muted-foreground text-sm">Sesi tidak ditemukan. Silakan masuk kembali.</p>
-      </div>
-    );
-  }
 
   const displayAvatar = avatarPreview || avatarUrl;
   const initials = fullName

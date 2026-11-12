@@ -8,6 +8,7 @@ import {
   getPeopleAction,
   getTeamsAction,
 } from "@/modules/people/actions";
+import { useCachedData } from "@/hooks/use-cached-data";
 
 type ViewTab = "anggota" | "tim";
 
@@ -15,16 +16,11 @@ export default function TimPage() {
   const [activeTab, setActiveTab] = React.useState<ViewTab>("anggota");
   const [roleFilter, setRoleFilter] = React.useState<string>("all");
   const [searchQuery, setSearchQuery] = React.useState("");
-  const [profiles, setProfiles] = React.useState<PersonProfile[]>([]);
-  const [teams, setTeams] = React.useState<TeamStructureItem[]>([]);
-  const [loadError, setLoadError] = React.useState<string | null>(null);
-
-  React.useEffect(() => {
-    Promise.all([getPeopleAction(), getTeamsAction()]).then(([pData, tData]) => {
-      setProfiles(pData || []);
-      setTeams(tData || []);
-    }).catch((error) => setLoadError(error instanceof Error ? error.message : "Data anggota dan tim gagal dimuat."));
-  }, []);
+  const peopleQuery = useCachedData("people:list", getPeopleAction);
+  const teamsQuery = useCachedData("teams:structure", getTeamsAction);
+  const profiles: PersonProfile[] = React.useMemo(() => peopleQuery.data ?? [], [peopleQuery.data]);
+  const teams: TeamStructureItem[] = teamsQuery.data ?? [];
+  const loadError = peopleQuery.error?.message || teamsQuery.error?.message || null;
   const [selectedPerson, setSelectedPerson] = React.useState<PersonProfile | null>(null);
   const [unmaskedPhones, setUnmaskedPhones] = React.useState<Record<string, string>>({});
   const [toastNotice, setToastNotice] = React.useState<string | null>(null);

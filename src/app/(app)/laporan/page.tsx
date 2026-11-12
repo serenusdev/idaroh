@@ -9,7 +9,10 @@ import {
   getTodayReportAction,
   getReportCategoriesAction,
 } from "@/modules/reports/actions";
-import { getActivePolicyAction, type PolicySettingItem } from "@/modules/analytics/actions";
+import { getActivePolicyAction } from "@/modules/analytics/actions";
+import { useIdentity } from "@/components/auth/identity-context";
+import { useCachedData } from "@/hooks/use-cached-data";
+import { invalidateCache } from "@/lib/data-cache";
 
 function getJakartaDate() {
   return new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Jakarta" }).format(new Date());
@@ -48,9 +51,14 @@ const BLANK_REPORT: DailyReport = {
 };
 
 export default function LaporanPage() {
-  const [report, setReport] = React.useState<DailyReport>(BLANK_REPORT);
-  const [reportCategories, setReportCategories] = React.useState<ReportCategory[]>([]);
-  const [policy, setPolicy] = React.useState<PolicySettingItem | null>(null);
+  const { user } = useIdentity();
+  const todayQuery = useCachedData(`reports:today:${user.id}`, getTodayReportAction);
+  const categoriesQuery = useCachedData("reports:categories", getReportCategoriesAction);
+  const policyQuery = useCachedData("policy:active", getActivePolicyAction);
+  const reportCategories: ReportCategory[] = React.useMemo(() => categoriesQuery.data ?? [], [categoriesQuery.data]);
+  const policy = policyQuery.data ?? null;
+
+  const [report, setReport] = React.useState<DailyReport>(todayQuery.data ?? BLANK_REPORT);
   const [feedback, setFeedback] = React.useState<{
     type: "success" | "error" | "info";
     message: string;
@@ -59,31 +67,26 @@ export default function LaporanPage() {
   const [isDrafting, setIsDrafting] = React.useState(false);
 
   React.useEffect(() => {
-    getTodayReportAction().then((data) => {
-      if (data) setReport(data);
-    });
-    getReportCategoriesAction().then((categories) => {
-      if (categories.length) {
-        setReportCategories(categories);
-        setReport((current) => ({
-          ...current,
-          items: current.items.map((item) => {
-            const category = categories.find((candidate) => candidate.id === item.categoryId)
-              || categories.find((candidate) => candidate.slug === item.categoryId)
-              || categories[0];
-            return {
-              ...item,
-              categoryId: category.id,
-              categoryName: category.name,
-            };
-          }),
-        }));
-      }
-    });
-    getActivePolicyAction().then((p) => {
-      setPolicy(p);
-    });
-  }, []);
+    if (todayQuery.data) setReport(todayQuery.data);
+  }, [todayQuery.data]);
+
+  React.useEffect(() => {
+    if (reportCategories.length) {
+      setReport((current) => ({
+        ...current,
+        items: current.items.map((item) => {
+          const category = reportCategories.find((candidate) => candidate.id === item.categoryId)
+            || reportCategories.find((candidate) => candidate.slug === item.categoryId)
+            || reportCategories[0];
+          return {
+            ...item,
+            categoryId: category.id,
+            categoryName: category.name,
+          };
+        }),
+      }));
+    }
+  }, [reportCategories]);
 
   // Add new activity item
   const handleAddItem = () => {
@@ -156,6 +159,7 @@ export default function LaporanPage() {
       });
       if (res.success) {
         setFeedback({ type: "info", message: res.message });
+        todayQuery.refresh();
       } else {
         setFeedback({ type: "error", message: res.message });
       }
@@ -190,6 +194,8 @@ export default function LaporanPage() {
           reviewStatus: "not_reviewed",
         }));
         setFeedback({ type: "success", message: res.message });
+        todayQuery.refresh();
+        invalidateCache("review:queue");
       } else {
         setFeedback({ type: "error", message: res.message });
       }

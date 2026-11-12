@@ -16,6 +16,9 @@ const nextConfig = {
   reactStrictMode: true,
   poweredByHeader: false,
   experimental: {
+    staleTimes: {
+      dynamic: 60,
+    },
     serverActions: {
       bodySizeLimit: '3mb',
     },

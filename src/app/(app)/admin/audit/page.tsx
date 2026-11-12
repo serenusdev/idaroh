@@ -2,13 +2,10 @@
 
 import * as React from "react";
 import { UnauthorizedState } from "@/components/ui/unauthorized-state";
-import { LoadingSpinner } from "@/components/ui/loading-spinner";
 import { Illustration } from "@/components/ui/illustration";
-import { getCurrentUserAction } from "@/modules/iam/actions";
-import { UserProfile } from "@/lib/auth/types";
-import {
-  AuditLogItem,
-} from "@/modules/analytics/types";
+import { useIdentity } from "@/components/auth/identity-context";
+import { useCachedData } from "@/hooks/use-cached-data";
+import { invalidateCache } from "@/lib/data-cache";
 import {
   exportAuditedDataAction,
   queryAuditLogsAction,
@@ -18,21 +15,26 @@ import {
   approvePolicySettingsAction,
   activatePolicySettingsAction,
   getAuditChainStatusAction,
-  type PolicySettingItem,
 } from "@/modules/analytics/actions";
 
 export default function AdminAuditPage() {
-  const [currentUser, setCurrentUser] = React.useState<UserProfile | null>(null);
-  const [isLoadingAuth, setIsLoadingAuth] = React.useState(true);
+  const { user: currentUser } = useIdentity();
   const [scope, setScope] = React.useState("Semua Tim (Organisasi)");
-  const [auditLogs, setAuditLogs] = React.useState<AuditLogItem[]>([]);
   const [auditPage, setAuditPage] = React.useState(1);
-  const [auditHasMore, setAuditHasMore] = React.useState(false);
-  const [policy, setPolicy] = React.useState<PolicySettingItem | null>(null);
-  const [pendingPolicies, setPendingPolicies] = React.useState<PolicySettingItem[]>([]);
   const [searchLogQuery, setSearchLogQuery] = React.useState("");
   const [toastMessage, setToastMessage] = React.useState<string | null>(null);
-  const [auditChain, setAuditChain] = React.useState<{ valid: boolean; checked: number; message: string } | null>(null);
+
+  const policyQuery = useCachedData("policy:active", getActivePolicyAction);
+  const chainQuery = useCachedData("admin:audit-chain", getAuditChainStatusAction);
+  const pendingQuery = useCachedData("admin:pending-policies", getPendingPolicySettingsAction);
+  const logsQuery = useCachedData(`admin:audit-logs:${scope}:${searchLogQuery}:${auditPage}`, () => queryAuditLogsAction(searchLogQuery, scope, auditPage));
+
+  const policy = policyQuery.data ?? null;
+  const auditChain = chainQuery.data ?? null;
+  const pendingPolicies = pendingQuery.data ?? [];
+  const logsResult = logsQuery.data;
+  const auditLogs = logsResult?.success ? logsResult.logs : [];
+  const auditHasMore = Boolean(logsResult?.success && logsResult.hasMore);
 
   // Modals state
   const [isExportDialogOpen, setIsExportDialogOpen] = React.useState(false);
@@ -51,55 +53,30 @@ export default function AdminAuditPage() {
     changeReason: "",
   });
 
-  const loadPolicyAndLogs = React.useCallback(async () => {
-    try {
-      const p = await getActivePolicyAction();
-      setPolicy(p);
-      setAuditChain(await getAuditChainStatusAction());
-      if (p) {
-        setPolicyForm({
-          name: p.name,
-          attendanceCutoffTime: p.attendanceCutoffTime,
-          attendanceGraceCutoffTime: p.attendanceGraceCutoffTime,
-          reportDeadlineTime: p.reportDeadlineTime,
-          effectiveFrom: p.effectiveFrom,
-          changeReason: "",
-        });
-      } else {
-        setPolicyForm({ name: "", attendanceCutoffTime: "", attendanceGraceCutoffTime: "", reportDeadlineTime: "", effectiveFrom: "", changeReason: "" });
-      }
-      try {
-        setPendingPolicies(await getPendingPolicySettingsAction());
-      } catch {
-        setPendingPolicies([]);
-      }
-      const res = await queryAuditLogsAction(searchLogQuery, scope, auditPage);
-      if (res.success && res.logs) {
-        setAuditLogs(res.logs);
-        setAuditHasMore(res.hasMore);
-      }
-    } catch (err) {
-      console.error("Failed to load audit or policy:", err);
-      setToastMessage("Data audit atau kebijakan belum dapat dimuat. Silakan coba lagi.");
-    }
-  }, [scope, auditPage, searchLogQuery]);
-
   React.useEffect(() => {
-    getCurrentUserAction()
-      .then((user) => setCurrentUser(user))
-      .finally(() => setIsLoadingAuth(false));
+    const p = policyQuery.data;
+    if (p === undefined) return;
+    setPolicyForm(p ? {
+      name: p.name,
+      attendanceCutoffTime: p.attendanceCutoffTime,
+      attendanceGraceCutoffTime: p.attendanceGraceCutoffTime,
+      reportDeadlineTime: p.reportDeadlineTime,
+      effectiveFrom: p.effectiveFrom,
+      changeReason: "",
+    } : { name: "", attendanceCutoffTime: "", attendanceGraceCutoffTime: "", reportDeadlineTime: "", effectiveFrom: "", changeReason: "" });
+  }, [policyQuery.data]);
 
-    loadPolicyAndLogs();
-  }, [loadPolicyAndLogs]);
+  const loadError = policyQuery.error ?? chainQuery.error ?? logsQuery.error;
+  React.useEffect(() => {
+    if (loadError) setToastMessage("Data audit atau kebijakan belum dapat dimuat. Silakan coba lagi.");
+  }, [loadError]);
 
-  if (isLoadingAuth) {
-    return (
-      <div className="flex flex-col items-center justify-center min-h-[350px] gap-3">
-        <LoadingSpinner size="lg" />
-        <p className="font-body-sm text-sm text-muted-foreground">Memverifikasi hak akses...</p>
-      </div>
-    );
-  }
+  const reload = () => {
+    void policyQuery.refresh();
+    void chainQuery.refresh();
+    void pendingQuery.refresh();
+    void logsQuery.refresh();
+  };
 
   const isAdminOrPengurus =
     currentUser?.role === "super_admin" ||
@@ -111,14 +88,9 @@ export default function AdminAuditPage() {
   }
 
   // Handle Log search
-  const handleSearchLogs = async (q: string, nextScope = scope) => {
+  const handleSearchLogs = (q: string) => {
     setSearchLogQuery(q);
     setAuditPage(1);
-    const res = await queryAuditLogsAction(q, nextScope, 1);
-    if (res.success) {
-      setAuditLogs(res.logs);
-      setAuditHasMore(res.hasMore);
-    }
   };
 
   // Handle Export submission
@@ -151,7 +123,7 @@ export default function AdminAuditPage() {
     if (res.success) {
       setToastMessage(res.message);
       setIsPolicyModalOpen(false);
-      await loadPolicyAndLogs();
+      reload();
       setTimeout(() => setToastMessage(null), 4500);
     } else {
       setToastMessage(res.message);
@@ -161,13 +133,16 @@ export default function AdminAuditPage() {
   const handleApprovePolicy = async (id: string) => {
     const result = await approvePolicySettingsAction(id, "Disetujui setelah meninjau dampak operasional.");
     setToastMessage(result.message);
-    if (result.success) await loadPolicyAndLogs();
+    if (result.success) reload();
   };
 
   const handleActivatePolicy = async (id: string) => {
     const result = await activatePolicySettingsAction(id);
     setToastMessage(result.message);
-    if (result.success) await loadPolicyAndLogs();
+    if (result.success) {
+      reload();
+      invalidateCache("policy:");
+    }
   };
 
   return (
@@ -228,9 +203,8 @@ export default function AdminAuditPage() {
           <select
             value={scope}
             onChange={(e) => {
-              const nextScope = e.target.value;
-              setScope(nextScope);
-              void handleSearchLogs(searchLogQuery, nextScope);
+              setScope(e.target.value);
+              setAuditPage(1);
             }}
             className="font-label-sm text-xs text-primary font-semibold py-1 px-2.5 rounded-lg bg-surface-container border border-border focus:outline-none"
           >
@@ -589,7 +563,10 @@ export default function AdminAuditPage() {
 
             <button
               type="button"
-              onClick={() => handleSearchLogs("")}
+              onClick={() => {
+                if (searchLogQuery === "" && auditPage === 1) void logsQuery.refresh();
+                else handleSearchLogs("");
+              }}
               className="w-full h-11 bg-secondary-container hover:bg-secondary-fixed text-on-secondary-fixed font-label-md text-xs font-semibold rounded-xl flex items-center justify-center gap-2 transition-all"
             >
               <span className="material-symbols-outlined text-[18px]">manage_search</span>

@@ -2,8 +2,8 @@
 
 import * as React from "react";
 import { createBackupManifestAction, getBackupRunsAction } from "@/modules/operations/actions";
-import { getCurrentUserAction } from "@/modules/iam/actions";
-import type { UserProfile } from "@/lib/auth/types";
+import { useIdentity } from "@/components/auth/identity-context";
+import { useCachedData } from "@/hooks/use-cached-data";
 import { UnauthorizedState } from "@/components/ui/unauthorized-state";
 import { LoadingSpinner } from "@/components/ui/loading-spinner";
 
@@ -25,15 +25,13 @@ const statusLabels: Record<string, string> = {
 };
 
 export default function AdminBackupPage() {
-  const [user, setUser] = React.useState<UserProfile | null>(null);
-  const [runs, setRuns] = React.useState<BackupRun[]>([]);
+  const { user } = useIdentity();
   const [notice, setNotice] = React.useState<string | null>(null);
-  const [loading, setLoading] = React.useState(true);
-  const load = React.useCallback(async () => { setRuns(await getBackupRunsAction()); }, []);
-  React.useEffect(() => { getCurrentUserAction().then(setUser).finally(() => setLoading(false)); load(); }, [load]);
-  if (loading) return <div className="min-h-[360px] grid place-items-center"><LoadingSpinner size="lg" /></div>;
-  if (!user || user.role !== "super_admin") return <UnauthorizedState requiredRole="Super Admin" />;
-  const run = async () => { const result = await createBackupManifestAction("database"); setNotice(result.message); await load(); };
+  const runsQuery = useCachedData("admin:backup-runs", getBackupRunsAction);
+  const runs: BackupRun[] = runsQuery.data ?? [];
+  if (runsQuery.isLoading) return <div className="min-h-[360px] grid place-items-center"><LoadingSpinner size="lg" /></div>;
+  if (user.role !== "super_admin") return <UnauthorizedState requiredRole="Super Admin" />;
+  const run = async () => { const result = await createBackupManifestAction("database"); setNotice(result.message); await runsQuery.refresh(); };
   return (
     <div className="w-full max-w-5xl mx-auto space-y-6 pb-20">
       <header>

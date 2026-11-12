@@ -3,9 +3,8 @@
 import * as React from "react";
 import Link from "next/link";
 import { UnauthorizedState } from "@/components/ui/unauthorized-state";
-import { LoadingSpinner } from "@/components/ui/loading-spinner";
 import { Illustration } from "@/components/ui/illustration";
-import { UserProfile } from "@/lib/auth/types";
+import { useIdentity } from "@/components/auth/identity-context";
 import {
   getAccountRequestsAction,
   getActiveUsersAction,
@@ -14,7 +13,6 @@ import {
   createManualAccountAction,
   resetUserSessionAction,
   revokeDeviceTokenAction,
-  getCurrentUserAction,
   adminUpdateUserAction,
   type AccountRequestItem,
   type ActiveUserItem,
@@ -23,10 +21,11 @@ import { importMembersCsvAction } from "@/modules/operations/actions";
 import { getTeamsAction } from "@/modules/people/actions";
 import type { TeamStructureItem } from "@/modules/people/types";
 import { exportAuditedDataAction } from "@/modules/analytics/actions";
+import { useCachedData } from "@/hooks/use-cached-data";
+import { writeCache } from "@/lib/data-cache";
 
 export default function AdminUsersPage() {
-  const [currentUser, setCurrentUser] = React.useState<UserProfile | null>(null);
-  const [isLoadingAuth, setIsLoadingAuth] = React.useState(true);
+  const { user: currentUser } = useIdentity();
   const [activeTab, setActiveTab] = React.useState<"queue" | "active" | "archived">("queue");
   const [selectedRoleFilter, setSelectedRoleFilter] = React.useState("Semua");
   const [searchQuery, setSearchQuery] = React.useState("");
@@ -48,9 +47,20 @@ export default function AdminUsersPage() {
   const [isEditingUser, setIsEditingUser] = React.useState(false);
 
   // Dynamic Data
-  const [accountRequests, setAccountRequests] = React.useState<AccountRequestItem[]>([]);
-  const [activeUsers, setActiveUsers] = React.useState<ActiveUserItem[]>([]);
-  const [isLoading, setIsLoading] = React.useState(true);
+  const requestsQuery = useCachedData("admin:account-requests", getAccountRequestsAction);
+  const usersQuery = useCachedData("admin:active-users", getActiveUsersAction);
+  const teamsQuery = useCachedData("teams:structure", getTeamsAction);
+  const accountRequests: AccountRequestItem[] = requestsQuery.data ?? [];
+  const [activeUsers, setActiveUsers] = React.useState<ActiveUserItem[]>(usersQuery.data ?? []);
+  const teams: TeamStructureItem[] = teamsQuery.data ?? [];
+  const isLoading = requestsQuery.isLoading || usersQuery.isLoading;
+
+  React.useEffect(() => {
+    if (usersQuery.data) setActiveUsers(usersQuery.data);
+  }, [usersQuery.data]);
+  React.useEffect(() => {
+    writeCache("admin:active-users", activeUsers);
+  }, [activeUsers]);
 
   // Approval state tracker for interactive tactile feedback
   const [approvedCards, setApprovedCards] = React.useState<Record<string, string>>({});
@@ -81,28 +91,12 @@ export default function AdminUsersPage() {
   const [applicantRoles, setApplicantRoles] = React.useState<Record<string, string>>({});
   const [applicantTeams, setApplicantTeams] = React.useState<Record<string, string>>({});
   const [approveErrors, setApproveErrors] = React.useState<Record<string, string>>({});
-  const [teams, setTeams] = React.useState<TeamStructureItem[]>([]);
 
-  const loadData = React.useCallback(async () => {
-    setIsLoading(true);
-    try {
-      const [requests, users, teamList] = await Promise.all([
-        getAccountRequestsAction(),
-        getActiveUsersAction(),
-        getTeamsAction().catch((teamsError) => {
-          console.error("Failed to load teams for approval:", teamsError);
-          return [] as TeamStructureItem[];
-        }),
-      ]);
-      setAccountRequests(requests);
-      setActiveUsers(users);
-      setTeams(teamList);
-    } catch (err) {
-      console.error("Failed to load IAM data:", err);
-    } finally {
-      setIsLoading(false);
-    }
-  }, []);
+  const reload = () => {
+    requestsQuery.refresh();
+    usersQuery.refresh();
+    teamsQuery.refresh();
+  };
 
   const exportUsers = async () => {
     setIsExportingUsers(true);
@@ -120,23 +114,6 @@ export default function AdminUsersPage() {
       setIsExportingUsers(false);
     }
   };
-
-  React.useEffect(() => {
-    getCurrentUserAction()
-      .then((user) => setCurrentUser(user))
-      .finally(() => setIsLoadingAuth(false));
-
-    loadData();
-  }, [loadData]);
-
-  if (isLoadingAuth) {
-    return (
-      <div className="flex flex-col items-center justify-center min-h-[350px] gap-3">
-        <LoadingSpinner size="lg" />
-        <p className="font-body-sm text-sm text-muted-foreground">Memverifikasi hak akses...</p>
-      </div>
-    );
-  }
 
   const isAdminOrPengurus =
     currentUser?.role === "super_admin" ||
@@ -180,7 +157,7 @@ export default function AdminUsersPage() {
       const res = await approveAccountApplicationAction(cardId, role, teamId || null);
       if (res.success) {
         setApprovedCards((prev) => ({ ...prev, [cardId]: teamName ? `${roleLabel} • ${teamName}` : roleLabel }));
-        await loadData();
+        reload();
       } else {
         setApproveErrors((prev) => ({ ...prev, [cardId]: res.message }));
       }
@@ -206,7 +183,7 @@ export default function AdminUsersPage() {
     );
     if (res.success) {
       setRejectedCards((prev) => ({ ...prev, [rejectionTargetId]: rejectionReason || "Ditolak" }));
-      await loadData();
+      reload();
     }
     setIsRejectModalOpen(false);
   };
@@ -254,7 +231,7 @@ export default function AdminUsersPage() {
     });
     setEditUserMsg({ type: res.success ? "success" : "error", text: res.message });
     if (res.success) {
-      await loadData();
+      reload();
       setTimeout(() => setEditUserTarget(null), 1200);
     }
     setIsEditingUser(false);
@@ -265,7 +242,7 @@ export default function AdminUsersPage() {
     const res = await createManualAccountAction(manualForm);
     if (res.success) {
       setManualSuccessMsg(res.message);
-      await loadData();
+      reload();
       setTimeout(() => {
         setManualSuccessMsg("");
         setIsManualModalOpen(false);
@@ -289,7 +266,7 @@ export default function AdminUsersPage() {
       const result = await importMembersCsvAction(importFileName, importCsv);
       setImportFeedback(`${result.message}${result.errors.length ? ` ${result.errors.slice(0, 3).join(" ")}` : ""}`);
       if (result.success) {
-        await loadData();
+        reload();
         setImportCsv("");
       }
     } catch {

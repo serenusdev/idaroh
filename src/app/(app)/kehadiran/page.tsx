@@ -8,30 +8,29 @@ import {
   submitExceptionAction,
 } from "@/modules/attendance/actions";
 import { AttendanceRecordItem } from "@/modules/attendance/types";
-import { getActivePolicyAction, type PolicySettingItem } from "@/modules/analytics/actions";
+import { getActivePolicyAction } from "@/modules/analytics/actions";
+import { useIdentity } from "@/components/auth/identity-context";
+import { useCachedData } from "@/hooks/use-cached-data";
 import { LiveClock } from "@/components/ui/live-clock";
 import { Illustration } from "@/components/ui/illustration";
 
 export default function KehadiranPage() {
+  const { user } = useIdentity();
   // Live server clock
   const [currentDateFormatted, setCurrentDateFormatted] = React.useState("");
   const [checkedIn, setCheckedIn] = React.useState(false);
   const [isProcessing, setIsProcessing] = React.useState(false);
   const [checkedInTime, setCheckedInTime] = React.useState("");
   const [checkedInStatus, setCheckedInStatus] = React.useState("Tepat Waktu");
-  const [historyItems, setHistoryItems] = React.useState<AttendanceRecordItem[]>([]);
-  const [policy, setPolicy] = React.useState<PolicySettingItem | null>(null);
-  const [loadError, setLoadError] = React.useState<string | null>(null);
   const [checkinError, setCheckinError] = React.useState<string | null>(null);
 
-  React.useEffect(() => {
-    getAttendanceHistoryAction().then((data) => {
-      setHistoryItems(data || []);
-    }).catch((error) => setLoadError(error instanceof Error ? error.message : "Riwayat presensi gagal dimuat."));
-    getActivePolicyAction().then((p) => {
-      setPolicy(p);
-    }).catch((error) => setLoadError(error instanceof Error ? error.message : "Kebijakan presensi gagal dimuat."));
+  const historyQuery = useCachedData(`attendance:history:${user.id}`, getAttendanceHistoryAction);
+  const policyQuery = useCachedData("policy:active", getActivePolicyAction);
+  const historyItems: AttendanceRecordItem[] = historyQuery.data ?? [];
+  const policy = policyQuery.data ?? null;
+  const loadError = historyQuery.error?.message || policyQuery.error?.message || null;
 
+  React.useEffect(() => {
     const now = new Date();
     const todayIso = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Jakarta" }).format(now);
     setExceptionDateFrom(todayIso);
@@ -77,9 +76,7 @@ export default function KehadiranPage() {
           ? "Masa Toleransi"
           : "Terlambat"
       );
-      getAttendanceHistoryAction().then((data) => {
-        if (data && data.length > 0) setHistoryItems(data);
-      });
+      historyQuery.refresh();
     } else {
       setCheckinError(res.message || "Gagal mencatat presensi. Silakan coba lagi.");
     }
@@ -105,6 +102,7 @@ export default function KehadiranPage() {
 
     if (res.success) {
       setCorrectionSuccessMsg(res.message);
+      historyQuery.refresh();
       setTimeout(() => {
         setIsCorrectionOpen(false);
         setCorrectionSuccessMsg("");
@@ -122,6 +120,7 @@ export default function KehadiranPage() {
     );
     if (res.success) {
       setExceptionSuccessMsg(res.message);
+      historyQuery.refresh();
       setTimeout(() => {
         setIsExceptionOpen(false);
         setExceptionSuccessMsg("");

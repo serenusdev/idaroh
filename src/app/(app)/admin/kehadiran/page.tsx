@@ -1,25 +1,22 @@
 "use client";
 
 import * as React from "react";
-import { getAttendanceReviewQueueAction, reviewAttendanceCorrectionAction, reviewAttendanceExceptionAction, type AttendanceReviewQueue } from "@/modules/attendance/actions";
-import { getCurrentUserAction } from "@/modules/iam/actions";
-import type { UserProfile } from "@/lib/auth/types";
+import { getAttendanceReviewQueueAction, reviewAttendanceCorrectionAction, reviewAttendanceExceptionAction } from "@/modules/attendance/actions";
+import { useIdentity } from "@/components/auth/identity-context";
 import { UnauthorizedState } from "@/components/ui/unauthorized-state";
+import { useCachedData } from "@/hooks/use-cached-data";
+import { invalidateCache } from "@/lib/data-cache";
 
 export default function AdminAttendanceReviewPage() {
-  const [user, setUser] = React.useState<UserProfile | null>(null);
-  const [queue, setQueue] = React.useState<AttendanceReviewQueue>({ corrections: [], exceptions: [] });
+  const { user } = useIdentity();
+  const queueQuery = useCachedData("admin:attendance-review", getAttendanceReviewQueueAction);
+  const queue = queueQuery.data ?? { corrections: [], exceptions: [] };
   const [notice, setNotice] = React.useState<string | null>(null);
 
-  const load = React.useCallback(async () => {
-    setQueue(await getAttendanceReviewQueueAction());
-  }, []);
-
   React.useEffect(() => {
-    getCurrentUserAction().then(setUser).then(load).catch((error) => setNotice(error instanceof Error ? error.message : "Gagal memuat antrean review."));
-  }, [load]);
+    if (queueQuery.error) setNotice(queueQuery.error.message);
+  }, [queueQuery.error]);
 
-  if (!user) return <div className="p-8 text-sm text-muted-foreground">Memverifikasi hak akses...</div>;
   if (!["super_admin", "yayasan", "pengurus"].includes(user.role)) return <UnauthorizedState requiredRole="Super Admin / Pengurus / Yayasan" />;
 
   const decide = async (kind: "correction" | "exception", id: string, decision: "approved" | "rejected") => {
@@ -28,7 +25,10 @@ export default function AdminAttendanceReviewPage() {
       ? await reviewAttendanceCorrectionAction(id, decision, note)
       : await reviewAttendanceExceptionAction(id, decision, note);
     setNotice(result.message);
-    if (result.success) await load();
+    if (result.success) {
+      queueQuery.refresh();
+      invalidateCache("attendance:history");
+    }
   };
 
   return (

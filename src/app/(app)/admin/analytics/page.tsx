@@ -1,11 +1,10 @@
 "use client";
 
 import * as React from "react";
-import { getCurrentUserAction } from "@/modules/iam/actions";
+import { useIdentity } from "@/components/auth/identity-context";
 import { getAnalyticsDrilldownAction, getOperationalAnalyticsAction, type AnalyticsDrilldownRow, type OperationalAnalytics } from "@/modules/operations/actions";
-import { UserProfile } from "@/lib/auth/types";
 import { UnauthorizedState } from "@/components/ui/unauthorized-state";
-import { LoadingSpinner } from "@/components/ui/loading-spinner";
+import { useCachedData } from "@/hooks/use-cached-data";
 
 type MetricKey = "attendance_late" | "reports_backlog" | "tasks_overdue";
 
@@ -35,30 +34,15 @@ function Bar({ label, value, max, tone = "bg-primary" }: { label: string; value:
 }
 
 export default function AdminAnalyticsPage() {
-  const [user, setUser] = React.useState<UserProfile | null>(null);
-  const [authLoading, setAuthLoading] = React.useState(true);
-  const [data, setData] = React.useState<OperationalAnalytics>(EMPTY);
+  const { user } = useIdentity();
   const [from, setFrom] = React.useState("");
   const [to, setTo] = React.useState("");
-  const [loading, setLoading] = React.useState(true);
   const [drilldown, setDrilldown] = React.useState<{ metric: MetricKey; rows: AnalyticsDrilldownRow[] } | null>(null);
+  const analyticsQuery = useCachedData(`admin:analytics:${from}:${to}`, () => getOperationalAnalyticsAction(from || undefined, to || undefined));
+  const data = analyticsQuery.data ?? EMPTY;
+  const loading = analyticsQuery.isLoading;
 
-  const load = React.useCallback(async () => {
-    setLoading(true);
-    try {
-      setData(await getOperationalAnalyticsAction(from || undefined, to || undefined));
-    } finally {
-      setLoading(false);
-    }
-  }, [from, to]);
-
-  React.useEffect(() => {
-    getCurrentUserAction().then(setUser).finally(() => setAuthLoading(false));
-    load();
-  }, [load]);
-
-  if (authLoading) return <div className="min-h-[360px] grid place-items-center"><LoadingSpinner size="lg" /></div>;
-  if (!user || !["super_admin", "yayasan", "pengurus", "koordinator"].includes(user.role)) {
+  if (!["super_admin", "yayasan", "pengurus", "koordinator"].includes(user.role)) {
     return <UnauthorizedState requiredRole="Koordinator / Pengurus / Yayasan" />;
   }
 
@@ -78,7 +62,7 @@ export default function AdminAnalyticsPage() {
         <div className="flex flex-wrap items-end gap-2">
           <label className="text-xs text-muted-foreground">Dari<input type="date" value={from} onChange={(e) => setFrom(e.target.value)} className="block mt-1 h-9 rounded-lg border border-border bg-card px-2 text-sm" /></label>
           <label className="text-xs text-muted-foreground">Sampai<input type="date" value={to} onChange={(e) => setTo(e.target.value)} className="block mt-1 h-9 rounded-lg border border-border bg-card px-2 text-sm" /></label>
-          <button type="button" onClick={load} className="h-9 px-3 rounded-lg bg-primary text-on-primary text-xs font-semibold" disabled={loading}>{loading ? "Memuat…" : "Terapkan"}</button>
+          <button type="button" onClick={() => analyticsQuery.refresh()} className="h-9 px-3 rounded-lg bg-primary text-on-primary text-xs font-semibold" disabled={loading}>{loading ? "Memuat…" : "Terapkan"}</button>
         </div>
       </header>
 

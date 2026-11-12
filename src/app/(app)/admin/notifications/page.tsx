@@ -2,44 +2,25 @@
 
 import * as React from "react";
 import { sendTestPushAction } from "@/modules/operations/actions";
-import { getNotificationDeliverySummaryAction, type NotificationDeliverySummary } from "@/modules/notifications/actions";
-import { getCurrentUserAction } from "@/modules/iam/actions";
-import type { UserProfile } from "@/lib/auth/types";
+import { getNotificationDeliverySummaryAction } from "@/modules/notifications/actions";
+import { useIdentity } from "@/components/auth/identity-context";
+import { useCachedData } from "@/hooks/use-cached-data";
 import { UnauthorizedState } from "@/components/ui/unauthorized-state";
-import { ErrorState } from "@/components/ui/error-state";
 
 export default function AdminNotificationsPage() {
-  const [user, setUser] = React.useState<UserProfile | null>(null);
+  const { user } = useIdentity();
   const [notice, setNotice] = React.useState("Tekan tombol untuk mengirim notifikasi ke perangkat yang sedang login.");
-  const [summary, setSummary] = React.useState<NotificationDeliverySummary | null>(null);
-  const [summaryError, setSummaryError] = React.useState(false);
   const [sending, setSending] = React.useState(false);
-  const [identityLoading, setIdentityLoading] = React.useState(true);
-  const [identityError, setIdentityError] = React.useState(false);
-  const loadUser = React.useCallback(async () => {
-    setIdentityLoading(true);
-    setIdentityError(false);
-    try { setUser(await getCurrentUserAction()); }
-    catch { setIdentityError(true); }
-    finally { setIdentityLoading(false); }
-  }, []);
-  const refreshSummary = React.useCallback(async () => {
-    try { setSummary(await getNotificationDeliverySummaryAction()); setSummaryError(false); }
-    catch { setSummaryError(true); }
-  }, []);
-  React.useEffect(() => { void loadUser(); }, [loadUser]);
-  React.useEffect(() => {
-    if (user?.role === "super_admin") void refreshSummary();
-  }, [user?.role, refreshSummary]);
-  if (identityError) return <ErrorState title="Identitas Gagal Dimuat" description="Akses Anda belum dapat diverifikasi. Periksa koneksi lalu coba lagi." onRetry={() => void loadUser()} />;
-  if (!user) return <div className="min-h-[360px] grid place-items-center text-sm text-muted-foreground">{identityLoading ? "Memverifikasi akses…" : "Sesi berakhir. Muat ulang halaman untuk masuk kembali."}</div>;
+  const summaryQuery = useCachedData(user.role === "super_admin" ? "admin:notifications-summary" : null, getNotificationDeliverySummaryAction);
+  const summary = summaryQuery.data ?? null;
+  const summaryError = Boolean(summaryQuery.error);
   if (!["super_admin", "yayasan", "pengurus"].includes(user.role)) return <UnauthorizedState requiredRole="Pengurus / Yayasan / Super Admin" />;
   const send = async () => {
     setSending(true);
     try {
       const result = await sendTestPushAction();
       setNotice(result.message);
-      if (user.role === "super_admin") await refreshSummary();
+      await summaryQuery.refresh();
     } catch { setNotice("Push belum berhasil diproses. Silakan coba lagi."); }
     finally { setSending(false); }
   };
@@ -58,7 +39,7 @@ export default function AdminNotificationsPage() {
       </section>
       {user.role === "super_admin" && (
         <section className="rounded-2xl border border-border bg-card p-6 space-y-3">
-          <div className="flex items-center justify-between gap-3"><h2 className="font-semibold">Antrean pengiriman</h2><button type="button" onClick={() => void refreshSummary()} className="text-sm text-primary underline">Perbarui</button></div>
+          <div className="flex items-center justify-between gap-3"><h2 className="font-semibold">Antrean pengiriman</h2><button type="button" onClick={() => void summaryQuery.refresh()} className="text-sm text-primary underline">Perbarui</button></div>
           {summaryError ? <p role="alert" className="text-sm text-destructive">Antrean belum dapat dimuat. Periksa migrasi dan koneksi database.</p> : summary ? (
             <dl className="grid grid-cols-3 gap-3 text-sm">
               <div><dt className="text-muted-foreground">Menunggu</dt><dd className="font-semibold">{summary.pending}</dd></div>

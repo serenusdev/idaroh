@@ -14,6 +14,9 @@ import {
   getEventsAction,
   getAnnouncementsAction,
 } from "@/modules/schedules/actions";
+import { useIdentity } from "@/components/auth/identity-context";
+import { useCachedData } from "@/hooks/use-cached-data";
+import { invalidateCache, writeCache } from "@/lib/data-cache";
 
 type ScheduleTab = "agenda" | "announcements";
 
@@ -36,6 +39,7 @@ function buildWeekDays(dateStr: string, activeDate = dateStr): WeekDayPickerItem
 }
 
 export default function JadwalPage() {
+  const { user } = useIdentity();
   const [activeTab, setActiveTab] = React.useState<ScheduleTab>("agenda");
   const [selectedDate, setSelectedDate] = React.useState<string>(() => {
     return new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Jakarta" }).format(new Date());
@@ -44,15 +48,23 @@ export default function JadwalPage() {
     const today = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Jakarta" }).format(new Date());
     return buildWeekDays(today);
   });
-  const [events, setEvents] = React.useState<ScheduleEventItem[]>([]);
-  const [announcements, setAnnouncements] = React.useState<AnnouncementItem[]>([]);
+  const eventsQuery = useCachedData(`events:${user.id}`, getEventsAction);
+  const announcementsQuery = useCachedData(`announcements:${user.id}`, getAnnouncementsAction);
+  const [events, setEvents] = React.useState<ScheduleEventItem[]>(eventsQuery.data ?? []);
+  const [announcements, setAnnouncements] = React.useState<AnnouncementItem[]>(announcementsQuery.data ?? []);
 
   React.useEffect(() => {
-    Promise.all([getEventsAction(), getAnnouncementsAction()]).then(([evData, anData]) => {
-      setEvents(evData || []);
-      setAnnouncements(anData || []);
-    });
-  }, []);
+    if (eventsQuery.data) setEvents(eventsQuery.data);
+  }, [eventsQuery.data]);
+  React.useEffect(() => {
+    if (announcementsQuery.data) setAnnouncements(announcementsQuery.data);
+  }, [announcementsQuery.data]);
+  React.useEffect(() => {
+    writeCache(`events:${user.id}`, events);
+  }, [events, user.id]);
+  React.useEffect(() => {
+    writeCache(`announcements:${user.id}`, announcements);
+  }, [announcements, user.id]);
   const [categoryFilter, setCategoryFilter] = React.useState<string>("all");
   const [isPinnedDismissed, setIsPinnedDismissed] = React.useState(false);
   const [selectedEvent, setSelectedEvent] = React.useState<ScheduleEventItem | null>(null);
@@ -118,6 +130,7 @@ export default function JadwalPage() {
 
     if (res.success && res.announcement) {
       setAnnouncements((prev) => [res.announcement!, ...prev]);
+      invalidateCache("admin:announcements");
       setIsCreatingAnn(false);
       setNewAnnTitle("");
       setNewAnnBody("");

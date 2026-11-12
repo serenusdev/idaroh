@@ -28,6 +28,9 @@ export default function RootLayout({
   return (
     <html lang="id">
       <body className="bg-background font-body-md text-on-surface antialiased min-h-screen flex flex-col">
+        <link rel="preload" href="/fonts/hanken-grotesk-latin-variable.woff2" as="font" type="font/woff2" crossOrigin="anonymous" />
+        <link rel="preload" href="/fonts/ibm-plex-mono-latin-400.woff2" as="font" type="font/woff2" crossOrigin="anonymous" />
+        <link rel="preload" href="/fonts/material-symbols-outlined-subset.woff2" as="font" type="font/woff2" crossOrigin="anonymous" />
         <PwaRegister />
         {children}
       </body>

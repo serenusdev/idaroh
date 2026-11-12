@@ -9,30 +9,37 @@ import {
   getActivePolicyAction,
   updatePolicySettingsAction,
   getAdminDashboardStatsAction,
-  type PolicySettingItem,
-  type AdminDashboardMetrics,
 } from "@/modules/analytics/actions";
 import { getEventsAction, getAnnouncementsAction } from "@/modules/schedules/actions";
-import { getCurrentUserAction } from "@/modules/iam/actions";
-import { UserProfile } from "@/lib/auth/types";
+import { useIdentity } from "@/components/auth/identity-context";
+import { useCachedData } from "@/hooks/use-cached-data";
+import { invalidateCache } from "@/lib/data-cache";
 import type { ScheduleEventItem, AnnouncementItem } from "@/modules/schedules/types";
 import { LoadingSpinner } from "@/components/ui/loading-spinner";
 import { LiveClock } from "@/components/ui/live-clock";
 import { Illustration } from "@/components/ui/illustration";
 
 export default function BerandaPage() {
-  const [currentUser, setCurrentUser] = React.useState<UserProfile | null>(null);
-  const [isLoadingAuth, setIsLoadingAuth] = React.useState(true);
+  const { user: currentUser } = useIdentity();
   const [checkedIn, setCheckedIn] = React.useState(false);
   const [isProcessing, setIsProcessing] = React.useState(false);
   const [checkinError, setCheckinError] = React.useState<string | null>(null);
 
-  // Live configs & data
-  const [policy, setPolicy] = React.useState<PolicySettingItem | null>(null);
-  const [events, setEvents] = React.useState<ScheduleEventItem[]>([]);
-  const [announcements, setAnnouncements] = React.useState<AnnouncementItem[]>([]);
-  const [adminStats, setAdminStats] = React.useState<AdminDashboardMetrics | null>(null);
-  const [loadError, setLoadError] = React.useState<string | null>(null);
+  // Live configs & data — stale-while-revalidate: kunjungan ulang langsung
+  // menampilkan data terakhir sambil menyegarkan di latar belakang.
+  const isSupervisor = ["super_admin", "yayasan", "pengurus"].includes(currentUser.role);
+  const policyQuery = useCachedData("policy:active", getActivePolicyAction);
+  const eventsQuery = useCachedData(`events:${currentUser.id}`, getEventsAction);
+  const announcementsQuery = useCachedData(`announcements:${currentUser.id}`, getAnnouncementsAction);
+  const statsQuery = useCachedData(isSupervisor ? "admin:dashboard-stats" : null, getAdminDashboardStatsAction);
+
+  const policy = policyQuery.data ?? null;
+  const events: ScheduleEventItem[] = eventsQuery.data ?? [];
+  const announcements: AnnouncementItem[] = announcementsQuery.data ?? [];
+  const adminStats = statsQuery.data ?? null;
+  const isLoadingData = policyQuery.isLoading || eventsQuery.isLoading || announcementsQuery.isLoading || statsQuery.isLoading;
+  const loadError =
+    [policyQuery.error, eventsQuery.error, announcementsQuery.error, statsQuery.error].find(Boolean)?.message ?? null;
 
   // Time clocks
   const [currentDateTime, setCurrentDateTime] = React.useState(formatOperationalDateTime());
@@ -51,46 +58,20 @@ export default function BerandaPage() {
   // Admin View Switcher (allows admin to test member view)
   const [previewAsMember, setPreviewAsMember] = React.useState(false);
 
-  const loadData = React.useCallback(async () => {
-    setLoadError(null);
-    try {
-      const user = await getCurrentUserAction();
-      setCurrentUser(user);
-
-      const isSupervisor = user?.role && ["super_admin", "yayasan", "pengurus"].includes(user.role);
-
-      // Hanya panggil query data yang relevan dengan izin pengguna
-      const [p, ev, an, stats] = await Promise.all([
-        getActivePolicyAction(),
-        getEventsAction(),
-        getAnnouncementsAction(),
-        isSupervisor ? getAdminDashboardStatsAction() : Promise.resolve(null),
-      ]);
-
-      setPolicy(p);
-      if (p) {
-        setPolicyForm({
-          name: p.name,
-          attendanceCutoffTime: p.attendanceCutoffTime,
-          attendanceGraceCutoffTime: p.attendanceGraceCutoffTime,
-          reportDeadlineTime: p.reportDeadlineTime,
-        });
-      }
-      setEvents(ev || []);
-      setAnnouncements(an || []);
-      setAdminStats(stats);
-    } catch (err) {
-      console.error("Gagal memuat data beranda:", err);
-      setLoadError(err instanceof Error ? err.message : "Data beranda gagal dimuat.");
-    } finally {
-      setIsLoadingAuth(false);
+  React.useEffect(() => {
+    if (policy) {
+      setPolicyForm({
+        name: policy.name,
+        attendanceCutoffTime: policy.attendanceCutoffTime,
+        attendanceGraceCutoffTime: policy.attendanceGraceCutoffTime,
+        reportDeadlineTime: policy.reportDeadlineTime,
+      });
     }
-  }, []);
+  }, [policy]);
 
   React.useEffect(() => {
-    loadData();
     setCurrentDateTime(formatOperationalDateTime());
-  }, [loadData]);
+  }, []);
 
   const handleCheckin = async () => {
     setIsProcessing(true);
@@ -99,6 +80,7 @@ export default function BerandaPage() {
     setIsProcessing(false);
     if (res.success) {
       setCheckedIn(true);
+      invalidateCache("attendance:history");
     } else {
       setCheckinError(res.message || "Gagal mencatat presensi. Silakan coba lagi.");
     }
@@ -118,7 +100,7 @@ export default function BerandaPage() {
         setIsPolicyModalOpen(false);
         setPolicyFeedback(null);
       }, 1200);
-      loadData();
+      policyQuery.refresh();
     } else {
       setPolicyFeedback(res.message);
     }
@@ -131,7 +113,7 @@ export default function BerandaPage() {
     currentUser?.role === "yayasan" ||
     currentUser?.role === "pengurus";
 
-  if (isLoadingAuth) {
+  if (isLoadingData) {
     return (
       <div className="flex flex-col items-center justify-center min-h-[350px] gap-3">
         <LoadingSpinner size="lg" />

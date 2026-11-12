@@ -1,10 +1,11 @@
 "use client";
 
 import * as React from "react";
-import { getCurrentUserAction } from "@/modules/iam/actions";
+import { useIdentity } from "@/components/auth/identity-context";
+import { useCachedData } from "@/hooks/use-cached-data";
+import { writeCache } from "@/lib/data-cache";
 import { getCronJobSchedulesAction, updateCronJobScheduleAction } from "@/modules/cron/actions";
 import type { CronJobSchedule } from "@/lib/cron-schedule";
-import type { UserProfile } from "@/lib/auth/types";
 import { UnauthorizedState } from "@/components/ui/unauthorized-state";
 import { ErrorState } from "@/components/ui/error-state";
 
@@ -12,43 +13,26 @@ const DAY_LABELS = ["Min", "Sen", "Sel", "Rab", "Kam", "Jum", "Sab"];
 
 type Draft = { timeWib: string; daysOfWeek: number[]; enabled: boolean };
 
+const toDrafts = (rows: CronJobSchedule[]): Record<string, Draft> =>
+  Object.fromEntries(rows.map((row) => [row.jobKey, { timeWib: row.timeWib, daysOfWeek: row.daysOfWeek, enabled: row.enabled }]));
+
 export default function AdminCronPage() {
-  const [user, setUser] = React.useState<UserProfile | null>(null);
-  const [identityLoading, setIdentityLoading] = React.useState(true);
-  const [identityError, setIdentityError] = React.useState(false);
-  const [schedules, setSchedules] = React.useState<CronJobSchedule[]>([]);
-  const [drafts, setDrafts] = React.useState<Record<string, Draft>>({});
-  const [loading, setLoading] = React.useState(true);
-  const [loadError, setLoadError] = React.useState(false);
+  const { user } = useIdentity();
+  const schedulesQuery = useCachedData(user.role === "super_admin" ? "admin:cron-schedules" : null, getCronJobSchedulesAction);
+  const [schedules, setSchedules] = React.useState<CronJobSchedule[]>(schedulesQuery.data ?? []);
+  const [drafts, setDrafts] = React.useState<Record<string, Draft>>(() => toDrafts(schedulesQuery.data ?? []));
   const [savingKey, setSavingKey] = React.useState<string | null>(null);
   const [notice, setNotice] = React.useState<{ key: string; ok: boolean; text: string } | null>(null);
 
-  const loadUser = React.useCallback(async () => {
-    setIdentityLoading(true);
-    setIdentityError(false);
-    try { setUser(await getCurrentUserAction()); }
-    catch { setIdentityError(true); }
-    finally { setIdentityLoading(false); }
-  }, []);
-
-  const loadSchedules = React.useCallback(async () => {
-    setLoading(true);
-    setLoadError(false);
-    try {
-      const rows = await getCronJobSchedulesAction();
-      setSchedules(rows);
-      setDrafts(Object.fromEntries(rows.map((row) => [row.jobKey, { timeWib: row.timeWib, daysOfWeek: row.daysOfWeek, enabled: row.enabled }])));
-    } catch { setLoadError(true); }
-    finally { setLoading(false); }
-  }, []);
-
-  React.useEffect(() => { void loadUser(); }, [loadUser]);
   React.useEffect(() => {
-    if (user?.role === "super_admin") void loadSchedules();
-  }, [user?.role, loadSchedules]);
+    if (!schedulesQuery.data) return;
+    setSchedules(schedulesQuery.data);
+    setDrafts(toDrafts(schedulesQuery.data));
+  }, [schedulesQuery.data]);
 
-  if (identityError) return <ErrorState title="Identitas Gagal Dimuat" description="Akses Anda belum dapat diverifikasi. Periksa koneksi lalu coba lagi." onRetry={() => void loadUser()} />;
-  if (!user) return <div className="min-h-[360px] grid place-items-center text-sm text-muted-foreground">{identityLoading ? "Memverifikasi akses…" : "Sesi berakhir. Muat ulang halaman untuk masuk kembali."}</div>;
+  const loading = schedulesQuery.isLoading;
+  const loadError = Boolean(schedulesQuery.error);
+
   if (user.role !== "super_admin") return <UnauthorizedState requiredRole="Super Admin" />;
 
   const setDraft = (key: string, patch: Partial<Draft>) => {
@@ -64,7 +48,9 @@ export default function AdminCronPage() {
       const result = await updateCronJobScheduleAction(jobKey, draft);
       setNotice({ key: jobKey, ok: result.success, text: result.message });
       if (result.success) {
-        setSchedules((current) => current.map((row) => row.jobKey === jobKey ? { ...row, ...draft } : row));
+        const next = schedules.map((row) => row.jobKey === jobKey ? { ...row, ...draft } : row);
+        setSchedules(next);
+        writeCache("admin:cron-schedules", next);
       }
     } catch {
       setNotice({ key: jobKey, ok: false, text: "Jadwal belum tersimpan. Periksa koneksi lalu coba lagi." });
@@ -86,7 +72,7 @@ export default function AdminCronPage() {
       {loading ? (
         <div className="rounded-2xl border border-border bg-card p-8 text-sm text-muted-foreground">Memuat jadwal…</div>
       ) : loadError ? (
-        <ErrorState title="Jadwal Gagal Dimuat" description="Periksa koneksi dan migrasi database, lalu coba lagi." onRetry={() => void loadSchedules()} />
+        <ErrorState title="Jadwal Gagal Dimuat" description="Periksa koneksi dan migrasi database, lalu coba lagi." onRetry={() => void schedulesQuery.refresh()} />
       ) : (
         <div className="space-y-4">
           {schedules.map((schedule) => {
