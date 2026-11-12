@@ -25,6 +25,7 @@ export default function BerandaPage() {
   const [isLoadingAuth, setIsLoadingAuth] = React.useState(true);
   const [checkedIn, setCheckedIn] = React.useState(false);
   const [isProcessing, setIsProcessing] = React.useState(false);
+  const [checkinError, setCheckinError] = React.useState<string | null>(null);
 
   // Live configs & data
   const [policy, setPolicy] = React.useState<PolicySettingItem | null>(null);
@@ -93,10 +94,13 @@ export default function BerandaPage() {
 
   const handleCheckin = async () => {
     setIsProcessing(true);
+    setCheckinError(null);
     const res = await checkInAttendanceAction();
     setIsProcessing(false);
     if (res.success) {
       setCheckedIn(true);
+    } else {
+      setCheckinError(res.message || "Gagal mencatat presensi. Silakan coba lagi.");
     }
   };
 
@@ -840,6 +844,16 @@ export default function BerandaPage() {
             )}
           </button>
         )}
+
+        {checkinError ? (
+          <div
+            role="alert"
+            className="rounded-xl border border-error/30 bg-error-container/30 p-3 text-sm text-error flex items-start gap-2"
+          >
+            <span className="material-symbols-outlined text-[18px] shrink-0">error</span>
+            <span>{checkinError}</span>
+          </div>
+        ) : null}
 
         <div className="flex items-center justify-center pt-0.5">
           <Link

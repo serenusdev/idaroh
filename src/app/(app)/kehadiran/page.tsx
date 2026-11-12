@@ -22,6 +22,7 @@ export default function KehadiranPage() {
   const [historyItems, setHistoryItems] = React.useState<AttendanceRecordItem[]>([]);
   const [policy, setPolicy] = React.useState<PolicySettingItem | null>(null);
   const [loadError, setLoadError] = React.useState<string | null>(null);
+  const [checkinError, setCheckinError] = React.useState<string | null>(null);
 
   React.useEffect(() => {
     getAttendanceHistoryAction().then((data) => {
@@ -63,6 +64,7 @@ export default function KehadiranPage() {
 
   const handleCheckin = async () => {
     setIsProcessing(true);
+    setCheckinError(null);
     const res = await checkInAttendanceAction();
     setIsProcessing(false);
     if (res.success) {
@@ -78,6 +80,8 @@ export default function KehadiranPage() {
       getAttendanceHistoryAction().then((data) => {
         if (data && data.length > 0) setHistoryItems(data);
       });
+    } else {
+      setCheckinError(res.message || "Gagal mencatat presensi. Silakan coba lagi.");
     }
   };
 
@@ -307,6 +311,16 @@ export default function KehadiranPage() {
                 </button>
               )}
             </div>
+
+            {checkinError ? (
+              <div
+                role="alert"
+                className="rounded-xl border border-error/30 bg-error-container/30 p-3 text-sm text-error flex items-start gap-2"
+              >
+                <span className="material-symbols-outlined text-[18px] shrink-0">error</span>
+                <span>{checkinError}</span>
+              </div>
+            ) : null}
 
             <div className="flex items-start gap-2 bg-surface-container-low p-3 rounded-xl border border-border/40">
               <span className="material-symbols-outlined text-primary text-[18px] flex-shrink-0 mt-0.5">

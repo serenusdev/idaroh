@@ -18,7 +18,7 @@ type Outcome =
   | { kind: "reject"; message: string }
   | { kind: "defer"; id: string };
 type Config = {
-  mode?: "inbox" | "identity" | "backup" | "cron" | "dual";
+  mode?: "inbox" | "identity" | "backup" | "cron" | "dual" | "beranda";
   props?: Record<string, unknown>;
   data?: Record<string, Item[]>;
   queues?: Record<string, Outcome[]>;
@@ -66,6 +66,7 @@ import { NotificationInbox } from "@/components/notifications/notification-inbox
 import { AccountStateScreen } from "@/components/auth/account-state-screen";
 import AdminBackupPage from "@/app/(app)/admin/backup/page";
 import AdminCronPage from "@/app/(app)/admin/cron/page";
+import BerandaPage from "@/app/(app)/page";
 
 const config = window.__auditConfig;
 const clone = value => value === undefined ? undefined : JSON.parse(JSON.stringify(value));
@@ -120,6 +121,12 @@ window.__auditBoundaries = {
   manifest: type => call("manifest", [type], { success: true, message: "Manifest dicatat; backup belum terverifikasi." }),
   schedules: () => call("schedules", [], state.schedules),
   saveSchedule: (key, input) => call("saveSchedule", [key, input], { success: true, message: "Jadwal disimpan. Perubahan berlaku pada tick berikutnya (maksimal ±15 menit)." }),
+  checkIn: () => call("checkIn", [], { success: true, message: "Presensi berhasil dicatat: Tepat Waktu (07:00 WIB).", classification: "on_time", timeStr: "07:00 WIB", alreadyCheckedIn: false }),
+  policy: () => call("policy", [], null),
+  events: () => call("events", [], []),
+  announcements: () => call("announcements", [], []),
+  adminStats: () => call("adminStats", [], null),
+  updatePolicy: input => call("updatePolicy", [input], { success: true, message: "Kebijakan diperbarui." }),
   pushCleanup: () => call("pushCleanup", [], undefined),
   router: {
     push: target => state.navigation.push({ kind: "push", target }),
@@ -148,6 +155,7 @@ function render(mode, props = {}, remount = false) {
   if (mode === "identity") component = React.createElement(AccountStateScreen, { ...props, key: generation });
   else if (mode === "backup") component = React.createElement(AdminBackupPage, { key: generation });
   else if (mode === "cron") component = React.createElement(AdminCronPage, { key: generation });
+  else if (mode === "beranda") component = React.createElement(BerandaPage, { key: generation });
   else if (mode === "dual") component = React.createElement(React.Fragment, null,
     React.createElement("section", { "aria-label": "First inbox" }, React.createElement(NotificationInbox, { userId: "account-a" })),
     React.createElement("section", { "aria-label": "Second inbox" }, React.createElement(NotificationInbox, { userId: "account-a" })));
@@ -200,6 +208,15 @@ const boundaryModules: Record<string, string> = {
     export const getCronJobSchedulesAction = (...args) => window.__auditBoundaries.schedules(...args);
     export const updateCronJobScheduleAction = (...args) => window.__auditBoundaries.saveSchedule(...args);`,
   "@/modules/iam/actions": `export const getCurrentUserAction = () => window.__auditBoundaries.currentUser();`,
+  "@/modules/attendance/actions": `
+    export const checkInAttendanceAction = (...args) => window.__auditBoundaries.checkIn(...args);`,
+  "@/modules/analytics/actions": `
+    export const getActivePolicyAction = (...args) => window.__auditBoundaries.policy(...args);
+    export const updatePolicySettingsAction = (...args) => window.__auditBoundaries.updatePolicy(...args);
+    export const getAdminDashboardStatsAction = (...args) => window.__auditBoundaries.adminStats(...args);`,
+  "@/modules/schedules/actions": `
+    export const getEventsAction = (...args) => window.__auditBoundaries.events(...args);
+    export const getAnnouncementsAction = (...args) => window.__auditBoundaries.announcements(...args);`,
   "@/lib/supabase/client": `export const createClient = () => window.__auditBoundaries.client();`,
   "@/lib/notifications": `export const cleanupPushNotifications = () => window.__auditBoundaries.pushCleanup();`,
   "next/navigation": `export const useRouter = () => window.__auditBoundaries.router;`,
@@ -237,6 +254,7 @@ test.beforeAll(async () => {
     "src/components/auth/account-state-screen.tsx",
     "src/app/(app)/admin/backup/page.tsx",
     "src/app/(app)/admin/cron/page.tsx",
+    "src/app/(app)/page.tsx",
     "src/lib/safe-url.ts",
   ]) expect(inputs.some(input => input.endsWith(required)), `Bundled actual ${required}`).toBe(true);
   expect(inputs.some(input => /src\/lib\/supabase\/|src\/modules\/.*\/actions\.ts/.test(input))).toBe(false);
@@ -726,5 +744,48 @@ test.describe("audit UI — actual components, mocked external dependencies (not
     await expect(page.locator("#audit-ui-root section")).toHaveCount(3);
     expect(await callCount(page, "currentUser")).toBe(1);
     expect(await callCount(page, "schedules")).toBe(2);
+  });
+});
+
+test.describe("beranda check-in — real page, mocked actions (not production DB E2E)", () => {
+  const santri = { id: "santri-1", role: "santri", roles: ["santri"], full_name: "Santri Uji", status: "active" };
+  const checkinFailure = {
+    success: false,
+    message: "Gagal menyimpan presensi ke database: Could not find the function public.attendance_check_in in the schema cache",
+    classification: "on_time",
+    timeStr: "07:00",
+  };
+  const checkinSuccess = {
+    success: true,
+    message: "Presensi berhasil dicatat: Tepat Waktu (07:00 WIB).",
+    classification: "on_time",
+    timeStr: "07:00 WIB",
+    alreadyCheckedIn: false,
+  };
+
+  test("failed check-in surfaces the server error instead of dying silently", async ({ page }) => {
+    await mount(page, { mode: "beranda", user: santri, queues: { checkIn: [resolved(checkinFailure)] } });
+    const button = page.locator("#btn-checkin");
+    await expect(button).toBeVisible();
+    await button.click();
+    await expect(page.getByRole("alert")).toContainText("Could not find the function public.attendance_check_in");
+    await expect(button).toBeVisible();
+    await expect(page.getByText("Berhasil Presensi Hari Ini")).toHaveCount(0);
+    expect(await callCount(page, "checkIn")).toBe(1);
+  });
+
+  test("retry after failure succeeds and clears the alert", async ({ page }) => {
+    await mount(page, {
+      mode: "beranda", user: santri,
+      queues: { checkIn: [resolved(checkinFailure), resolved(checkinSuccess)] },
+    });
+    const button = page.locator("#btn-checkin");
+    await expect(button).toBeVisible();
+    await button.click();
+    await expect(page.getByRole("alert")).toContainText("Gagal menyimpan presensi");
+    await button.click();
+    await expect(page.getByText("Berhasil Presensi Hari Ini")).toBeVisible();
+    await expect(page.getByRole("alert")).toHaveCount(0);
+    expect(await callCount(page, "checkIn")).toBe(2);
   });
 });
