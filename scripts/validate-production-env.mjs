@@ -2,6 +2,9 @@ const placeholder = /placeholder|dummy|example\.(?:test|com|org)|your[-_]|change
 
 export function validateProductionEnvironment(env = process.env) {
   if (env.NODE_ENV !== 'production') return;
+  // CI builds compile without deployment credentials; Vercel/Cloudflare production
+  // builds do not set CI, so the guard still protects real deployments.
+  if (env.CI === 'true') return;
   if (env.VITEST) throw new Error('VITEST must never be enabled in production.');
 
   const required = [

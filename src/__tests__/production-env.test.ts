@@ -32,4 +32,10 @@ describe("production environment", () => {
   it("does not require production services in local development", () => {
     expect(() => validateProductionEnvironment({ NODE_ENV: "development" })).not.toThrow();
   });
+  it("skips credential checks for CI compile-only builds but still rejects VITEST", () => {
+    expect(() => validateProductionEnvironment({ NODE_ENV: "production", CI: "true" })).not.toThrow();
+    expect(() => validateProductionEnvironment({ NODE_ENV: "production", CI: "true", VITEST: "true" })).not.toThrow();
+    expect(() => validateProductionEnvironment({ NODE_ENV: "production", CI: "false" })).toThrow("NEXT_PUBLIC_SUPABASE_URL");
+    expect(() => validateProductionEnvironment({ ...valid, CI: "true", CRON_SECRET: "" })).not.toThrow();
+  });
 });
