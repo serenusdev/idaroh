@@ -1,22 +1,25 @@
-import { getCurrentUserProfile } from './session';
+import { resolveIdentity } from './session';
 import { UserProfile, UserRole } from './types';
 
 /**
- * Ensures caller is logged in with an active account.
- * Throws an error if unauthenticated or suspended.
+ * Ensures caller is logged in with an active, provisioned account.
  */
 export async function requireAuthUser(): Promise<UserProfile> {
-  const user = await getCurrentUserProfile();
+  const identity = await resolveIdentity();
 
-  if (!user) {
-    throw new Error('UNAUTHORIZED: Anda harus masuk (login) terlebih dahulu.');
+  switch (identity.state) {
+    case 'active':
+      return identity.profile;
+    case 'inactive':
+      throw new Error(`FORBIDDEN: Status akun Anda adalah "${identity.status}". Silakan hubungi Administrator.`);
+    case 'role_missing':
+    case 'profile_missing':
+      throw new Error('FORBIDDEN: Akun Anda belum memiliki peran aktif. Silakan hubungi Administrator.');
+    case 'identity_error':
+      throw new Error(`UNAVAILABLE: Identitas tidak dapat diverifikasi saat ini (kode ${identity.traceId}). Coba lagi.`);
+    default:
+      throw new Error('UNAUTHORIZED: Anda harus masuk (login) terlebih dahulu.');
   }
-
-  if (user.status !== 'active') {
-    throw new Error(`FORBIDDEN: Status akun Anda adalah "${user.status}". Silakan hubungi Administrator.`);
-  }
-
-  return user;
 }
 
 /**

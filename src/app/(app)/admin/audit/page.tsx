@@ -42,13 +42,12 @@ export default function AdminAuditPage() {
   const [exportCategory, setExportCategory] = React.useState("presensi_laporan");
   const [isExporting, setIsExporting] = React.useState(false);
 
-  // Policy Form State (For Highest Admin to fill in and adjust hours)
   const [policyForm, setPolicyForm] = React.useState({
-    name: "Shift Reguler Operasional Santri",
-    attendanceCutoffTime: "08:00",
-    attendanceGraceCutoffTime: "08:15",
-    reportDeadlineTime: "21:00",
-    effectiveFrom: new Date().toISOString().slice(0, 10),
+    name: "",
+    attendanceCutoffTime: "",
+    attendanceGraceCutoffTime: "",
+    reportDeadlineTime: "",
+    effectiveFrom: "",
     changeReason: "",
   });
 
@@ -66,6 +65,8 @@ export default function AdminAuditPage() {
           effectiveFrom: p.effectiveFrom,
           changeReason: "",
         });
+      } else {
+        setPolicyForm({ name: "", attendanceCutoffTime: "", attendanceGraceCutoffTime: "", reportDeadlineTime: "", effectiveFrom: "", changeReason: "" });
       }
       try {
         setPendingPolicies(await getPendingPolicySettingsAction());

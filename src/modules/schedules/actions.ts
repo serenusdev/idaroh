@@ -3,7 +3,7 @@
 
 import { createAdminClient } from "@/lib/supabase/admin";
 import { requireAuthUser, requireRole } from "@/lib/auth/guards";
-import { hashCalendarToken, sendPushToUsers } from "@/lib/fcm";
+import { drainNotificationOutbox, hashCalendarToken, sendPushToUsers } from "@/lib/fcm";
 import { INITIAL_ANNOUNCEMENTS, INITIAL_EVENTS } from "./data";
 import { AnnouncementItem, AudienceConfig, ScheduleEventItem } from "./types";
 import { randomBytes } from "node:crypto";
@@ -398,14 +398,8 @@ export async function publishAnnouncementAction(payload: {
     if (auditError) throw auditError;
     if (shouldPublish && !process.env.VITEST) {
       try {
-        const recipientIds = await getAudienceUserIds(supabase, payload.audienceConfig);
-        await sendPushToUsers(recipientIds, {
-          type: "ANNOUNCEMENT_PUBLISHED",
-          title: `Pengumuman Baru: ${payload.title}`,
-          body: "Tap untuk membaca instruksi lengkap.",
-          url: "/jadwal",
-          referenceId: newId,
-        });
+        // Publication trigger already resolved the audience and persisted inbox/outbox rows.
+        await drainNotificationOutbox({ notificationType: "ANNOUNCEMENT_PUBLISHED", referenceId: newId });
       } catch (pushError) {
         console.error("Announcement saved but push delivery failed:", pushError);
       }
@@ -779,14 +773,18 @@ export async function updateAnnouncementAction(
     if (auditError) throw auditError;
     if (nextStatus === "published" && !process.env.VITEST) {
       try {
-        const recipientIds = await getAudienceUserIds(supabase, payload.audienceConfig || existing.audience_config || { scope: "all" });
-        await sendPushToUsers(recipientIds, {
-          type: "ANNOUNCEMENT_UPDATED",
-          title: `Pembaruan Pengumuman: ${payload.title.trim()}`,
-          body: "Pengumuman yang Anda ikuti telah diperbarui.",
-          url: "/jadwal",
-          referenceId: announcementId,
-        });
+        if (existing.status !== "published") {
+          await drainNotificationOutbox({ notificationType: "ANNOUNCEMENT_PUBLISHED", referenceId: announcementId });
+        } else {
+          const recipientIds = await getAudienceUserIds(supabase, payload.audienceConfig || existing.audience_config || { scope: "all" });
+          await sendPushToUsers(recipientIds, {
+            type: "ANNOUNCEMENT_UPDATED",
+            title: `Pembaruan Pengumuman: ${payload.title.trim()}`,
+            body: "Pengumuman yang Anda ikuti telah diperbarui.",
+            url: "/jadwal",
+            referenceId: announcementId,
+          });
+        }
       } catch (pushError) {
         console.error("Announcement updated but push delivery failed:", pushError);
       }

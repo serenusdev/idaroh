@@ -6,6 +6,7 @@ import {
   type ActionPerformed,
 } from '@capacitor/push-notifications';
 import { registerDeviceToken, unregisterDeviceToken } from '@/modules/notifications/actions';
+import { toSafeInternalPath } from '@/lib/safe-url';
 
 let currentToken: string | null = null;
 let listenersRegistered = false;
@@ -84,9 +85,8 @@ export async function initPushNotifications(userId: string): Promise<void> {
         console.log('[FCM] Notification action performed');
       }
       const data = action.notification.data as Record<string, string> | undefined;
-      if (data?.url || data?.route) {
-        window.location.href = data.url || data.route || "/";
-      }
+      const target = toSafeInternalPath(data?.url || data?.route);
+      if (target) window.location.href = target;
     }
   );
 

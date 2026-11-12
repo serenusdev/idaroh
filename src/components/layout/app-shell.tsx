@@ -16,12 +16,12 @@ export function AppShell({ children, user }: AppShellProps) {
     <div className="min-h-screen bg-background text-on-surface antialiased flex flex-col">
       <PushNotificationsInit userId={user.id} />
       {/* Mobile Header & Bottom Navigation */}
-      <MobileHeader user={user} />
+      <MobileHeader key={user.id} user={user} />
       <MobileNav user={user} />
 
       {/* Desktop Persistent Sidebar & Header */}
       <DesktopSidebar user={user} />
-      <DesktopHeader user={user} />
+      <DesktopHeader key={user.id} user={user} />
 
       {/* Main Content Area */}
       <main className="flex-1 w-full pt-16 pb-24 md:pb-8 md:pl-64 transition-all">

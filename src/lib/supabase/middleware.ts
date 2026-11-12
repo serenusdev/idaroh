@@ -1,5 +1,6 @@
 import { createServerClient, type CookieOptions } from '@supabase/ssr';
 import { NextResponse, type NextRequest } from 'next/server';
+import { toSafeInternalPath } from '@/lib/safe-url';
 
 export const PUBLIC_PATHS = [
   '/login',
@@ -33,7 +34,7 @@ export async function updateSession(request: NextRequest) {
   const pathname = request.nextUrl.pathname;
   const isPublic = isPublicRoute(pathname);
 
-  if (!supabaseUrl || !supabaseAnonKey || supabaseUrl.includes('placeholder')) {
+  if (!supabaseUrl || !supabaseAnonKey || /placeholder|dummy|your[-_]|change[-_]?me/i.test(`${supabaseUrl} ${supabaseAnonKey}`)) {
     if (isPublic) return supabaseResponse;
     return NextResponse.json(
       { error: 'Server authentication is not configured.' },
@@ -64,38 +65,64 @@ export async function updateSession(request: NextRequest) {
 
   const {
     data: { user },
+    error: authError,
   } = await supabase.auth.getUser();
 
-  // An authenticated Supabase user is not necessarily an active application
-  // member. Suspended/deactivated profiles must not keep rendering app routes.
-  let activeProfile = true;
+  // An auth session alone does not prove active application membership.
+  let identityUnavailable = authError?.name === 'AuthRetryableFetchError';
+  let activeProfile = false;
   if (user) {
-    const { data: profile } = await supabase
+    const { data: profile, error: profileError } = await supabase
       .from('profiles')
       .select('status')
       .eq('id', user.id)
       .maybeSingle();
+    if (profileError) identityUnavailable = true;
     activeProfile = profile?.status === 'active';
   }
 
-  // If unauthenticated and accessing protected app route
-  if ((!user || !activeProfile) && !isPublic) {
-    if (pathname.startsWith('/api/')) {
+  if (!isPublic) {
+    const isApi = pathname.startsWith('/api/');
+
+    if (identityUnavailable) {
+      // Pages fall through to the app layout, which renders a retry state.
+      if (isApi) {
+        return NextResponse.json(
+          { error: 'IDENTITY_UNAVAILABLE: Layanan akun sementara tidak tersedia.' },
+          { status: 503 }
+        );
+      }
+      return supabaseResponse;
+    }
+
+    if (!user) {
+      if (isApi) {
+        return NextResponse.json(
+          { error: 'UNAUTHORIZED: Otentikasi diperlukan.' },
+          { status: 401 }
+        );
+      }
+      const url = request.nextUrl.clone();
+      const destination = `${url.pathname}${url.search}`;
+      url.pathname = '/login';
+      url.search = '';
+      if (destination !== '/') url.searchParams.set('next', destination);
+      return NextResponse.redirect(url);
+    }
+
+    // The layout renders only account recovery for inactive pages.
+    if (!activeProfile && isApi) {
       return NextResponse.json(
-        { error: 'UNAUTHORIZED: Otentikasi diperlukan.' },
-        { status: 401 }
+        { error: 'FORBIDDEN: Akun tidak aktif.' },
+        { status: 403 }
       );
     }
-    const url = request.nextUrl.clone();
-    url.pathname = '/login';
-    return NextResponse.redirect(url);
   }
 
   // If already authenticated and accessing login or register
   if (user && activeProfile && (pathname === '/login' || pathname === '/register')) {
-    const url = request.nextUrl.clone();
-    url.pathname = '/';
-    return NextResponse.redirect(url);
+    const destination = toSafeInternalPath(request.nextUrl.searchParams.get('next'));
+    return NextResponse.redirect(new URL(destination || '/', request.nextUrl.origin));
   }
 
   return supabaseResponse;

@@ -485,8 +485,8 @@ export async function sendTestPushAction(): Promise<{ success: boolean; message:
     url: "/",
   });
   return {
-    success: !result.skipped,
-    message: result.skipped ? "Push belum dikirim karena konfigurasi Firebase belum terbaca di server." : `Push uji dikirim ke ${result.sent} perangkat.`,
+    success: result.sent > 0,
+    message: result.skipped ? "Push belum dikirim karena konfigurasi Firebase belum terbaca di server." : result.sent > 0 ? `FCM menerima push uji untuk ${result.sent} perangkat; penerimaan di perangkat perlu diperiksa.` : "Belum ada push yang diterima FCM. Periksa perangkat terdaftar dan status antrean pengiriman.",
     sent: result.sent,
     skipped: result.skipped,
   };
@@ -494,9 +494,13 @@ export async function sendTestPushAction(): Promise<{ success: boolean; message:
 
 export async function createBackupManifestAction(runType: "database" | "storage" | "restore_test" = "database"): Promise<{ success: boolean; message: string; runId?: string }> {
   const user = await requireRole(["super_admin"]);
-  if (process.env.VITEST) return { success: true, message: "Manifest backup tercatat.", runId: "backup-test" };
+  if (runType !== "database") {
+    return { success: false, message: "Backup storage dan uji restore belum didukung. Tidak ada backup atau pemulihan yang dijalankan; hanya manifest database yang dapat dicatat." };
+  }
+  const message = "Manifest database berhasil dicatat. Ini bukan backup; backup dan pemulihan belum dijalankan atau diverifikasi. Verifikasi backup dan uji restore melalui provider masih diperlukan.";
+  if (process.env.VITEST) return { success: true, message, runId: "backup-test" };
   const supabase = createAdminClient();
-  const { data: run, error: insertError } = await supabase.from("backup_runs").insert({ run_type: runType, status: "started", requested_by: user.id }).select("id").single();
+  const { data: run, error: insertError } = await supabase.from("backup_runs").insert({ run_type: "database", status: "started", requested_by: user.id, artifact_ref: null }).select("id").single();
   if (insertError) throw insertError;
   try {
     const tables = ["profiles", "attendance_records", "daily_reports", "tasks", "events", "announcements"];
@@ -506,9 +510,9 @@ export async function createBackupManifestAction(runType: "database" | "storage"
       if (error) throw error;
       rowCounts[table] = count || 0;
     }
-    const { error } = await supabase.from("backup_runs").update({ status: "completed", row_counts: rowCounts, artifact_ref: "Supabase PITR / provider backup", completed_at: new Date().toISOString() }).eq("id", run.id);
+    const { error } = await supabase.from("backup_runs").update({ status: "manifest_only", row_counts: rowCounts, artifact_ref: null, completed_at: new Date().toISOString() }).eq("id", run.id);
     if (error) throw error;
-    return { success: true, message: "Manifest backup berhasil dicatat. Data penuh tetap mengikuti backup/PITR Supabase.", runId: run.id };
+    return { success: true, message, runId: run.id };
   } catch (error: any) {
     await supabase.from("backup_runs").update({ status: "failed", error_message: error?.message || "Backup manifest gagal.", completed_at: new Date().toISOString() }).eq("id", run.id);
     return { success: false, message: "Manifest backup gagal dicatat.", runId: run.id };

@@ -25,7 +25,8 @@ describe("Operations expansion", () => {
 
   it("keeps collaboration, backup, and push flows callable", async () => {
     expect((await addTaskCommentAction("task-1", "Mohon cek kembali lampirannya.")).success).toBe(true);
-    expect((await createBackupManifestAction("restore_test")).success).toBe(true);
+    expect((await createBackupManifestAction("database")).success).toBe(true);
+    expect((await createBackupManifestAction("restore_test")).success).toBe(false);
     expect((await sendTestPushAction()).sent).toBe(1);
   });
 });

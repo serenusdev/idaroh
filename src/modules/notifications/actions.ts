@@ -54,6 +54,23 @@ export async function getNotificationsAction(limit = 50): Promise<NotificationIt
   return (data || []).map(mapNotification);
 }
 
+export interface NotificationDeliverySummary {
+  pending: number;
+  processing: number;
+  deadLetter: number;
+}
+
+export async function getNotificationDeliverySummaryAction(): Promise<NotificationDeliverySummary> {
+  await requireRole(['super_admin']);
+  if (process.env.VITEST) return { pending: 0, processing: 0, deadLetter: 0 };
+  const admin = createAdminClient();
+  const results = await Promise.all(['pending', 'processing', 'dead_letter'].map((status) =>
+    admin.from('notification_push_outbox').select('notification_id', { count: 'exact', head: true }).eq('status', status)
+  ));
+  for (const result of results) if (result.error) throw result.error;
+  return { pending: results[0].count || 0, processing: results[1].count || 0, deadLetter: results[2].count || 0 };
+}
+
 export async function getUnreadNotificationCountAction(): Promise<number> {
   const user = await requireAuthUser();
   if (process.env.VITEST) return 0;

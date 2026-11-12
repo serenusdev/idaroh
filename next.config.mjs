@@ -1,5 +1,7 @@
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { validateProductionEnvironment } from './scripts/validate-production-env.mjs';
+import { PHASE_PRODUCTION_SERVER } from 'next/constants.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -7,7 +9,7 @@ const isDev = process.env.NODE_ENV !== 'production';
 const scriptSrc = isDev
   ? "script-src 'self' 'unsafe-inline' 'unsafe-eval'"
   : "script-src 'self' 'unsafe-inline'";
-const cspHeader = `default-src 'self'; img-src 'self' data: blob: https://lh3.googleusercontent.com https://images.unsplash.com https://*.supabase.co; connect-src 'self' https://*.supabase.co https://fcm.googleapis.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com data:; ${scriptSrc}; frame-ancestors 'none'; base-uri 'self'; form-action 'self'`;
+const cspHeader = `default-src 'self'; img-src 'self' data: blob: https://lh3.googleusercontent.com https://images.unsplash.com https://*.supabase.co; connect-src 'self' https://*.supabase.co wss://*.supabase.co https://fcm.googleapis.com; style-src 'self' 'unsafe-inline'; font-src 'self' data:; ${scriptSrc}; frame-ancestors 'none'; base-uri 'self'; form-action 'self'`;
 
 /** @type {import('next').NextConfig} */
 const nextConfig = {
@@ -40,7 +42,8 @@ const nextConfig = {
       },
     ];
   },
-  webpack: (config) => {
+  webpack: (config, { dev }) => {
+    if (!dev) validateProductionEnvironment();
     // Webpack resolves @capacitor packages to a non-existent root index.js.
     // Explicitly alias them to their real CJS entry points.
     config.resolve.alias = {
@@ -58,4 +61,7 @@ const nextConfig = {
   },
 };
 
-export default nextConfig;
+export default function configuration(phase) {
+  if (phase === PHASE_PRODUCTION_SERVER) validateProductionEnvironment();
+  return nextConfig;
+}

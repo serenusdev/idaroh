@@ -6,6 +6,7 @@ import Image from "next/image";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Illustration } from "@/components/ui/illustration";
+import { toSafeInternalPath } from "@/lib/safe-url";
 
 export default function LoginPage() {
   const [email, setEmail] = React.useState("");
@@ -38,7 +39,8 @@ export default function LoginPage() {
       }
 
       // The server route writes the SSR session cookies on this response.
-      window.location.assign("/");
+      const destination = toSafeInternalPath(new URLSearchParams(window.location.search).get("next"));
+      window.location.assign(destination || "/");
     } catch {
       setErrorMessage("Tidak dapat terhubung ke server autentikasi. Silakan periksa koneksi Anda dan coba lagi.");
       setIsLoading(false);

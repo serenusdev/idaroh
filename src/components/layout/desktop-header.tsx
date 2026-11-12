@@ -8,6 +8,7 @@ import { formatOperationalDateTime } from "@/lib/utils";
 import { UserProfile } from "@/lib/auth/types";
 import { Avatar } from "@/components/ui/avatar";
 import { getUnreadNotificationCountAction } from "@/modules/notifications/actions";
+import { useNotificationChanges } from "@/components/notifications/use-notification-changes";
 
 interface DesktopHeaderProps {
   user: UserProfile;
@@ -19,6 +20,7 @@ export function DesktopHeader({ user }: DesktopHeaderProps) {
     formatOperationalDateTime()
   );
   const [unreadCount, setUnreadCount] = React.useState(0);
+  const countVersion = React.useRef(0);
 
   React.useEffect(() => {
     // Update live clock every minute
@@ -28,15 +30,19 @@ export function DesktopHeader({ user }: DesktopHeaderProps) {
     return () => clearInterval(interval);
   }, []);
 
+  const refreshUnread = React.useCallback(() => {
+    const version = ++countVersion.current;
+    getUnreadNotificationCountAction()
+      .then((count) => { if (version === countVersion.current) setUnreadCount(count); })
+      .catch((error) => console.error("[notifications] unread count failed:", error));
+  }, []);
+
   React.useEffect(() => {
-    let mounted = true;
-    getUnreadNotificationCountAction().then((count) => {
-      if (mounted) setUnreadCount(count);
-    }).catch(() => {
-      if (mounted) setUnreadCount(0);
-    });
-    return () => { mounted = false; };
-  }, [pathname]);
+    refreshUnread();
+    return () => { countVersion.current += 1; };
+  }, [pathname, refreshUnread]);
+
+  useNotificationChanges(user.id, refreshUnread);
 
   const getPageTitle = () => {
     if (pathname === "/" || pathname === "/beranda") return "Beranda Santri";

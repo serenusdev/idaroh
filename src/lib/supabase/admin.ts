@@ -57,7 +57,7 @@ export function createAdminClient() {
   const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
   const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
 
-  if (!supabaseUrl || !serviceRoleKey) {
+  if (!supabaseUrl || !serviceRoleKey || (process.env.NODE_ENV === 'production' && /placeholder|dummy|your[-_]|change[-_]?me/i.test(`${supabaseUrl} ${serviceRoleKey}`))) {
     throw new Error(
       "Konfigurasi Supabase Admin tidak lengkap. Harap pastikan NEXT_PUBLIC_SUPABASE_URL dan SUPABASE_SERVICE_ROLE_KEY terkonfigurasi di Environment Variables."
     );

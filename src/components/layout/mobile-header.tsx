@@ -7,6 +7,7 @@ import Image from "next/image";
 import { Avatar } from "@/components/ui/avatar";
 import { UserProfile } from "@/lib/auth/types";
 import { getUnreadNotificationCountAction } from "@/modules/notifications/actions";
+import { useNotificationChanges } from "@/components/notifications/use-notification-changes";
 
 interface MobileHeaderProps {
   user: UserProfile;
@@ -17,16 +18,21 @@ interface MobileHeaderProps {
 export function MobileHeader({ user, title }: MobileHeaderProps) {
   const pathname = usePathname();
   const [unreadCount, setUnreadCount] = React.useState(0);
+  const countVersion = React.useRef(0);
+
+  const refreshUnread = React.useCallback(() => {
+    const version = ++countVersion.current;
+    getUnreadNotificationCountAction()
+      .then((count) => { if (version === countVersion.current) setUnreadCount(count); })
+      .catch((error) => console.error("[notifications] unread count failed:", error));
+  }, []);
 
   React.useEffect(() => {
-    let mounted = true;
-    getUnreadNotificationCountAction().then((count) => {
-      if (mounted) setUnreadCount(count);
-    }).catch(() => {
-      if (mounted) setUnreadCount(0);
-    });
-    return () => { mounted = false; };
-  }, [pathname]);
+    refreshUnread();
+    return () => { countVersion.current += 1; };
+  }, [pathname, refreshUnread]);
+
+  useNotificationChanges(user.id, refreshUnread);
 
   // Determine page title based on path if not explicitly provided
   const getPageTitle = () => {
