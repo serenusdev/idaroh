@@ -3,7 +3,8 @@
 
 import { createAdminClient } from "@/lib/supabase/admin";
 import { createClient } from "@/lib/supabase/server";
-import { requireAuthUser, getJakartaTime } from "@/lib/auth/guards";
+import { requireAuthUser, getHighestRole, ROLE_PRIORITY, getJakartaTime } from "@/lib/auth/guards";
+import { UserRole } from "@/lib/auth/types";
 import { ATTENDANCE_HISTORY } from "./data";
 import { AttendanceClassification, AttendanceRecordItem, CorrectionRequestPayload } from "./types";
 import { throwQueryError } from "@/lib/query-error";
@@ -89,12 +90,57 @@ export async function checkInAttendanceAction(): Promise<CheckinResult> {
 }
 
 /**
- * Server Action: Query live attendance history from Supabase
+ * Local role normalizer for attendance scope guard (FUNC-06).
+ * Maps profile.member_type strings to canonical UserRole keys.
  */
-export async function getAttendanceHistoryAction(): Promise<AttendanceRecordItem[]> {
+function normalizeAttendanceRole(value: string | null | undefined): UserRole | null {
+  const s = (value || "").trim().toLowerCase();
+  if (s.includes("super_admin") || s.includes("super admin")) return "super_admin";
+  if (s.includes("yayasan")) return "yayasan";
+  if (s.includes("pengurus")) return "pengurus";
+  if (s.includes("koordinator")) return "koordinator";
+  if (s.includes("santri")) return "santri";
+  return null;
+}
+
+/**
+ * Server Action: Query live attendance history from Supabase
+ * @param targetUserId Optional. Required when caller is pengurus/yayasan/super_admin.
+ *                     Santri/koordinator always see their own data; this param is ignored for them.
+ */
+export async function getAttendanceHistoryAction(targetUserId?: string): Promise<AttendanceRecordItem[]> {
   try {
     const user = await requireAuthUser();
     const supabase = createAdminClient();
+    const callerRole = getHighestRole(user);
+
+    // Determine effective user ID to scope queries
+    let effectiveUserId: string;
+    if (["santri", "koordinator"].includes(callerRole)) {
+      // Santri/koordinator always see only their own records; ignore targetUserId
+      effectiveUserId = user.id;
+    } else {
+      // Pengurus, yayasan, super_admin must supply targetUserId
+      if (!targetUserId) {
+        return [];
+      }
+      // FUNC-06: Silent hierarchy guard — prevents enumerating records of equals/superiors
+      const { data: targetProfile, error: profileError } = await supabase
+        .from("profiles")
+        .select("member_type")
+        .eq("id", targetUserId)
+        .maybeSingle();
+      if (profileError) throw profileError;
+      if (!targetProfile) return [];
+      const targetRole = normalizeAttendanceRole(targetProfile.member_type);
+      if (
+        targetRole &&
+        ROLE_PRIORITY[targetRole] >= ROLE_PRIORITY[callerRole]
+      ) {
+        return []; // silent scope guard — do not reveal existence
+      }
+      effectiveUserId = targetUserId;
+    }
 
     let query = supabase
       .from("attendance_records")
@@ -102,24 +148,21 @@ export async function getAttendanceHistoryAction(): Promise<AttendanceRecordItem
       .order("attendance_date", { ascending: false })
       .limit(30);
 
-    // Santri only sees their own attendance history
-    if (["santri", "koordinator"].includes(user.role)) {
-      query = query.eq("user_id", user.id);
-    }
+    // Scope query to the effective user (always per-user after FUNC-06 guard above)
+    query = query.eq("user_id", effectiveUserId);
 
     const { data, error } = await query;
 
     if (error) throw error;
     if (data) {
+      // Scope effective query to the same user; Map key is per-user+date after scoping
       const effectiveQuery = supabase
         .from("attendance_effective")
         .select("user_id, attendance_date, status, source_id")
         .order("attendance_date", { ascending: false })
-        .limit(30);
-      const scopedEffectiveQuery = ["santri", "koordinator"].includes(user.role)
-        ? effectiveQuery.eq("user_id", user.id)
-        : effectiveQuery;
-      const { data: effectiveRows, error: effectiveError } = await scopedEffectiveQuery;
+        .limit(30)
+        .eq("user_id", effectiveUserId);
+      const { data: effectiveRows, error: effectiveError } = await effectiveQuery;
       if (effectiveError) throw effectiveError;
       if (effectiveRows?.length) {
         const rawByDate = new Map((data as any[]).map((row) => [row.attendance_date, row]));

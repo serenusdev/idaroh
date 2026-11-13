@@ -430,10 +430,26 @@ export async function uploadTaskAttachmentAction(formData: FormData): Promise<{ 
   const file = formData.get("file");
   if (!taskId || !(file instanceof File)) return { success: false, message: "Tugas dan file wajib dipilih." };
   if (file.size < 1 || file.size > 10 * 1024 * 1024) return { success: false, message: "Ukuran lampiran maksimal 10 MB." };
+  // SEC-04: MIME type allowlist — only safe, expected document/image/video formats
+  const ALLOWED_MIME_TYPES = [
+    "application/pdf",
+    "image/jpeg",
+    "image/png",
+    "image/webp",
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    "video/mp4",
+    "video/webm",
+  ];
+  if (!ALLOWED_MIME_TYPES.includes(file.type)) {
+    return { success: false, message: "Tipe file tidak didukung. Gunakan PDF, gambar (JPG/PNG/WebP), dokumen Office (DOCX/XLSX), atau video (MP4/WebM)." };
+  }
   if (process.env.VITEST) return { success: true, message: "Lampiran berhasil diunggah." };
   const supabase = createAdminClient();
   if (!(await canAccessTask(supabase, user, taskId))) return { success: false, message: "Anda tidak memiliki akses ke tugas ini." };
   const path = `${taskId}/${user.id}/${randomUUID()}-${file.name.replace(/[^a-zA-Z0-9._-]/g, "_")}`;
+  // Note: Content-Disposition: attachment should be configured at Storage policy/CDN level
+  // if the Supabase JS SDK version in use does not support contentDisposition in upload options.
   const upload = await supabase.storage.from("task-attachments").upload(path, Buffer.from(await file.arrayBuffer()), { contentType: file.type || "application/octet-stream", upsert: false });
   if (upload.error) throw upload.error;
   const { data, error } = await supabase.from("task_attachments").insert({ task_id: taskId, uploaded_by: user.id, storage_path: path, file_name: file.name, mime_type: file.type || "application/octet-stream", size_bytes: file.size }).select("id, file_name, mime_type, size_bytes, created_at").single();

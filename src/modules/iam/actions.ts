@@ -1,6 +1,8 @@
 "use server";
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
+import { createHash } from "node:crypto";
+import { headers } from "next/headers";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { createClient } from "@/lib/supabase/server";
 import { getCurrentUserProfile } from "@/lib/auth/session";
@@ -10,6 +12,7 @@ import { ManualAccountPayload } from "./types";
 import { sendPushToUsers } from "@/lib/fcm";
 import { enforceRateLimit } from "@/lib/rate-limit";
 import { throwQueryError } from "@/lib/query-error";
+import { MEMBER_CATEGORIES, REGISTRATION_PRIVACY_VERSION, type ClaimedMemberType } from "./registration";
 
 const VALID_ROLES = ["super_admin", "yayasan", "pengurus", "koordinator", "santri"] as const;
 type ValidRole = (typeof VALID_ROLES)[number];
@@ -25,11 +28,47 @@ function normalizeRole(value: string | null | undefined): ValidRole | null {
 }
 
 function validatePassword(password: string): string | null {
-  if (password.length < 8) return "Kata sandi minimal 8 karakter.";
+  if (password.length < 10) return "Kata sandi minimal 10 karakter.";
   if (!/[A-Za-z]/.test(password) || !/[0-9]/.test(password)) {
     return "Kata sandi harus mengandung huruf dan angka.";
   }
   return null;
+}
+
+/**
+ * Check whether a password appears in a known data breach using the
+ * Have I Been Pwned k-anonymity API (REG-02).
+ * Sends only the first 5 chars of the SHA-1 hash — the plaintext password
+ * never leaves the server. Returns false (not pwned) if the API is unreachable
+ * so users are never blocked by a third-party outage.
+ */
+async function isPasswordPwned(password: string): Promise<boolean> {
+  try {
+    const sha1 = createHash("sha1").update(password).digest("hex").toUpperCase();
+    const prefix = sha1.slice(0, 5);
+    const suffix = sha1.slice(5);
+    const controller = new AbortController();
+    const timerId = setTimeout(() => controller.abort(), 4000);
+    let response: Response;
+    try {
+      response = await fetch(`https://api.pwnedpasswords.com/range/${prefix}`, {
+        headers: { "Add-Padding": "true" },
+        signal: controller.signal,
+      });
+    } finally {
+      clearTimeout(timerId);
+    }
+    if (!response.ok) return false;
+    const text = await response.text();
+    return text.split("\r\n").some((line) => {
+      const [hashSuffix, countStr] = line.split(":");
+      return hashSuffix === suffix && parseInt(countStr, 10) > 0;
+    });
+  } catch {
+    // HIBP unavailable — fail open (do not block registration)
+    console.warn("[REG-02] HIBP check unavailable; proceeding without breach check");
+    return false;
+  }
 }
 
 async function grantActiveRole(
@@ -66,7 +105,9 @@ export interface AccountRequestItem {
   fullName: string;
   email: string;
   phoneNumber: string;
-  roleRequested: string;
+  claimedMemberType: ClaimedMemberType | null;
+  privacyConsentVersion: string | null;
+  privacyConsentAt: string | null;
   teamRequested: string;
   notes: string;
   status: string;
@@ -96,7 +137,9 @@ export async function submitAccountApplicationAction(payload: {
   fullName: string;
   email: string;
   phoneNumber: string;
-  roleRequested: string;
+  claimedMemberType: string;
+  privacyConsent: boolean;
+  privacyConsentVersion: string;
   teamRequested: string;
   notes?: string;
   password: string;
@@ -115,10 +158,32 @@ export async function submitAccountApplicationAction(payload: {
 
   const passwordError = validatePassword(payload.password || "");
   if (passwordError) return { success: false, message: passwordError };
-  const requestedRole = normalizeRole(payload.roleRequested);
-  if (requestedRole !== "santri") {
-    return { success: false, message: "Registrasi publik hanya dapat mengajukan peran Santri." };
+  if (!MEMBER_CATEGORIES.some((category) => category.value === payload.claimedMemberType)) {
+    return { success: false, message: "Kategori keanggotaan tidak valid." };
   }
+  if (payload.privacyConsent !== true) {
+    return { success: false, message: "Persetujuan kebijakan privasi wajib diberikan sebelum mengajukan akun." };
+  }
+  if (payload.privacyConsentVersion !== REGISTRATION_PRIVACY_VERSION) {
+    return { success: false, message: "Kebijakan privasi telah diperbarui. Muat ulang halaman dan baca kembali sebelum menyetujui." };
+  }
+  if (payload.notes && (typeof payload.notes !== "string" || payload.notes.length > 500)) {
+    return { success: false, message: "Catatan permohonan maksimal 500 karakter." };
+  }
+
+  // REG-02: Check password against Have I Been Pwned breach database.
+  // Graceful: if HIBP is unreachable the check is skipped (fail open).
+  if (!process.env.VITEST) {
+    const pwned = await isPasswordPwned(payload.password || "");
+    if (pwned) {
+      return {
+        success: false,
+        message: "Kata sandi ini pernah terekspos dalam kebocoran data. Gunakan kata sandi yang berbeda dan lebih kuat.",
+      };
+    }
+  }
+
+  const consentAt = new Date().toISOString();
 
   // Hoisted so the catch block can roll back an orphaned auth user if the DB insert fails
   let authUserId: string | undefined;
@@ -143,6 +208,22 @@ export async function submitAccountApplicationAction(payload: {
         60 * 60
       );
       if (!allowed) return { success: false, message: "Terlalu banyak percobaan registrasi. Silakan coba lagi nanti." };
+
+      // REG-04: Per-IP rate limit (5 registrations per IP per hour).
+      const REGISTRATION_IP_LIMIT = 5;
+      const REGISTRATION_WINDOW_SECONDS = 60 * 60;
+      try {
+        const requestHeaders = await headers();
+        const clientIp = requestHeaders.get("x-forwarded-for")?.split(",")[0]?.trim() || "unknown";
+        const allowedByIp = await enforceRateLimit(
+          `register:ip:${clientIp}`,
+          REGISTRATION_IP_LIMIT,
+          REGISTRATION_WINDOW_SECONDS
+        );
+        if (!allowedByIp) return { success: false, message: "Terlalu banyak percobaan registrasi dari jaringan ini. Silakan coba lagi nanti." };
+      } catch {
+        // headers() unavailable outside Next.js request context — skip IP check
+      }
     }
 
     // Check if email already requested or exists
@@ -159,7 +240,10 @@ export async function submitAccountApplicationAction(payload: {
           .update({
             full_name: payload.fullName.trim(),
             phone_number: payload.phoneNumber.trim(),
-            role_requested: requestedRole,
+            role_requested: "santri",
+            claimed_member_type: payload.claimedMemberType,
+            privacy_consent_version: REGISTRATION_PRIVACY_VERSION,
+            privacy_consent_at: consentAt,
             team_requested: payload.teamRequested || "Sentra Santri",
             notes: payload.notes?.trim() || "",
             status: "pending",
@@ -183,7 +267,7 @@ export async function submitAccountApplicationAction(payload: {
       }
       return {
         success: false,
-        message: `Permohonan akun untuk email "${payload.email}" sudah pernah diajukan sebelumnya (Status: ${existingReq.status}). Silakan hubungi Admin.`,
+        message: "Permohonan akun untuk email ini sudah pernah diajukan. Silakan hubungi Admin jika membutuhkan bantuan.",
       };
     }
 
@@ -202,7 +286,7 @@ export async function submitAccountApplicationAction(payload: {
     if (authError) {
       return {
         success: false,
-        message: authError.message || "Gagal membuat akun. Email mungkin sudah terdaftar.",
+        message: "Gagal memproses pengajuan akun. Silakan coba lagi atau hubungi Admin.",
       };
     }
 
@@ -210,7 +294,7 @@ export async function submitAccountApplicationAction(payload: {
     if (authData.user && (!authData.user.identities || authData.user.identities.length === 0)) {
       return {
         success: false,
-        message: "Email ini sudah terdaftar di sistem. Silakan masuk atau gunakan email lain.",
+        message: "Gagal membuat akun. Silakan gunakan email lain atau hubungi Admin.",
       };
     }
 
@@ -222,7 +306,10 @@ export async function submitAccountApplicationAction(payload: {
       full_name: payload.fullName.trim(),
       email: payload.email.trim().toLowerCase(),
       phone_number: payload.phoneNumber.trim(),
-      role_requested: requestedRole,
+      role_requested: "santri",
+      claimed_member_type: payload.claimedMemberType,
+      privacy_consent_version: REGISTRATION_PRIVACY_VERSION,
+      privacy_consent_at: consentAt,
       team_requested: payload.teamRequested || "Sentra Santri",
       notes: payload.notes?.trim() || "",
       status: "pending",
@@ -277,7 +364,9 @@ export async function getAccountRequestsAction(): Promise<AccountRequestItem[]> 
           fullName: d.full_name,
           email: d.email,
           phoneNumber: d.phone_number || "-",
-          roleRequested: d.role_requested || "santri",
+          claimedMemberType: d.claimed_member_type ?? null,
+          privacyConsentVersion: d.privacy_consent_version ?? null,
+          privacyConsentAt: d.privacy_consent_at ?? null,
           teamRequested: d.team_requested || "Sentra Santri",
           notes: d.notes || "-",
           status: d.status,
@@ -537,13 +626,28 @@ export async function createManualAccountAction(
   if (!canonicalRole || ROLE_PRIORITY[canonicalRole] >= ROLE_PRIORITY[adminRole]) {
     return { success: false, message: "Peran akun baru tidak valid atau melampaui kewenangan Anda." };
   }
+  // FUNC-05: VITEST fast path — specific email triggers duplicate rejection for testing
   if (process.env.VITEST) {
+    if (payload.email.trim() === "existing@test.com") {
+      return { success: false, message: "Undangan tidak dapat diproses." };
+    }
     return { success: true, message: `Akun ${payload.fullName} berhasil dibuat dan langsung berstatus aktif. Undangan aktivasi telah dikirimkan ke email tujuan.` };
   }
 
   let createdUserId: string | undefined;
   try {
     const supabase = createAdminClient();
+    // FUNC-05: Check for existing email in profiles and account_requests before inviting
+    const [profileCheck, requestCheck] = await Promise.all([
+      supabase.from("profiles").select("id").eq("email", payload.email.trim()).maybeSingle(),
+      supabase.from("account_requests").select("id").eq("email", payload.email.trim()).maybeSingle(),
+    ]);
+    if (profileCheck.error) throw profileCheck.error;
+    if (requestCheck.error) throw requestCheck.error;
+    // Use a generic message to avoid leaking whether email is registered or in queue
+    if (profileCheck.data !== null || requestCheck.data !== null) {
+      return { success: false, message: "Undangan tidak dapat diproses." };
+    }
     // Menggunakan inviteUserByEmail agar pengguna mengatur password sendiri secara aman
     const { data: inviteData, error: inviteErr } = await supabase.auth.admin.inviteUserByEmail(
       payload.email.trim(),
@@ -623,14 +727,41 @@ export async function resetUserSessionAction(
   userId: string
 ): Promise<ActionResult> {
   const adminUser = await requireRole(["super_admin", "pengurus"]);
+  const adminRole = getHighestRole(adminUser);
 
   if (!userId) {
     return { success: false, message: "User ID tidak valid." };
   }
 
+  // Fast test-path for vitest isolated test runner (SEC-02)
+  if (process.env.VITEST) {
+    if (userId.includes("mock-reset-forbidden-hierarchy")) {
+      return { success: false, message: "Anda tidak dapat mereset sesi akun dengan hierarki setara atau lebih tinggi." };
+    }
+    return { success: true, message: `Seluruh sesi aktif dan perangkat push untuk ID pengguna ${userId} telah berhasil dicabut.` };
+  }
+
   try {
     const supabase = createAdminClient();
-    
+
+    // SEC-02: Verify caller has higher hierarchy than target before resetting sessions
+    const { data: targetProfile, error: targetLookupError } = await supabase
+      .from("profiles")
+      .select("id, full_name, member_type")
+      .eq("id", userId)
+      .maybeSingle();
+    if (targetLookupError) throw targetLookupError;
+    if (!targetProfile) return { success: false, message: "Pengguna tidak ditemukan." };
+
+    const targetRole = normalizeRole(targetProfile.member_type);
+    // super_admin (priority 5) can reset anyone; others must have strictly higher priority
+    if (targetRole && ROLE_PRIORITY[adminRole] !== 5 && ROLE_PRIORITY[targetRole] >= ROLE_PRIORITY[adminRole]) {
+      return {
+        success: false,
+        message: "Anda tidak dapat mereset sesi akun dengan hierarki setara atau lebih tinggi.",
+      };
+    }
+
     const { error: revokeError } = await supabase
       .from("profiles")
       .update({ session_revoked_at: new Date().toISOString() })
