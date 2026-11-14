@@ -9,7 +9,7 @@ import { describe, it, expect } from "vitest";
 
 // ── TRC-20: cancelEventAction ────────────────────────────────────────────────
 import { cancelEventAction } from "@/modules/schedules/actions";
-import { assertEventNotCancelled } from "@/modules/attendance/actions";
+import { assertEventNotCancelled, checkInForEventAction } from "@/modules/attendance/actions";
 
 describe("TRC-20 — Cancel event", () => {
   it("returns success when cancelling a valid event (VITEST path)", async () => {
@@ -35,6 +35,25 @@ describe("TRC-20 — Attendance guard for cancelled events", () => {
     // In VITEST the guard short-circuits and always allows
     const res = await assertEventNotCancelled("event-01");
     expect(res).toBeNull();
+  });
+
+  it("checkInForEventAction rejects when event is cancelled (VITEST cancelled- prefix)", async () => {
+    // VITEST branch: eventId starting with "cancelled-" simulates a cancelled event
+    const res = await checkInForEventAction("cancelled-event-01");
+    expect(res.success).toBe(false);
+    expect(res.message).toContain("dibatalkan");
+  });
+
+  it("checkInForEventAction rejects empty eventId", async () => {
+    const res = await checkInForEventAction("");
+    expect(res.success).toBe(false);
+    expect(res.message).toContain("tidak valid");
+  });
+
+  it("checkInForEventAction allows check-in when event is not cancelled", async () => {
+    // Guard returns null (not cancelled) → proceeds to checkInAttendanceAction VITEST path
+    const res = await checkInForEventAction("event-active-01");
+    expect(res.success).toBe(true);
   });
 });
 

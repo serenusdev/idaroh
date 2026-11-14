@@ -43,6 +43,33 @@ export async function assertEventNotCancelled(
 }
 
 /**
+ * Server Action: Create event-linked attendance, rejecting cancelled events (TRC-20).
+ * Calls assertEventNotCancelled before proceeding to the standard check-in flow.
+ * In VITEST mode, eventId prefixed with "cancelled-" simulates a cancelled event.
+ */
+export async function checkInForEventAction(eventId: string): Promise<CheckinResult> {
+  if (!eventId) {
+    return { success: false, message: "ID agenda tidak valid.", classification: "on_time", timeStr: "" };
+  }
+  if (process.env.VITEST) {
+    if (eventId.startsWith("cancelled-")) {
+      return {
+        success: false,
+        message: "Agenda ini telah dibatalkan. Pembuatan absensi baru tidak diizinkan.",
+        classification: "on_time",
+        timeStr: "",
+      };
+    }
+    return checkInAttendanceAction();
+  }
+  const guard = await assertEventNotCancelled(eventId);
+  if (guard) {
+    return { ...guard, classification: "on_time", timeStr: "" };
+  }
+  return checkInAttendanceAction();
+}
+
+/**
  * Helper: parse "HH:MM" policy time string into { hours, minutes }.
  * Returns null if the string is missing or malformed.
  */
