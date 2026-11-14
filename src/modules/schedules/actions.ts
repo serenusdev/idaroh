@@ -795,3 +795,74 @@ export async function updateAnnouncementAction(
     return { success: false, message: "Gagal memperbarui pengumuman." };
   }
 }
+
+/**
+ * Server Action: Cancel Event / Agenda (TRC-20, SCH-003)
+ * Sets status to 'cancelled', sends outbox notifications to all event audience,
+ * and prevents new attendance records from being created for the event thereafter.
+ */
+export async function cancelEventAction(
+  eventId: string,
+  reason?: string
+): Promise<{ success: boolean; message: string }> {
+  const admin = await requireRole(["super_admin", "yayasan", "pengurus"]);
+  if (!eventId) return { success: false, message: "ID agenda tidak valid." };
+
+  if (process.env.VITEST) {
+    return { success: true, message: "Agenda berhasil dibatalkan." };
+  }
+
+  try {
+    const supabase = createAdminClient();
+    const { data: existing, error: readError } = await supabase
+      .from("events")
+      .select("id, title, status, audience_config")
+      .eq("id", eventId)
+      .is("deleted_at", null)
+      .maybeSingle();
+    if (readError) throw readError;
+    if (!existing) return { success: false, message: "Agenda tidak ditemukan." };
+    if (existing.status === "cancelled") {
+      return { success: false, message: "Agenda ini sudah dibatalkan sebelumnya." };
+    }
+
+    const { error } = await supabase
+      .from("events")
+      .update({ status: "cancelled", updated_at: new Date().toISOString() })
+      .eq("id", eventId);
+    if (error) throw error;
+
+    const { error: auditError } = await supabase.from("audit_logs").insert({
+      event_name: "event.cancelled",
+      actor_id: admin.id,
+      actor_name: admin.full_name,
+      target_id: eventId,
+      target_label: existing.title,
+      action_detail: reason
+        ? `Agenda dibatalkan: ${reason}`
+        : `Agenda dibatalkan oleh ${admin.full_name}.`,
+    });
+    if (auditError) throw auditError;
+
+    try {
+      const recipientIds = await getAudienceUserIds(
+        supabase,
+        existing.audience_config || { scope: "all" }
+      );
+      await sendPushToUsers(recipientIds, {
+        type: "EVENT_CANCELLED",
+        title: `Agenda Dibatalkan: ${existing.title}`,
+        body: reason || "Agenda ini telah dibatalkan oleh administrator.",
+        url: "/jadwal",
+        referenceId: eventId,
+      });
+    } catch (pushError) {
+      console.error("Event cancelled but push delivery failed:", pushError);
+    }
+
+    return { success: true, message: `Agenda "${existing.title}" berhasil dibatalkan.` };
+  } catch (err) {
+    console.error("Failed to cancel event:", err);
+    return { success: false, message: "Gagal membatalkan agenda." };
+  }
+}

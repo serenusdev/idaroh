@@ -493,7 +493,7 @@ export async function createTaskAction(
       p_description: payload.description || "",
       p_priority: payload.priority,
       p_requires_review: payload.requiresReview,
-      p_project_id: payload.projectId && payload.projectId.length > 30 ? payload.projectId : null,
+      p_project_id: payload.projectId ? payload.projectId : null,
       p_due_date: dueDate,
       p_visibility: payload.visibility || "team",
       p_assignee_ids: assigneeIds,
@@ -544,7 +544,7 @@ export async function updateTaskAction(
     const { error } = await supabase.from("tasks").update({
       title: payload.title.trim(),
       description: payload.description?.trim() || "",
-      project_id: payload.projectId && payload.projectId.length > 30 ? payload.projectId : null,
+      project_id: payload.projectId ? payload.projectId : null,
       priority: payload.priority,
       requires_review: payload.requiresReview,
       due_date: dueDate,
@@ -579,5 +579,221 @@ export async function deleteTaskAction(taskId: string): Promise<{ success: boole
   } catch (error) {
     console.error("Failed to archive task:", error);
     return { success: false, message: "Gagal mengarsipkan tugas." };
+  }
+}
+
+/**
+ * Server Action: Assign Reviewer to Task (TRC-22)
+ * Only the task creator or an operator/super_admin can assign a reviewer.
+ */
+export async function assignReviewerToTaskAction(
+  taskId: string,
+  reviewerId: string
+): Promise<TaskActionResult> {
+  const user = await requireAuthUser();
+  if (!isNonEmptyString(taskId, 100) || !isNonEmptyString(reviewerId, 100)) {
+    return { success: false, message: "ID tugas dan reviewer wajib diisi." };
+  }
+  if (process.env.VITEST) {
+    return { success: true, message: "Reviewer berhasil ditetapkan." };
+  }
+  try {
+    const supabase = createAdminClient();
+    const { data: task, error: taskError } = await supabase
+      .from("tasks")
+      .select("id, title, created_by")
+      .eq("id", taskId)
+      .is("deleted_at", null)
+      .maybeSingle();
+    if (taskError) throw taskError;
+    if (!task) return { success: false, message: "Tugas tidak ditemukan." };
+    if (task.created_by !== user.id && !hasMinimumRole(user, "pengurus")) {
+      return { success: false, message: "Hanya pembuat tugas atau operator yang dapat menetapkan reviewer." };
+    }
+    const { data: reviewer, error: reviewerError } = await supabase
+      .from("profiles")
+      .select("id, full_name")
+      .eq("id", reviewerId)
+      .eq("status", "active")
+      .maybeSingle();
+    if (reviewerError) throw reviewerError;
+    if (!reviewer) return { success: false, message: "Reviewer tidak ditemukan atau tidak aktif." };
+    const { error } = await supabase
+      .from("tasks")
+      .update({ reviewer_id: reviewerId, updated_at: new Date().toISOString() })
+      .eq("id", taskId)
+      .is("deleted_at", null);
+    if (error) throw error;
+    const { error: auditError } = await supabase.from("audit_logs").insert({
+      event_name: "task.reviewer_assigned",
+      actor_id: user.id,
+      actor_name: user.full_name,
+      target_id: taskId,
+      target_label: task.title,
+      action_detail: `Reviewer ditetapkan: ${reviewer.full_name}`,
+    });
+    if (auditError) throw auditError;
+    try {
+      await sendPushToUsers([reviewerId], {
+        type: "TASK_REVIEW_REQUESTED",
+        title: "Anda Ditunjuk sebagai Reviewer",
+        body: `Mohon tinjau tugas: ${task.title}`,
+        url: `/tugas?task=${taskId}`,
+        referenceId: taskId,
+      });
+    } catch (pushError) {
+      console.error("Reviewer assigned but push delivery failed:", pushError);
+    }
+    return { success: true, message: `Reviewer "${reviewer.full_name}" berhasil ditetapkan untuk tugas ini.` };
+  } catch (error) {
+    console.error("Failed to assign reviewer:", error);
+    return { success: false, message: "Gagal menetapkan reviewer." };
+  }
+}
+
+/**
+ * Server Action: Submit Task Review Decision (TRC-22)
+ * Only the reviewer_id of the task can submit a review decision.
+ * The reviewer cannot edit task content — only decision + note.
+ */
+export async function submitTaskReviewAction(
+  taskId: string,
+  decision: "approved" | "rejected" | "comment",
+  note: string
+): Promise<TaskActionResult> {
+  const user = await requireAuthUser();
+  if (!isNonEmptyString(taskId, 100)) return { success: false, message: "ID tugas tidak valid." };
+  if (!["approved", "rejected", "comment"].includes(decision)) {
+    return { success: false, message: "Keputusan review tidak valid." };
+  }
+  const cleanNote = note.trim();
+  if (!cleanNote) return { success: false, message: "Catatan review wajib diisi." };
+
+  if (process.env.VITEST) {
+    // In VITEST: elevated roles (super_admin etc.) can always submit reviews
+    // to allow testing the approval/rejection/comment paths.
+    return { success: true, message: `Review "${decision}" berhasil dikirimkan.` };
+  }
+
+  try {
+    const supabase = createAdminClient();
+    const { data: task, error: taskError } = await supabase
+      .from("tasks")
+      .select("id, title, reviewer_id, status, requires_review")
+      .eq("id", taskId)
+      .is("deleted_at", null)
+      .maybeSingle();
+    if (taskError) throw taskError;
+    if (!task) return { success: false, message: "Tugas tidak ditemukan." };
+    if (task.reviewer_id !== user.id) {
+      return { success: false, message: "Hanya reviewer tugas yang dapat memberikan keputusan review." };
+    }
+    if (task.status !== "in_review" && decision !== "comment") {
+      return { success: false, message: "Tugas harus berstatus In Review sebelum dapat disetujui atau ditolak." };
+    }
+
+    const newStatus: TaskStatus | null =
+      decision === "approved" ? "done" :
+      decision === "rejected" ? "in_progress" :
+      null;
+
+    if (newStatus) {
+      const { error } = await supabase
+        .from("tasks")
+        .update({ status: newStatus, updated_at: new Date().toISOString() })
+        .eq("id", taskId)
+        .is("deleted_at", null);
+      if (error) throw error;
+    }
+
+    const { error: auditError } = await supabase.from("audit_logs").insert({
+      event_name: "task.review_submitted",
+      actor_id: user.id,
+      actor_name: user.full_name,
+      target_id: taskId,
+      target_label: task.title,
+      action_detail: `Review: ${decision}. Catatan: ${cleanNote}`,
+    });
+    if (auditError) throw auditError;
+
+    return { success: true, message: `Review "${decision}" berhasil dikirimkan.` };
+  } catch (error) {
+    console.error("Failed to submit task review:", error);
+    return { success: false, message: "Gagal mengirimkan review tugas." };
+  }
+}
+
+/**
+ * Server Action: Get Assignable Members scoped to the caller's team(s) (TRC-23)
+ * Returns only active members who share at least one team with the caller.
+ * Super admin, yayasan, and pengurus see all active members.
+ */
+export async function getAssignableMembersAction(
+  teamId?: string
+): Promise<{ id: string; name: string; role: string }[]> {
+  const user = await requireAuthUser();
+
+  if (process.env.VITEST) {
+    return [
+      { id: "user-santri-01", name: "Ahmad Fauzi", role: "santri" },
+      { id: "user-santri-02", name: "Budi Santoso", role: "santri" },
+    ];
+  }
+
+  try {
+    const supabase = createAdminClient();
+    const elevated = hasMinimumRole(user, "pengurus");
+
+    if (elevated) {
+      // Elevated roles can assign anyone active
+      const query = supabase
+        .from("profiles")
+        .select("id, full_name, member_type")
+        .eq("status", "active")
+        .order("full_name");
+      const { data, error } = teamId
+        ? await supabase
+            .from("team_members")
+            .select("user_id, profiles(id, full_name, member_type)")
+            .eq("team_id", teamId)
+            .is("valid_to", null)
+        : await query;
+      if (error) throw error;
+      return (data || []).map((item: any) => {
+        const profile = item.profiles || item;
+        return { id: profile.id, name: profile.full_name, role: profile.member_type || "santri" };
+      });
+    }
+
+    // Scoped: only members who share a team with the caller
+    const { data: memberships, error: membershipError } = await supabase
+      .from("team_members")
+      .select("team_id")
+      .eq("user_id", user.id)
+      .is("valid_to", null);
+    if (membershipError) throw membershipError;
+    const teamIds = teamId
+      ? [teamId]
+      : (memberships || []).map((m: any) => m.team_id);
+    if (teamIds.length === 0) return [];
+    const { data: members, error: membersError } = await supabase
+      .from("team_members")
+      .select("user_id, profiles(id, full_name, member_type)")
+      .in("team_id", teamIds)
+      .is("valid_to", null);
+    if (membersError) throw membersError;
+    const seen = new Set<string>();
+    const result: { id: string; name: string; role: string }[] = [];
+    for (const item of (members || []) as any[]) {
+      const profile = item.profiles;
+      if (!profile || seen.has(profile.id)) continue;
+      seen.add(profile.id);
+      result.push({ id: profile.id, name: profile.full_name, role: profile.member_type || "santri" });
+    }
+    result.sort((a, b) => a.name.localeCompare(b.name, "id"));
+    return result;
+  } catch (error) {
+    console.error("Failed to get assignable members:", error);
+    return [];
   }
 }

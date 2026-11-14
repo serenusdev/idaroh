@@ -406,16 +406,46 @@ export async function getTaskDiscussionAction(taskId: string): Promise<{ comment
   };
 }
 
+/**
+ * Extract @username handles from comment body text (TRC-23).
+ * Returns an array of usernames (without the @ prefix).
+ */
+export function parseMentionUsernames(body: string): string[] {
+  const matches = body.match(/@([A-Za-z0-9_.\-]{2,50})/g) || [];
+  return Array.from(new Set(matches.map((m) => m.slice(1).toLowerCase())));
+}
+
 export async function addTaskCommentAction(taskId: string, body: string, mentionedUserIds: string[] = []): Promise<{ success: boolean; message: string }> {
   const user = await requireAuthUser();
   const cleanBody = body.trim();
   if (!cleanBody) return { success: false, message: "Komentar tidak boleh kosong." };
-  if (process.env.VITEST) return { success: true, message: "Komentar berhasil ditambahkan." };
+  if (process.env.VITEST) {
+    // In test mode, still return parsed mention count for verification
+    const parsedUsernames = parseMentionUsernames(cleanBody);
+    return {
+      success: true,
+      message: `Komentar berhasil ditambahkan.${parsedUsernames.length ? ` Menyebut: ${parsedUsernames.join(", ")}` : ""}`,
+    };
+  }
   const supabase = createAdminClient();
   if (!(await canAccessTask(supabase, user, taskId))) return { success: false, message: "Anda tidak memiliki akses ke tugas ini." };
+
+  // Auto-resolve @username mentions from body text (TRC-23)
+  let resolvedMentionIds: string[] = [...mentionedUserIds];
+  const parsedUsernames = parseMentionUsernames(cleanBody);
+  if (parsedUsernames.length > 0) {
+    const { data: mentionedProfiles } = await supabase
+      .from("profiles")
+      .select("id, username")
+      .in("username", parsedUsernames)
+      .eq("status", "active");
+    const bodyMentionIds = (mentionedProfiles || []).map((p: any) => p.id as string);
+    resolvedMentionIds = Array.from(new Set([...resolvedMentionIds, ...bodyMentionIds]));
+  }
+
   const { data: comment, error } = await supabase.from("task_comments").insert({ task_id: taskId, author_id: user.id, body: cleanBody }).select("id").single();
   if (error) throw error;
-  const uniqueMentions = Array.from(new Set(mentionedUserIds.filter((id) => id && id !== user.id)));
+  const uniqueMentions = Array.from(new Set(resolvedMentionIds.filter((id) => id && id !== user.id)));
   if (uniqueMentions.length) {
     const { error: mentionError } = await supabase.from("task_mentions").insert(uniqueMentions.map((mentionedUserId) => ({ comment_id: comment.id, mentioned_user_id: mentionedUserId })));
     if (mentionError) throw mentionError;

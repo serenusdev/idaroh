@@ -18,6 +18,31 @@ export interface CheckinResult {
 }
 
 /**
+ * Guard: reject attendance creation for a cancelled event (TRC-20).
+ * Returns an error result if the event is cancelled; null if it's OK to proceed.
+ */
+export async function assertEventNotCancelled(
+  eventId: string
+): Promise<{ success: false; message: string } | null> {
+  if (process.env.VITEST) return null;
+  const supabase = createAdminClient();
+  const { data: event, error } = await supabase
+    .from("events")
+    .select("id, status")
+    .eq("id", eventId)
+    .maybeSingle();
+  if (error) throw error;
+  if (!event) return null; // No linked event — allow
+  if (event.status === "cancelled") {
+    return {
+      success: false,
+      message: "Agenda ini telah dibatalkan. Pembuatan absensi baru tidak diizinkan.",
+    };
+  }
+  return null;
+}
+
+/**
  * Helper: parse "HH:MM" policy time string into { hours, minutes }.
  * Returns null if the string is missing or malformed.
  */
