@@ -6,6 +6,7 @@ import Image from "next/image";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Illustration } from "@/components/ui/illustration";
+import { TurnstileWidget } from "@/components/ui/turnstile-widget";
 import { toSafeInternalPath } from "@/lib/safe-url";
 
 export default function LoginPage() {
@@ -14,6 +15,7 @@ export default function LoginPage() {
   const [isLoading, setIsLoading] = React.useState(false);
   const [errorMessage, setErrorMessage] = React.useState("");
   const [isHydrated, setIsHydrated] = React.useState(false);
+  const [turnstileToken, setTurnstileToken] = React.useState("");
 
   React.useEffect(() => {
     setIsHydrated(true);
@@ -28,12 +30,14 @@ export default function LoginPage() {
       const response = await fetch("/api/auth/login", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email: email.trim(), password }),
+        body: JSON.stringify({ email: email.trim(), password, turnstileToken }),
       });
       const result = (await response.json()) as { success?: boolean; message?: string };
 
       if (!response.ok || !result.success) {
         setErrorMessage(result.message || "Terjadi kesalahan saat masuk ke sistem.");
+        // Reset Turnstile token so user must complete challenge again
+        setTurnstileToken("");
         setIsLoading(false);
         return;
       }
@@ -46,6 +50,8 @@ export default function LoginPage() {
       setIsLoading(false);
     }
   };
+
+  const siteKey = process.env.NEXT_PUBLIC_TURNSTILE_SITE_KEY || "";
 
   return (
     <div className="min-h-screen bg-background flex flex-col justify-center items-center px-4 py-8">
@@ -113,6 +119,17 @@ export default function LoginPage() {
               autoComplete="current-password"
             />
           </div>
+
+          {/* Turnstile bot-protection widget (SEC-11 + TRC-01) */}
+          {siteKey && (
+            <div className="flex justify-center py-1">
+              <TurnstileWidget
+                siteKey={siteKey}
+                onToken={setTurnstileToken}
+                onExpire={() => setTurnstileToken("")}
+              />
+            </div>
+          )}
 
           <Button
             type="submit"

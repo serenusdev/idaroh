@@ -8,7 +8,7 @@ import { requireAuthUser, requireRole, getJakartaTime } from "@/lib/auth/guards"
 import { isDateOnly, isNonEmptyString, isPlainRecord, isTimeOnly } from "@/lib/input-validation";
 import { throwQueryError } from "@/lib/query-error";
 import { INITIAL_USER_DAILY_REPORT, REPORT_CATEGORIES, REVIEW_QUEUE_REPORTS } from "./data";
-import { DailyReport, ReportCategory, ReportItem, ReviewDecision } from "./types";
+import { DailyReport, MyReportHistoryOptions, MyReportHistoryPage, ReportCategory, ReportItem, ReviewDecision } from "./types";
 
 export interface SaveReportDraftPayload {
   reportId: string;
@@ -37,16 +37,29 @@ function serializeReportItems(items: ReportItem[]) {
     "cat-media": "media-kreatif",
     "cat-ops": "operasional",
   };
-  return items.map((item) => ({
-    // The RPC resolves canonical UUIDs and slugs. Keep legacy fixture IDs
-    // compatible so a fast first submit cannot silently lose its category.
-    categoryId: categoryAliases[item.categoryId] || item.categoryId,
-    title: item.title,
-    description: item.description,
-    resultProgress: item.resultProgress || "",
-    obstacles: item.obstacles || "",
-    durationMinutes: item.durationMinutes || 60,
-  }));
+  return items.map((item) => {
+    // FUNC-01: validate duration is a positive integer before it reaches the DB.
+    // The SQL regex in 20261102000006 uses dollar-quoting which makes '^\d+$'
+    // a literal string instead of a regex; it never matches → always falls back
+    // to 60. Guard here so the value that reaches the DB is always valid.
+    const rawDuration = item.durationMinutes;
+    const durationMinutes =
+      typeof rawDuration === "number" &&
+      Number.isInteger(rawDuration) &&
+      rawDuration > 0
+        ? rawDuration
+        : 60;
+    return {
+      // The RPC resolves canonical UUIDs and slugs. Keep legacy fixture IDs
+      // compatible so a fast first submit cannot silently lose its category.
+      categoryId: categoryAliases[item.categoryId] || item.categoryId,
+      title: item.title,
+      description: item.description,
+      resultProgress: item.resultProgress || "",
+      obstacles: item.obstacles || "",
+      durationMinutes,
+    };
+  });
 }
 
 export async function getReportCategoriesAction(): Promise<ReportCategory[]> {
@@ -180,6 +193,75 @@ export async function getTodayReportAction(): Promise<DailyReport> {
       },
     ],
   };
+}
+
+/** Read-only personal history; the authenticated session is the only author scope. */
+export async function getMyReportHistoryAction(
+  options: MyReportHistoryOptions = {}
+): Promise<MyReportHistoryPage> {
+  const user = await requireAuthUser();
+  if (!isPlainRecord(options)) throw new Error("Parameter riwayat laporan tidak valid.");
+  const { before, limit = 10 } = options;
+  if (typeof limit !== "number" || !Number.isInteger(limit) || limit < 1) {
+    throw new Error("Batas riwayat laporan tidak valid.");
+  }
+  if (before != null && (!isDateOnly(before)
+    || !Number.isFinite(Date.parse(before))
+    || new Date(before).toISOString().slice(0, 10) !== before)) {
+    throw new Error("Tanggal riwayat laporan tidak valid.");
+  }
+  const pageSize = Math.min(limit, 25);
+
+  try {
+    const supabase = createAdminClient();
+    let query = supabase
+      .from("daily_reports")
+      .select(`id, report_date, submission_status, review_status, is_late, first_submitted_at,
+        report_items(id, category_id, title, description, result_progress, obstacles, duration_minutes, sort_order, report_categories(name)),
+        report_reviews(decision, notes, decided_at)`)
+      .eq("user_id", user.id)
+      .order("report_date", { ascending: false })
+      .order("sort_order", { ascending: true, referencedTable: "report_items" })
+      .order("decided_at", { ascending: false, referencedTable: "report_reviews" })
+      .order("id", { ascending: false, referencedTable: "report_reviews" })
+      .limit(1, { referencedTable: "report_reviews" })
+      .limit(pageSize + 1);
+    // UNIQUE(user_id, report_date) makes this cursor stable and exclusive.
+    if (before) query = query.lt("report_date", before);
+    const { data, error } = await query;
+    if (error) throw error;
+    const rows = data ?? [];
+    const reports: MyReportHistoryPage["reports"] = rows.slice(0, pageSize).map((row: any) => ({
+      id: row.id,
+      reportDate: row.report_date,
+      submissionStatus: row.submission_status,
+      reviewStatus: row.review_status,
+      isLate: row.is_late,
+      firstSubmittedAt: row.first_submitted_at,
+      items: (row.report_items ?? []).map((item: any) => ({
+        id: item.id,
+        categoryId: item.category_id ?? "",
+        categoryName: item.report_categories?.name ?? "Tanpa kategori",
+        title: item.title,
+        description: item.description,
+        resultProgress: item.result_progress ?? "",
+        obstacles: item.obstacles ?? "",
+        durationMinutes: item.duration_minutes ?? 60,
+        sortOrder: item.sort_order,
+      })),
+      latestReview: row.report_reviews?.[0] ? {
+        decision: row.report_reviews[0].decision,
+        notes: row.report_reviews[0].notes,
+        decidedAt: row.report_reviews[0].decided_at,
+      } : null,
+    }));
+    return {
+      reports,
+      nextCursor: rows.length > pageSize ? reports[reports.length - 1].reportDate : null,
+    };
+  } catch (error) {
+    throwQueryError("reports.my-history", error);
+  }
 }
 
 /**
@@ -533,7 +615,7 @@ export async function reviewReportAction(
     const admin = createAdminClient();
     const { data: targetReport, error: fetchErr } = await admin
       .from("daily_reports")
-      .select("id, user_id")
+      .select("id, user_id, report_date")
       .eq("id", payload.reportId)
       .maybeSingle();
 
@@ -541,6 +623,13 @@ export async function reviewReportAction(
     if (!targetReport) {
       return { success: false, message: "Laporan santri tidak ditemukan." };
     }
+
+    // Fetch the reporter's profile for email outbox (TRC-04)
+    const { data: reporterProfile } = await admin
+      .from("profiles")
+      .select("email, full_name")
+      .eq("id", targetReport.user_id)
+      .maybeSingle();
 
     const supabase = await createClient();
     const { data: reviewResult, error: reviewError } = await supabase.rpc("review_report", {
@@ -575,6 +664,28 @@ export async function reviewReportAction(
       action_detail: `Keputusan: ${payload.decision}. Catatan: ${payload.notes || "-"}`,
     });
     if (auditError) throw auditError;
+
+    // TRC-04: Insert email decision notification into outbox (fire-and-forget).
+    if (reporterProfile?.email) {
+      const reportDate = targetReport.report_date || payload.reportId;
+      const isApproved = payload.decision === "approved";
+      try {
+        await admin.from("email_outbox").insert({
+          recipient: reporterProfile.email,
+          subject: isApproved
+            ? `Laporan Harian Anda (${reportDate}) Telah Disetujui`
+            : `Laporan Harian Anda (${reportDate}) Memerlukan Revisi`,
+          body_text: isApproved
+            ? `Yth. ${reporterProfile.full_name},\n\nLaporan harian Anda untuk tanggal ${reportDate} telah disetujui oleh ${reviewer.full_name}.\n\nTerima kasih atas laporan yang Anda kirimkan.`
+            : `Yth. ${reporterProfile.full_name},\n\nLaporan harian Anda untuk tanggal ${reportDate} memerlukan revisi.\n\nCatatan dari ustadz/pembina: ${payload.notes || "-"}\n\nSilakan perbaiki dan kirim ulang laporan Anda.`,
+          reference_id: payload.reportId,
+          reference_type: isApproved ? "report_approved" : "report_revision_required",
+          status: "pending",
+        });
+      } catch (outboxError) {
+        console.error("Report reviewed but email outbox insert failed:", outboxError);
+      }
+    }
   } catch (err: any) {
     console.error("Failed to record review action:", err);
     return {

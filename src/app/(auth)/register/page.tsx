@@ -5,13 +5,15 @@ import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Illustration } from "@/components/ui/illustration";
+import { TurnstileWidget } from "@/components/ui/turnstile-widget";
 import { submitAccountApplicationAction } from "@/modules/iam/actions";
+import { MEMBER_CATEGORIES, REGISTRATION_PRIVACY_NOTICE, REGISTRATION_PRIVACY_VERSION } from "@/modules/iam/registration";
 
 function getPasswordStrength(password: string): { label: string; color: string; level: number } {
   if (password.length === 0) return { label: "", color: "", level: 0 };
   let score = 0;
-  if (password.length >= 8) score++;
-  if (password.length >= 12) score++;
+  if (password.length >= 10) score++;
+  if (password.length >= 14) score++;
   if (/[A-Z]/.test(password)) score++;
   if (/[0-9]/.test(password)) score++;
   if (/[^A-Za-z0-9]/.test(password)) score++;
@@ -29,7 +31,8 @@ export default function RegisterPage() {
     fullName: "",
     email: "",
     phone: "",
-    roleRequested: "santri",
+    claimedMemberType: "santri",
+    privacyConsent: false,
     teamName: "Sentra Santri",
     notes: "",
     password: "",
@@ -37,6 +40,7 @@ export default function RegisterPage() {
     website: "",
   });
   const [passwordError, setPasswordError] = React.useState("");
+  const [turnstileToken, setTurnstileToken] = React.useState("");
 
   const passwordStrength = getPasswordStrength(formData.password);
 
@@ -46,8 +50,8 @@ export default function RegisterPage() {
     setErrorMessage("");
 
     // Client-side password validation
-    if (formData.password.length < 8) {
-      setPasswordError("Kata sandi minimal 8 karakter.");
+    if (formData.password.length < 10) {
+      setPasswordError("Kata sandi minimal 10 karakter.");
       return;
     }
     if (formData.password !== formData.confirmPassword) {
@@ -55,26 +59,41 @@ export default function RegisterPage() {
       return;
     }
 
+    if (isLoading) return;
+    if (!formData.privacyConsent) {
+      setErrorMessage("Persetujuan kebijakan privasi wajib diberikan sebelum mengajukan akun.");
+      return;
+    }
     setIsLoading(true);
-
-    const res = await submitAccountApplicationAction({
-      fullName: formData.fullName,
-      email: formData.email,
-      phoneNumber: formData.phone,
-      roleRequested: formData.roleRequested,
-      teamRequested: formData.teamName,
-      notes: formData.notes,
-      password: formData.password,
-      website: formData.website,
-    });
-
-    setIsLoading(false);
-    if (res.success) {
-      setSubmitted(true);
-    } else {
-      setErrorMessage(res.message);
+    try {
+      const res = await submitAccountApplicationAction({
+        fullName: formData.fullName,
+        email: formData.email,
+        phoneNumber: formData.phone,
+        claimedMemberType: formData.claimedMemberType,
+        privacyConsent: formData.privacyConsent,
+        privacyConsentVersion: REGISTRATION_PRIVACY_VERSION,
+        teamRequested: formData.teamName,
+        notes: formData.notes,
+        password: formData.password,
+        website: formData.website,
+        turnstileToken,
+      });
+      if (res.success) {
+        setSubmitted(true);
+      } else {
+        setErrorMessage(res.message);
+        // Reset Turnstile token on failure so user must complete challenge again
+        setTurnstileToken("");
+      }
+    } catch {
+      setErrorMessage("Pengajuan belum dapat dikirim. Silakan coba lagi.");
+    } finally {
+      setIsLoading(false);
     }
   };
+
+  const siteKey = process.env.NEXT_PUBLIC_TURNSTILE_SITE_KEY || "";
 
   return (
     <div className="min-h-screen bg-background flex flex-col justify-center items-center px-4 py-8">
@@ -104,12 +123,12 @@ export default function RegisterPage() {
               Pengajuan Akun Pondok OS
             </h2>
             <p className="font-body-sm text-[13px] text-muted-foreground mt-1">
-              Pendaftaran akun santri wajib melalui verifikasi pengurus sebelum dapat digunakan
+              Semua pengajuan akun diverifikasi pengurus. Kategori yang dipilih tidak memberikan hak akses secara otomatis.
             </p>
           </div>
 
           {errorMessage && (
-            <div className="mb-4 p-3 rounded-xl bg-error/15 border border-error/30 text-error text-[13px] flex items-center gap-2">
+            <div role="alert" className="mb-4 p-3 rounded-xl bg-error/15 border border-error/30 text-error text-[13px] flex items-center gap-2">
               <span className="material-symbols-outlined text-[18px]">error</span>
               <span>{errorMessage}</span>
             </div>
@@ -185,7 +204,7 @@ export default function RegisterPage() {
                 <Input
                   label="Kata Sandi"
                   type="password"
-                  placeholder="Minimal 8 karakter"
+                  placeholder="Minimal 10 karakter"
                   value={formData.password}
                   onChange={(e) => {
                     setFormData({ ...formData, password: e.target.value });
@@ -246,25 +265,32 @@ export default function RegisterPage() {
 
               <div className="grid grid-cols-2 gap-3">
                 <div className="space-y-1.5">
-                  <label className="font-label-sm text-label-sm text-on-surface block">
-                    Peran yang Diajukan
+                  <label htmlFor="claimed-member-type" className="font-label-sm text-label-sm text-on-surface block">
+                    Kategori Keanggotaan
                   </label>
                   <select
-                    value={formData.roleRequested}
+                    id="claimed-member-type"
+                    value={formData.claimedMemberType}
                     onChange={(e) =>
-                      setFormData({ ...formData, roleRequested: e.target.value })
+                      setFormData({ ...formData, claimedMemberType: e.target.value })
                     }
+                    aria-describedby="membership-claim-help"
+                    required
                     className="w-full h-11 px-3 rounded-xl bg-surface-container text-on-surface font-body-md text-sm border border-border focus:outline-none focus:ring-2 focus:ring-primary"
                   >
-                    <option value="santri">Santri</option>
+                    {MEMBER_CATEGORIES.map((category) => (
+                      <option key={category.value} value={category.value}>{category.label}</option>
+                    ))}
                   </select>
+                  <p id="membership-claim-help" className="text-xs text-muted-foreground">Sebagai klaim saja; peran dan hak akses ditetapkan admin.</p>
                 </div>
 
                 <div className="space-y-1.5">
-                  <label className="font-label-sm text-label-sm text-on-surface block">
-                    Penempatan Tim / Sentra
+                  <label htmlFor="requested-team" className="font-label-sm text-label-sm text-on-surface block">
+                    Tim / Sentra yang Dituju
                   </label>
                   <input
+                    id="requested-team"
                     type="text"
                     placeholder="Contoh: Tim Media / IT"
                     value={formData.teamName}
@@ -277,10 +303,12 @@ export default function RegisterPage() {
               </div>
 
               <div className="space-y-1.5">
-                <label className="font-label-sm text-label-sm text-on-surface block">
+                <label htmlFor="application-notes" className="font-label-sm text-label-sm text-on-surface block">
                   Catatan Permohonan (Opsional)
                 </label>
                 <textarea
+                  id="application-notes"
+                  maxLength={500}
                   rows={2}
                   placeholder="Alasan pendaftaran atau rekomendasi ustadz..."
                   value={formData.notes}
@@ -290,6 +318,40 @@ export default function RegisterPage() {
                   className="w-full p-3 rounded-xl bg-surface-container text-on-surface font-body-md text-sm border border-border focus:outline-none focus:ring-2 focus:ring-primary"
                 />
               </div>
+
+              <section aria-label="Persetujuan privasi" className="rounded-xl border border-border p-3 space-y-3">
+                <details>
+                  <summary className="cursor-pointer text-sm font-semibold text-primary focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary">
+                    Kebijakan privasi pendaftaran
+                  </summary>
+                  <div id="registration-privacy-notice" className="pt-2 space-y-2 text-xs text-muted-foreground leading-relaxed">
+                    <p>Versi {REGISTRATION_PRIVACY_VERSION}</p>
+                    {REGISTRATION_PRIVACY_NOTICE.map((paragraph) => <p key={paragraph}>{paragraph}</p>)}
+                  </div>
+                </details>
+                <label htmlFor="privacy-consent" className="flex min-h-11 items-start gap-3 py-2 text-sm text-on-surface cursor-pointer">
+                  <input
+                    id="privacy-consent"
+                    type="checkbox"
+                    required
+                    checked={formData.privacyConsent}
+                    onChange={(e) => setFormData({ ...formData, privacyConsent: e.target.checked })}
+                    className="mt-0.5 h-5 w-5 shrink-0 accent-primary focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary"
+                  />
+                  <span>Saya telah membaca dan menyetujui kebijakan privasi pendaftaran versi {REGISTRATION_PRIVACY_VERSION}.</span>
+                </label>
+              </section>
+
+              {/* Turnstile bot-protection widget (SEC-11 + TRC-01) */}
+              {siteKey && (
+                <div className="flex justify-center py-1">
+                  <TurnstileWidget
+                    siteKey={siteKey}
+                    onToken={setTurnstileToken}
+                    onExpire={() => setTurnstileToken("")}
+                  />
+                </div>
+              )}
 
               <Button
                 type="submit"

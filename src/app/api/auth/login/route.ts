@@ -5,20 +5,17 @@ import { enforceRateLimit } from "@/lib/rate-limit";
 function getSafeLoginMessage(message: string) {
   if (
     message.includes("Invalid login credentials") ||
-    message.includes("invalid_grant")
+    message.includes("invalid_grant") ||
+    message.includes("Email not confirmed")
   ) {
     return "Email atau password yang Anda masukkan salah.";
-  }
-
-  if (message.includes("Email not confirmed")) {
-    return "Email Anda belum dikonfirmasi. Silakan periksa inbox email Anda.";
   }
 
   return "Terjadi kesalahan saat masuk ke sistem.";
 }
 
 export async function POST(request: NextRequest) {
-  let payload: { email?: unknown; password?: unknown };
+  let payload: { email?: unknown; password?: unknown; turnstileToken?: unknown };
 
   try {
     payload = await request.json();
@@ -37,6 +34,43 @@ export async function POST(request: NextRequest) {
       { success: false, message: "Email dan kata sandi wajib diisi." },
       { status: 400 },
     );
+  }
+
+  // SEC-11 + TRC-01: Fail-closed Turnstile validation for login.
+  if (!process.env.VITEST) {
+    const turnstileSecret = process.env.TURNSTILE_SECRET_KEY;
+    if (!turnstileSecret) {
+      return NextResponse.json(
+        { success: false, message: "Verifikasi keamanan belum dikonfigurasi. Hubungi administrator sistem." },
+        { status: 503 },
+      );
+    }
+    const turnstileToken = typeof payload.turnstileToken === "string" ? payload.turnstileToken : "";
+    if (!turnstileToken) {
+      return NextResponse.json(
+        { success: false, message: "Verifikasi keamanan wajib diselesaikan." },
+        { status: 400 },
+      );
+    }
+    try {
+      const verification = await fetch("https://challenges.cloudflare.com/turnstile/v0/siteverify", {
+        method: "POST",
+        headers: { "content-type": "application/x-www-form-urlencoded" },
+        body: new URLSearchParams({ secret: turnstileSecret, response: turnstileToken }),
+      });
+      const result = (await verification.json()) as { success?: boolean };
+      if (!verification.ok || !result.success) {
+        return NextResponse.json(
+          { success: false, message: "Verifikasi keamanan gagal. Silakan coba lagi." },
+          { status: 400 },
+        );
+      }
+    } catch {
+      return NextResponse.json(
+        { success: false, message: "Verifikasi keamanan tidak dapat dihubungi. Silakan coba lagi." },
+        { status: 503 },
+      );
+    }
   }
 
   if (!process.env.VITEST) {

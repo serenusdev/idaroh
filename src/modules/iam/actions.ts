@@ -190,16 +190,26 @@ export async function submitAccountApplicationAction(payload: {
 
   try {
     const supabase = createAdminClient();
-    const turnstileSecret = process.env.TURNSTILE_SECRET_KEY;
-    if (turnstileSecret) {
-      if (!payload.turnstileToken) return { success: false, message: "Verifikasi keamanan wajib diselesaikan." };
+    // SEC-11 + TRC-01: Fail-closed Turnstile validation.
+    // If TURNSTILE_SECRET_KEY is not set, reject the request — do NOT bypass.
+    // Operator must set the secret AFTER the widget is deployed to production.
+    if (!process.env.VITEST) {
+      const turnstileSecret = process.env.TURNSTILE_SECRET_KEY;
+      if (!turnstileSecret) {
+        return { success: false, message: "Verifikasi keamanan belum dikonfigurasi. Hubungi administrator sistem." };
+      }
+      if (!payload.turnstileToken) {
+        return { success: false, message: "Verifikasi keamanan wajib diselesaikan." };
+      }
       const verification = await fetch("https://challenges.cloudflare.com/turnstile/v0/siteverify", {
         method: "POST",
         headers: { "content-type": "application/x-www-form-urlencoded" },
         body: new URLSearchParams({ secret: turnstileSecret, response: payload.turnstileToken }),
       });
       const result = (await verification.json()) as { success?: boolean };
-      if (!verification.ok || !result.success) return { success: false, message: "Verifikasi keamanan gagal. Silakan coba lagi." };
+      if (!verification.ok || !result.success) {
+        return { success: false, message: "Verifikasi keamanan gagal. Silakan coba lagi." };
+      }
     }
     if (!process.env.VITEST) {
       const allowed = await enforceRateLimit(
@@ -314,7 +324,7 @@ export async function submitAccountApplicationAction(payload: {
       notes: payload.notes?.trim() || "",
       status: "pending",
       auth_user_id: authUserId,
-      turnstile_verified: Boolean(turnstileSecret ? payload.turnstileToken : true),
+      turnstile_verified: true,
     });
 
     if (error) throw error;
@@ -541,6 +551,20 @@ export async function approveAccountApplicationAction(
         console.error("Account approval saved but push delivery failed:", pushError);
       }
     }
+
+    // TRC-04: Insert email decision notification into outbox (fire-and-forget).
+    try {
+      await supabase.from("email_outbox").insert({
+        recipient: request.email,
+        subject: "Permohonan Akun Pondok OS Anda Telah Disetujui",
+        body_text: `Yth. ${request.full_name},\n\nPermohonan akun Pondok OS Anda telah disetujui dengan peran '${normalizeRole(assignedRole) || assignedRole}'.\n\nSilakan login ke aplikasi untuk mulai menggunakan layanan.\n\nTerima kasih.`,
+        reference_id: applicantId,
+        reference_type: "account_request_approved",
+        status: "pending",
+      });
+    } catch (outboxError) {
+      console.error("Account approved but email outbox insert failed:", outboxError);
+    }
   } catch (err: any) {
     console.error("Failed to approve account in Supabase:", err);
     return {
@@ -584,7 +608,7 @@ export async function rejectAccountApplicationAction(
       })
       .eq("id", applicantId)
       .eq("status", "pending")
-      .select("id");
+      .select("id, email, full_name");
 
     if (error) throw error;
     if (!rejected?.length) return { success: false, message: "Pengajuan tidak ditemukan atau sudah diproses." };
@@ -596,6 +620,21 @@ export async function rejectAccountApplicationAction(
       target_label: `Permohonan ${applicantId}`,
       action_detail: `Penolakan akun. Alasan: ${reason}`,
     });
+
+    // TRC-04: Insert email decision notification into outbox (fire-and-forget).
+    try {
+      const rejectedRecord = rejected[0];
+      await supabase.from("email_outbox").insert({
+        recipient: rejectedRecord.email,
+        subject: "Permohonan Akun Pondok OS Anda Belum Dapat Disetujui",
+        body_text: `Yth. ${rejectedRecord.full_name},\n\nMohon maaf, permohonan akun Pondok OS Anda belum dapat disetujui saat ini.\n\nAlasan: ${reason}\n\nJika ada pertanyaan, silakan hubungi administrator pondok.\n\nTerima kasih.`,
+        reference_id: applicantId,
+        reference_type: "account_request_rejected",
+        status: "pending",
+      });
+    } catch (outboxError) {
+      console.error("Account rejected but email outbox insert failed:", outboxError);
+    }
   } catch (err: any) {
     console.error("Failed to reject account in Supabase:", err);
     return {
@@ -1169,41 +1208,22 @@ export async function adminUpdateUserAction(
       roleRowId = roleRow.id;
     }
 
-    const updatePayload: Record<string, string> = {
-      updated_at: new Date().toISOString(),
-    };
-    if (payload.fullName !== undefined) updatePayload.full_name = payload.fullName.trim();
-    if (payload.phoneNumber !== undefined && payload.phoneNumber.trim()) updatePayload.phone_number = payload.phoneNumber.trim();
-    if (payload.status !== undefined) updatePayload.status = payload.status;
-    if (payload.teamName !== undefined) updatePayload.team_name = payload.teamName.trim();
-    if (payload.memberType !== undefined) updatePayload.member_type = requestedRole;
+    // SEC-01 + FUNC-04 + SEC-05: delegate to atomic RPC that also writes audit_log
+    // and sets session_revoked_at when status becomes 'suspended'.
+    const { data: rpcResult, error: rpcError } = await supabase.rpc("admin_update_user", {
+      p_target_user_id: userId,
+      p_admin_id: adminUser.id,
+      p_full_name: payload.fullName !== undefined ? payload.fullName.trim() : null,
+      p_phone_number: payload.phoneNumber !== undefined && payload.phoneNumber.trim() ? payload.phoneNumber.trim() : null,
+      p_status: payload.status !== undefined ? payload.status : null,
+      p_team_name: payload.teamName !== undefined ? payload.teamName.trim() : null,
+      p_new_role_key: roleRowId ? requestedRole : null,
+      p_old_role_id: roleRowId ?? null,
+    });
 
-    const { error: profileUpdateError } = await supabase
-      .from("profiles")
-      .update(updatePayload)
-      .eq("id", userId);
-
-    if (profileUpdateError) throw profileUpdateError;
-
-    // Apply role update if role was changed
-    if (roleRowId) {
-      const { error: roleRevokeError } = await supabase
-        .from("user_roles")
-        .update({
-          revoked_at: new Date().toISOString(),
-          revoked_by: adminUser.id,
-          reason: "Role diperbarui oleh administrator",
-        })
-        .eq("user_id", userId)
-        .is("revoked_at", null);
-      if (roleRevokeError) throw roleRevokeError;
-
-      const { error: roleInsertError } = await supabase.from("user_roles").insert({
-        user_id: userId,
-        role_id: roleRowId,
-        granted_by: adminUser.id,
-      });
-      if (roleInsertError) throw roleInsertError;
+    if (rpcError) throw rpcError;
+    if (!rpcResult?.success) {
+      return { success: false, message: rpcResult?.message || "Gagal memperbarui profil pengguna." };
     }
 
     return { success: true, message: "Profil pengguna berhasil diperbarui." };
