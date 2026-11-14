@@ -293,7 +293,7 @@ describe("SEC-01 + FUNC-04 + SEC-05 — adminUpdateUserAction", () => {
   });
 
   describe("SEC-05: session_revoked_at on suspend — RPC path", () => {
-    it("passes p_status=suspended to RPC when suspending user", async () => {
+    it("passes p_status=suspended to admin_update_user RPC when suspending user", async () => {
       // We clear VITEST so it goes through the real (mocked) supabase path
       vi.unstubAllEnvs();
       vi.stubEnv("VITEST", "");
@@ -301,11 +301,14 @@ describe("SEC-01 + FUNC-04 + SEC-05 — adminUpdateUserAction", () => {
       mocks.profileData = { id: "user-target", member_type: "santri", status: "active" };
       mocks.requireRole.mockResolvedValue(makeAdminUser("super_admin"));
 
-      const result = await adminUpdateUserAction("user-target", { status: "suspended" });
+      await adminUpdateUserAction("user-target", { status: "suspended" });
 
-      // RPC should have been called (or error from mocked chain)
-      // Either way, the action should not return a validation error
-      expect(result.success === true || result.message !== "Status akun tidak valid").toBe(true);
+      // The admin_update_user RPC must have been invoked
+      expect(mocks.rpcCalls.length).toBeGreaterThan(0);
+      const rpcCall = mocks.rpcCalls.find((c) => c.name === "admin_update_user");
+      expect(rpcCall).toBeDefined();
+      // The RPC must carry p_status='suspended' — this is what triggers session_revoked_at
+      expect(rpcCall!.args.p_status).toBe("suspended");
     });
   });
 });
