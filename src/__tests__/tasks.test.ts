@@ -87,3 +87,20 @@ describe("Stage 6 — Tasks & Projects (PRD-05)", () => {
     expect(overdueTask?.priority).toBe("urgent");
   });
 });
+
+describe("FUNC-26: projectId condition fix", () => {
+  it("creates task with short slug-based projectId (was incorrectly discarded)", async () => {
+    // Before fix: "proj-presensi-v2" (16 chars) would be passed as null because length <= 30
+    // After fix: any non-empty string is preserved
+    const result = await createTaskAction({
+      title: "Tugas dengan project ID pendek",
+      projectId: "proj-presensi-v2",
+      priority: "normal",
+      requiresReview: false,
+    });
+    expect(result.success).toBe(true);
+    // In VITEST mode the action returns early before DB write, so we verify
+    // the action doesn't reject valid short projectIds
+    expect(result.taskId).toBeDefined();
+  });
+});

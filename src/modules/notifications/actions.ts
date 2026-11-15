@@ -4,6 +4,61 @@ import { createAdminClient } from '@/lib/supabase/admin';
 import { createClient } from '@/lib/supabase/server';
 import { requireAuthUser, requireRole } from '@/lib/auth/guards';
 
+export type AttendanceReminderPreferenceResult =
+  | { success: true; enabled: boolean; message: string }
+  | { success: false; message: string };
+
+function preferenceErrorMessage(error: unknown, fallback: string): string {
+  // Preserve actionable auth failures without exposing database/configuration errors.
+  return error instanceof Error && /^(UNAUTHORIZED|FORBIDDEN|UNAVAILABLE):/.test(error.message)
+    ? error.message
+    : fallback;
+}
+
+/** Profile column grants deliberately exclude this private preference. */
+export async function getAttendanceReminderPreferenceAction(): Promise<AttendanceReminderPreferenceResult> {
+  try {
+    const user = await requireAuthUser();
+    const admin = createAdminClient();
+    const { data, error } = await admin
+      .from('profiles')
+      .select('attendance_reminder_enabled')
+      .eq('id', user.id)
+      .maybeSingle();
+    if (error) throw error;
+    if (typeof data?.attendance_reminder_enabled !== 'boolean') {
+      return { success: false, message: 'Preferensi pengingat presensi tidak ditemukan.' };
+    }
+    return { success: true, enabled: data.attendance_reminder_enabled, message: 'Preferensi pengingat presensi dimuat.' };
+  } catch (error) {
+    return { success: false, message: preferenceErrorMessage(error, 'Gagal memuat pengingat presensi. Silakan coba lagi.') };
+  }
+}
+
+export async function updateAttendanceReminderPreferenceAction(enabled: unknown): Promise<AttendanceReminderPreferenceResult> {
+  try {
+    const user = await requireAuthUser();
+    if (typeof enabled !== 'boolean') {
+      return { success: false, message: 'Pilihan pengingat presensi harus berupa boolean.' };
+    }
+    // Authenticate before using service role; never take a user ID or profile payload.
+    const admin = createAdminClient();
+    const { data, error } = await admin
+      .from('profiles')
+      .update({ attendance_reminder_enabled: enabled })
+      .eq('id', user.id)
+      .select('attendance_reminder_enabled')
+      .maybeSingle();
+    if (error) throw error;
+    if (typeof data?.attendance_reminder_enabled !== 'boolean') {
+      return { success: false, message: 'Preferensi pengingat presensi tidak ditemukan.' };
+    }
+    return { success: true, enabled: data.attendance_reminder_enabled, message: 'Pengaturan pengingat presensi disimpan.' };
+  } catch (error) {
+    return { success: false, message: preferenceErrorMessage(error, 'Gagal menyimpan pengingat presensi. Silakan coba lagi.') };
+  }
+}
+
 export interface NotificationItem {
   id: string;
   type: string;

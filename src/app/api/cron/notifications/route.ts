@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { drainNotificationOutbox, sendPushToUsers } from "@/lib/fcm";
+import { drainEmailOutbox } from "@/lib/email-outbox";
 import { getJakartaTime } from "@/lib/auth/guards";
 import { isCronJobDue } from "@/lib/cron-schedule";
 import { timingSafeEqual } from "node:crypto";
@@ -50,6 +51,7 @@ export async function GET(request: Request) {
     // Drain after publication commits, even when no reminder is due or already claimed.
     drainAttempted = true;
     const outboxPush = await drainNotificationOutbox();
+    const outboxEmail = await drainEmailOutbox();
     const { data: expired, error: expiryError } = await admin
       .from("announcements")
       .update({ status: "archived", archived_at: now, updated_at: now })
@@ -76,7 +78,7 @@ export async function GET(request: Request) {
     const { error: snapshotError } = await admin.rpc("refresh_attendance_effective", { p_date: today });
     if (snapshotError) console.error("Attendance effective snapshot failed:", snapshotError);
     if (!sendAttendanceReminder && !sendReportReminder) {
-      return NextResponse.json({ success: true, today, skipped: true, scheduledPublished, expiredArchived, outboxPush });
+      return NextResponse.json({ success: true, today, skipped: true, scheduledPublished, expiredArchived, outboxPush, outboxEmail });
     }
     const jobKeys = [
       ...(sendAttendanceReminder ? [`attendance-reminder:${today}`] : []),
@@ -92,17 +94,22 @@ export async function GET(request: Request) {
       if (claim?.job_key) claimedKeys.push(claim.job_key);
     }
     if (claimedKeys.length === 0) {
-      return NextResponse.json({ success: true, today, skipped: true, reason: "already_processed", scheduledPublished, expiredArchived, outboxPush });
+      return NextResponse.json({ success: true, today, skipped: true, reason: "already_processed", scheduledPublished, expiredArchived, outboxPush, outboxEmail });
     }
     const shouldSendAttendance = claimedKeys.includes(`attendance-reminder:${today}`);
     const shouldSendReport = claimedKeys.includes(`report-reminder:${today}`);
     const { data: santri, error: santriError } = await admin
       .from("profiles")
-      .select("id")
+      .select("id, attendance_reminder_enabled")
       .eq("status", "active")
       .eq("member_type", "santri");
     if (santriError) throw santriError;
     const ids: string[] = (santri || []).map((profile: { id: string }) => profile.id);
+    const attendanceReminderEnabled = new Set<string>(
+      (santri || [])
+        .filter((profile: { attendance_reminder_enabled: boolean }) => profile.attendance_reminder_enabled === true)
+        .map((profile: { id: string }) => profile.id),
+    );
 
     let attendanceTargets: string[];
     if (!snapshotError) {
@@ -141,7 +148,8 @@ export async function GET(request: Request) {
       .gte("date_to", today);
     if (exceptionError) throw exceptionError;
     const excused = new Set((approvedExceptions || []).map((row: { user_id: string }) => row.user_id));
-    const filteredAttendanceTargets = attendanceTargets.filter((id) => !excused.has(id));
+    // Apply after both effective and fallback paths; report eligibility is unchanged.
+    const filteredAttendanceTargets = attendanceTargets.filter((id) => attendanceReminderEnabled.has(id) && !excused.has(id));
     const filteredReportTargets = reportTargets.filter((id) => !excused.has(id));
 
     const attendancePush = shouldSendAttendance
@@ -166,11 +174,13 @@ export async function GET(request: Request) {
     const cutoff = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000).toISOString();
     await admin.from("device_tokens").delete().lt("updated_at", cutoff);
     await admin.from("cron_job_runs").update({ status: "completed", completed_at: new Date().toISOString() }).in("job_key", claimedKeys);
-    return NextResponse.json({ success: true, today, attendancePush, reportPush, scheduledPublished, expiredArchived, outboxPush });
+    return NextResponse.json({ success: true, today, attendancePush, reportPush, scheduledPublished, expiredArchived, outboxPush, outboxEmail });
   } catch (error) {
     if (!drainAttempted) {
       try { await drainNotificationOutbox(); }
       catch { console.error("Notification outbox drain failed"); }
+      try { await drainEmailOutbox(); }
+      catch { console.error("Email outbox drain failed"); }
     }
     console.error("Notification cron failed:", error);
     const message = error instanceof Error ? error.message : "Notification job failed";

@@ -14,8 +14,41 @@ interface MoreSheetProps {
   user: UserProfile;
 }
 
+const FOCUSABLE =
+  'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
+
 export function MoreSheet({ isOpen, onClose, user }: MoreSheetProps) {
   const router = useRouter();
+  const panelRef = React.useRef<HTMLDivElement>(null);
+
+  React.useEffect(() => {
+    if (!isOpen) return;
+    const previous = document.activeElement as HTMLElement | null;
+    const panel = panelRef.current;
+    const focusable = panel?.querySelectorAll<HTMLElement>(FOCUSABLE);
+    (focusable && focusable.length > 0 ? focusable[0] : panel)?.focus();
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        onClose();
+        return;
+      }
+      if (e.key !== "Tab") return;
+      const nodes = panelRef.current?.querySelectorAll<HTMLElement>(FOCUSABLE);
+      if (!nodes || nodes.length === 0) return;
+      const first = nodes[0];
+      const last = nodes[nodes.length - 1];
+      if (e.shiftKey ? document.activeElement === first : document.activeElement === last) {
+        e.preventDefault();
+        (e.shiftKey ? last : first).focus();
+      }
+    };
+    document.addEventListener("keydown", handleKeyDown);
+    return () => {
+      document.removeEventListener("keydown", handleKeyDown);
+      previous?.focus();
+    };
+  }, [isOpen, onClose]);
+
   if (!isOpen) return null;
 
   const handleLogout = async () => {
@@ -40,7 +73,14 @@ export function MoreSheet({ isOpen, onClose, user }: MoreSheetProps) {
       />
 
       {/* Sheet Content */}
-      <div className="relative z-10 w-full bg-card rounded-t-2xl shadow-xl border-t border-border p-5 pb-safe max-h-[85vh] overflow-y-auto animate-in slide-in-from-bottom duration-200">
+      <div
+        ref={panelRef}
+        role="dialog"
+        aria-modal="true"
+        aria-label="Menu lainnya"
+        tabIndex={-1}
+        className="relative z-10 w-full bg-card rounded-t-2xl shadow-xl border-t border-border p-5 pb-safe max-h-[85vh] overflow-y-auto animate-in slide-in-from-bottom duration-200 focus:outline-none"
+      >
         <div className="w-12 h-1.5 bg-muted rounded-full mx-auto mb-4" />
 
         <div className="flex items-center justify-between pb-4 border-b border-border">
@@ -73,6 +113,32 @@ export function MoreSheet({ isOpen, onClose, user }: MoreSheetProps) {
           <p className="font-label-sm text-[11px] uppercase tracking-wider text-muted-foreground px-3 mb-2">
             Modul Operasional
           </p>
+
+          <Link
+            href="/settings/profile"
+            onClick={onClose}
+            className="flex min-h-11 items-center gap-3 px-3 py-2.5 rounded-xl text-on-surface hover:bg-accent/40 active:bg-accent transition-colors"
+          >
+            <span aria-hidden="true" className="material-symbols-outlined text-primary text-[22px]">settings</span>
+            <div className="flex-1">
+              <span className="font-label-md text-label-md block">Pengaturan Profil</span>
+              <span className="font-body-sm text-[11px] text-muted-foreground block">Pengingat presensi dan keamanan akun</span>
+            </div>
+          </Link>
+
+          {!isAdminOrPengurus && (
+            <Link
+              href="/kehadiran"
+              onClick={onClose}
+              className="flex items-center gap-3 px-3 py-2.5 rounded-xl text-on-surface hover:bg-accent/40 active:bg-accent transition-colors"
+            >
+              <span aria-hidden="true" className="material-symbols-outlined text-primary text-[22px]">how_to_reg</span>
+              <div className="flex-1">
+                <span className="font-label-md text-label-md block">Kehadiran</span>
+                <span className="font-body-sm text-[11px] text-muted-foreground block">Check-in dan riwayat presensi</span>
+              </div>
+            </Link>
+          )}
 
           <Link
             href="/tugas"

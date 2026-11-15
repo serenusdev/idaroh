@@ -3,6 +3,7 @@
 import * as React from "react";
 import { LoadingSpinner } from "@/components/ui/loading-spinner";
 import { UnauthorizedState } from "@/components/ui/unauthorized-state";
+import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { useIdentity } from "@/components/auth/identity-context";
 import { useCachedData } from "@/hooks/use-cached-data";
 import { invalidateCache } from "@/lib/data-cache";
@@ -48,6 +49,8 @@ export default function AdminResourcesPage() {
   const [importCsv, setImportCsv] = React.useState("");
   const [importFileName, setImportFileName] = React.useState("resources.csv");
   const [importFeedback, setImportFeedback] = React.useState<string | null>(null);
+  const [archiveTarget, setArchiveTarget] = React.useState<(ResourceAdminInput & { id: string; updatedAt: string }) | null>(null);
+  const [archiving, setArchiving] = React.useState(false);
 
   const loading = listQuery.isLoading || categoriesQuery.isLoading;
   const loadError = listQuery.error ?? categoriesQuery.error;
@@ -68,7 +71,12 @@ export default function AdminResourcesPage() {
   const selectResource = async (resource: ResourceAdminInput & { id: string; updatedAt: string }) => {
     setEditingId(resource.id);
     setForm(resource);
-    setRevisions(await getResourceRevisionsAction(resource.id));
+    try {
+      setRevisions(await getResourceRevisionsAction(resource.id));
+    } catch {
+      setRevisions([]);
+      setNotice("Riwayat revisi belum dapat dimuat.");
+    }
   };
 
   const updateField = <K extends keyof ResourceAdminInput>(key: K, value: ResourceAdminInput[K]) => {
@@ -77,52 +85,79 @@ export default function AdminResourcesPage() {
 
   const save = async (event: React.FormEvent) => {
     event.preventDefault();
+    if (saving) return;
     setSaving(true);
-    const result = await saveResourceAction(editingId, { ...form, tags: form.tags });
-    setNotice(result.message);
-    if (result.success) {
-      const items = await listQuery.refresh();
-      setEditingId(result.id || editingId);
-      if (result.id) {
-        const saved = items?.find((item) => item.id === result.id);
-        if (saved) setForm(saved);
-        setRevisions(await getResourceRevisionsAction(result.id));
+    try {
+      const result = await saveResourceAction(editingId, { ...form, tags: form.tags });
+      setNotice(result.message);
+      if (result.success) {
+        const items = await listQuery.refresh();
+        setEditingId(result.id || editingId);
+        if (result.id) {
+          const saved = items?.find((item) => item.id === result.id);
+          if (saved) setForm(saved);
+          setRevisions(await getResourceRevisionsAction(result.id));
+        }
+        invalidateUserResources();
       }
-      invalidateUserResources();
+    } catch {
+      setNotice("Resource belum dapat disimpan. Silakan coba lagi.");
+    } finally {
+      setSaving(false);
     }
-    setSaving(false);
   };
 
-  const archive = async (resource: ResourceAdminInput & { id: string; updatedAt: string }) => {
-    const result = await setResourceArchiveAction(resource.id, resource.status !== "archived");
-    setNotice(result.message);
-    if (result.success) {
-      await listQuery.refresh();
-      invalidateUserResources();
+  const archive = (resource: ResourceAdminInput & { id: string; updatedAt: string }) => {
+    setArchiveTarget(resource);
+  };
+
+  const confirmArchive = async () => {
+    if (!archiveTarget || archiving) return;
+    setArchiving(true);
+    try {
+      const result = await setResourceArchiveAction(archiveTarget.id, archiveTarget.status !== "archived");
+      setNotice(result.message);
+      if (result.success) {
+        await listQuery.refresh();
+        invalidateUserResources();
+      }
+    } catch {
+      setNotice("Status arsip belum dapat diubah. Silakan coba lagi.");
+    } finally {
+      setArchiving(false);
+      setArchiveTarget(null);
     }
   };
 
   const restoreRevision = async (revision: ResourceRevisionItem) => {
     if (!editingId) return;
-    const result = await restoreResourceRevisionAction(editingId, revision.id);
-    setNotice(result.message);
-    if (result.success) {
-      const items = await listQuery.refresh();
-      const saved = items?.find((item) => item.id === editingId);
-      if (saved) setForm(saved);
-      setRevisions(await getResourceRevisionsAction(editingId));
-      invalidateUserResources();
+    try {
+      const result = await restoreResourceRevisionAction(editingId, revision.id);
+      setNotice(result.message);
+      if (result.success) {
+        const items = await listQuery.refresh();
+        const saved = items?.find((item) => item.id === editingId);
+        if (saved) setForm(saved);
+        setRevisions(await getResourceRevisionsAction(editingId));
+        invalidateUserResources();
+      }
+    } catch {
+      setNotice("Revisi belum dapat dipulihkan. Silakan coba lagi.");
     }
   };
 
   const importCsvResources = async () => {
     setImportFeedback(null);
-    const result = await importResourcesCsvAction(importFileName, importCsv);
-    setImportFeedback(`${result.message}${result.errors.length ? ` ${result.errors.slice(0, 3).join(" ")}` : ""}`);
-    if (result.importedRows > 0) {
-      await listQuery.refresh();
-      setImportCsv("");
-      invalidateUserResources();
+    try {
+      const result = await importResourcesCsvAction(importFileName, importCsv);
+      setImportFeedback(`${result.message}${result.errors.length ? ` ${result.errors.slice(0, 3).join(" ")}` : ""}`);
+      if (result.importedRows > 0) {
+        await listQuery.refresh();
+        setImportCsv("");
+        invalidateUserResources();
+      }
+    } catch {
+      setImportFeedback("Impor CSV belum dapat diproses. Silakan coba lagi.");
     }
   };
 
@@ -179,6 +214,16 @@ export default function AdminResourcesPage() {
           {editingId && revisions.length > 0 && <div className="mt-6 border-t border-border pt-4"><h3 className="text-sm font-semibold">Riwayat revisi</h3><div className="mt-2 space-y-2">{revisions.map((revision) => <div key={revision.id} className="flex items-center justify-between gap-2 text-xs"><span>Revisi {revision.revisionNo} · {new Date(revision.changedAt).toLocaleString("id-ID")}</span><button type="button" onClick={() => void restoreRevision(revision)} className="text-primary hover:underline">Pulihkan</button></div>)}</div></div>}
         </section>
       </div>
+      <ConfirmDialog
+        isOpen={archiveTarget !== null}
+        onClose={() => setArchiveTarget(null)}
+        onConfirm={() => void confirmArchive()}
+        title={archiveTarget?.status === "archived" ? "Jadikan resource ini draft?" : "Arsipkan resource ini?"}
+        description={archiveTarget ? `Resource "${archiveTarget.name}" akan ${archiveTarget.status === "archived" ? "dikembalikan ke draft" : "diarsipkan dan disembunyikan dari pengguna"}. Riwayat revisi tetap tersimpan.` : undefined}
+        confirmLabel={archiveTarget?.status === "archived" ? "Jadikan Draft" : "Arsipkan"}
+        variant="warning"
+        isLoading={archiving}
+      />
     </div>
   );
 }

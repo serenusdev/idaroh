@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { getResourcesAction } from "@/modules/library/actions";
+import { getResourcesAction, getResourceBySlugAction } from "@/modules/library/actions";
 import { INITIAL_RESOURCES, CATEGORIES_DATA } from "@/modules/library/data";
 
 describe("Stage 3 — Resource Library (PRD-02)", () => {
@@ -36,6 +36,18 @@ describe("Stage 3 — Resource Library (PRD-02)", () => {
     expect(nextjsBlueprint).toBeDefined();
     // 5 filled fields out of 6
     expect(nextjsBlueprint?.filledFieldsCount).toBe(5);
+  });
+
+  it("resolves deep-link slug directly without the 100-resource list cap (TRC-27)", async () => {
+    const resource = await getResourceBySlugAction("supabase-db-rls");
+    expect(resource?.slug).toBe("supabase-db-rls");
+    expect(resource?.filledFieldsCount).toBe(6);
+
+    const missing = await getResourceBySlugAction("tidak-ada-slug-ini");
+    expect(missing).toBeNull();
+
+    const invalid = await getResourceBySlugAction("");
+    expect(invalid).toBeNull();
   });
 });
 

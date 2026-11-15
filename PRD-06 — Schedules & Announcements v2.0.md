@@ -1,6 +1,6 @@
 # PRD-06 — Schedules & Announcements
 
-**Versi:** 2.0 · **Prefix:** SCH · **Rilis:** R3 · **Dibaca bersama:** Master PRD v2.0, PRD-01, PRD-07 **Label:** \[TERKONFIRMASI\] · \[REKOMENDASI\] · \[TERBUKA\]
+**Versi:** 2.1 · **Keputusan audit:** 2026-11-13 (§13; NOW/v1.1 mengikat cakupan rilis, bukan klaim implementasi) · **Prefix:** SCH · **Rilis:** R3 · **Dibaca bersama:** Master PRD v2.0, PRD-01, PRD-07 **Label:** \[TERKONFIRMASI\] · \[REKOMENDASI\] · \[TERBUKA\]
 
 ---
 
@@ -53,7 +53,7 @@ Menjadi **satu sumber** untuk jadwal kegiatan dan pengumuman internal, mengganti
 | `announcement_attachments` | `announcement_id, file_id` |  |
 | `calendar_markers` | `date, type (non_operational\|special_activity), name, scope` | Disinkronkan manual dengan PRD-03 |
 
-**Audiens efektif** dihitung di database oleh fungsi `app.user_in_audience(user_id, audience_type, target_id)` yang dipakai RLS dan job notifikasi, agar satu definisi dipakai di semua tempat.
+**[v1.1 — konsolidasi model, UX-23; 2026-11-13] Kontrak asal:** audiens efektif dihitung di database oleh fungsi `app.user_in_audience(user_id, audience_type, target_id)` yang dipakai RLS dan job notifikasi, agar satu definisi dipakai di semua tempat. Ini target konsolidasi, bukan klaim seluruh UI/jalur sudah konsisten; pembatasan audiens server dan RLS tetap NOW (§13).
 
 **Perulangan:** gunakan aturan sederhana (harian/mingguan/bulanan) berbasis format RRULE iCalendar; kemunculan diekspansi **saat kueri** untuk rentang tanggal tertentu, bukan disimpan satu per satu. Pengecualian per kemunculan lewat `event_exceptions`.
 
@@ -71,7 +71,7 @@ Menjadi **satu sumber** untuk jadwal kegiatan dan pengumuman internal, mengganti
 | SCH-004 | Notifikasi perubahan (waktu/lokasi/batal) ke audiens, memuat apa yang berubah | M |
 | SCH-005 | Pengingat acara terkonfigurasi (mis. 1 hari dan 1 jam sebelum) | S |
 | SCH-006 | Acara berulang sederhana + pengecualian kemunculan | S |
-| SCH-007 | Deteksi bentrok jadwal bagi pembuat (peringatan saja, tidak menolak) untuk penyelenggara/lokasi yang sama | C |
+| SCH-007 | **[NOW — keputusan B, 2026-11-13]** Deteksi bentrok jadwal bagi pembuat untuk penyelenggara/lokasi yang sama: **tolak simpan/ubah** bila bentrok. Asal: peringatan saja, tidak menolak; diganti keputusan ini | C |
 | SCH-008 | Penanda hari non-operasional/kegiatan khusus (tautan manual ke ATT) | S |
 | SCH-009 | Ekspor/berlangganan kalender iCal pribadi (tautan token berumur panjang, dapat dicabut) | C |
 | SCH-010 | Pencarian acara dan filter (tim, kategori, rentang tanggal) | S |
@@ -81,15 +81,15 @@ Menjadi **satu sumber** untuk jadwal kegiatan dan pengumuman internal, mengganti
 | ID | Persyaratan | Prioritas |
 | --- | --- | --- |
 | SCH-011 | Buat pengumuman: judul, isi (Markdown ringan), prioritas, audiens, lampiran, kedaluwarsa | M |
-| SCH-012 | Penargetan audiens: semua / peran / tim / individu (kombinasi diperbolehkan) | M |
+| SCH-012 | Penargetan audiens: semua / peran / tim / individu (kombinasi diperbolehkan). **[v1.1 — UX-23]** Konsolidasi model dan UI lengkap; batas scope/kewenangan tetap NOW (§13) | M |
 | SCH-013 | Siklus Draft → Published → Archived; jadwal tayang (*scheduled publish*) opsional | M |
 | SCH-014 | Feed pengumuman di dashboard; pinned dan penting di atas | M |
 | SCH-015 | Penanda sudah dibaca & jumlah pembaca bagi penulis (tanpa mempermalukan; hanya agregat + daftar belum baca bagi yang berwenang) | S |
 | SCH-016 | Revisi pengumuman: perbarui isi memberi penanda "diperbarui" dan opsi kirim ulang notifikasi | S |
 | SCH-017 | Arsip otomatis setelah kedaluwarsa; pencarian arsip | S |
-| SCH-018 | Pratinjau audiens sebelum terbit: jumlah & daftar penerima | S |
+| SCH-018 | **[v1.1 — disetujui 2026-11-13]** Pratinjau audiens sebelum terbit: jumlah & daftar penerima | S |
 | SCH-019 | Pengumuman darurat (`important`): notifikasi lebih menonjol, wajib konfirmasi baca (opsional) | C |
-| SCH-020 | Tautan terbagi (deep link) ke satu pengumuman/acara; membuka hanya bila berhak | S |
+| SCH-020 | **[v1.1 — disetujui 2026-11-13]** Tautan terbagi (deep link) ke satu pengumuman/acara; membuka hanya bila berhak | S |
 
 ---
 
@@ -129,7 +129,7 @@ Menjadi **satu sumber** untuk jadwal kegiatan dan pengumuman internal, mengganti
 
 **Aturan anti-banjir:** perubahan beruntun pada acara yang sama dalam 10 menit digabung menjadi satu notifikasi; acara rutin berulang tidak mengirim notifikasi `created` per kemunculan. Pengguna dapat mematikan kategori notifikasi **non-kritis** (pengingat, acara baru) tetapi tidak dapat mematikan pengumuman `important` dan perubahan waktu acara.
 
-**Kanal:** in-app (R3), Web Push saat PWA aktif; WhatsApp ditunda (OD-010). Penyedia pesan eksternal baru dipertimbangkan setelah ada keputusan biaya dan persetujuan.
+**Kanal:** in-app (R3), Web Push saat PWA aktif; WhatsApp ditunda (OD-010). **[2026-11-13]** FCM diakui sebagai penyedia push yang disetujui (§13); provider baru lainnya tetap memerlukan keputusan biaya dan persetujuan.
 
 ---
 
@@ -145,7 +145,7 @@ Menjadi **satu sumber** untuk jadwal kegiatan dan pengumuman internal, mengganti
 | Detail Pengumuman | Isi, lampiran, penanda diperbarui, statistik baca (berwenang) |
 | Editor Pengumuman | Markdown ringan + pratinjau + audiens + jadwal tayang |
 
-UX: pemilih audiens menampilkan **jumlah penerima** secara langsung agar penulis sadar dampaknya; tampilan agenda adalah default di ponsel; label "Dibatalkan"/"Diperbarui" harus mencolok dan tidak hanya mengandalkan warna.
+UX: **[v1.1 — SCH-018/UX-23]** pemilih audiens menampilkan **jumlah penerima** secara langsung agar penulis sadar dampaknya; tampilan agenda adalah default di ponsel; label "Dibatalkan"/"Diperbarui" harus mencolok dan tidak hanya mengandalkan warna.
 
 ---
 
@@ -209,3 +209,16 @@ UX: pemilih audiens menampilkan **jumlah penerima** secara langsung agar penulis
 ## 12. Metrik Modul
 
 Persentase pengumuman terbaca dalam 24 jam; jumlah acara per periode; persentase acara yang berubah setelah terbit (indikator perencanaan); jumlah pengumuman `important`; rasio notifikasi dibuka (bila Web Push aktif).
+
+---
+
+## 13. Keputusan Audit — 2026-11-13 [TERKONFIRMASI]
+
+Change log 2.1; berlaku bersama Master §0.4 dan meng-override baseline hanya pada item berikut.
+
+- **B / SCH-007 — NOW:** konflik jadwal yang terdeteksi ditolak saat simpan/ubah, bukan peringatan yang dapat diteruskan. Baseline "peringatan saja, tidak menolak" disimpan sebagai asal keputusan, bukan perilaku aktif. Peringatan kalender non-operasional (§8) adalah hal berbeda, tidak otomatis menjadi bentrok.
+- **UX-23 / SCH-012 — v1.1:** konsolidasi model audiens pengumuman dijadwalkan v1.1. Kontrak tunggal `all/role/team/user`, fungsi audiens bersama, dan UI penargetan lengkap tetap target v1.1. Interim mengakui perbedaan model pada jalur jadwal pengguna dan admin, **bukan menyatakan sudah sinkron**. `member_type` adalah kategori keanggotaan, bukan role otorisasi; jangan memetakan klaim kategori menjadi hak akses. Pembatasan audiens di server, larangan koordinator menargetkan di luar tim, dan RLS tetap berlaku NOW; jangan melonggarkan policy untuk mengakomodasi UI.
+- **C — SCH-018 dan SCH-020: v1.1.** Pratinjau jumlah/daftar penerima serta deep link lengkap berikut bagian layar/UX/acceptance terkait ditunda; requirement dan prioritas asal tetap tersimpan.
+- **Integrasi diakui:** FCM/push serta cron-job.org untuk pemicu endpoint notifikasi/publikasi terjadwal; [ADR](docs/ADR-2026-11-13-cron-job-org.md). Presence bukan penanda baca, kehadiran, atau izin audiens. Android wrapper bukan release gate.
+
+Acceptance NOW: bentrok ditolak server; tidak ada akses/pengiriman ke audiens di luar kewenangan; guard tests dan RLS diuji terpisah. Acceptance §9.6 pratinjau audiens berlaku **v1.1**. Pernyataan ini tidak membuktikan provider maupun implementasi telah diuji.

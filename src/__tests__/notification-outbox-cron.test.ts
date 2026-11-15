@@ -15,10 +15,19 @@ let claimed: Set<string>;
 let dueError: Error | null;
 let scheduleRows: { job_key: string; time_wib: string; days_of_week: number[]; enabled: boolean }[];
 let scheduleError: Error | null;
+let snapshotError: Error | null;
+let profilesError: Error | null;
+let profiles: { id: string; attendance_reminder_enabled: boolean; status: string; member_type: string }[];
+let missingAttendance: { user_id: string }[];
+let attendance: { user_id: string }[];
+let reports: { user_id: string }[];
+let exceptions: { user_id: string }[];
+let profileSelects: string[];
 function query(table: string) {
   let operation = "select";
   let id: string | undefined;
   let jobKey = "";
+  const filters: [string, string][] = [];
   const result = () => {
     if (table === "cron_job_schedules") return { data: scheduleRows, error: scheduleError };
     if (table === "announcements") {
@@ -30,16 +39,22 @@ function query(table: string) {
       if (claimed.has(jobKey)) return { data: null, error: { code: "23505" } };
       claimed.add(jobKey); return { data: { job_key: jobKey }, error: null };
     }
-    if (table === "profiles") return { data: [{ id: "user-1" }], error: null };
-    if (table === "attendance_effective") return { data: [{ user_id: "user-1" }], error: null };
+    if (table === "profiles") return {
+      data: profiles.filter(profile => filters.every(([key, value]) => profile[key as keyof typeof profile] === value)),
+      error: profilesError,
+    };
+    if (table === "attendance_effective") return { data: missingAttendance, error: null };
+    if (table === "attendance_records") return { data: attendance, error: null };
+    if (table === "daily_reports") return { data: reports, error: null };
+    if (table === "attendance_exceptions") return { data: exceptions, error: null };
     return { data: [], error: null };
   };
   const chain = {
-    select: () => chain,
+    select: (columns: string) => { if (table === "profiles") profileSelects.push(columns); return chain; },
     update: () => { operation = "update"; return chain; },
     insert: (payload: { job_key: string }) => { operation = "insert"; jobKey = payload.job_key; return chain; },
     delete: () => chain,
-    eq: (key: string, value: string) => { if (key === "id") id = value; return chain; },
+    eq: (key: string, value: string) => { filters.push([key, value]); if (key === "id") id = value; return chain; },
     not: () => chain, lte: () => chain, gte: () => chain, lt: () => chain, in: () => chain,
     maybeSingle: async () => result(),
     then: (resolve: (value: ReturnType<typeof result>) => unknown) => Promise.resolve(result()).then(resolve),
@@ -56,7 +71,10 @@ beforeEach(() => {
     { job_key: "attendance_reminder", time_wib: "07:30", days_of_week: [1, 2, 3, 4, 5, 6], enabled: true },
     { job_key: "report_reminder", time_wib: "21:00", days_of_week: [1, 2, 3, 4, 5, 6], enabled: true },
   ];
-  mocks.admin.mockReturnValue({ from: query, rpc: vi.fn(async () => ({ data: null, error: null })) });
+  snapshotError = null; profilesError = null; profileSelects = [];
+  profiles = [{ id: "user-1", attendance_reminder_enabled: true, status: "active", member_type: "santri" }];
+  missingAttendance = [{ user_id: "user-1" }]; attendance = []; reports = []; exceptions = [];
+  mocks.admin.mockReturnValue({ from: query, rpc: vi.fn(async () => ({ data: null, error: snapshotError })) });
   mocks.jakarta.mockReturnValue({ dateStr: "2026-11-12", hours: 12, minutes: 0 });
   mocks.drain.mockReset(); mocks.send.mockReset();
   mocks.drain.mockImplementation(async () => { events.push("drain"); return { sent: 0, removed: 0, skipped: true }; });
@@ -140,6 +158,49 @@ describe("notification cron outbox integration", () => {
     expect((await GET(request())).status).toBe(500);
     expect(mocks.send).not.toHaveBeenCalled();
     expect(mocks.drain).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(["effective", "fallback"])("OPS-12 filters attendance preferences in the %s path without suppressing reports", async (path) => {
+    snapshotError = path === "fallback" ? new Error("snapshot unavailable") : null;
+    mocks.jakarta.mockReturnValue({ dateStr: "2026-11-12", hours: 7, minutes: 30 });
+    scheduleRows[1].time_wib = "07:30";
+    profiles = ["enabled", "disabled", "checked-in", "submitted", "excused", "inactive", "staff"].map(id => ({
+      id, attendance_reminder_enabled: id !== "disabled", status: id === "inactive" ? "inactive" : "active",
+      member_type: id === "staff" ? "staff" : "santri",
+    }));
+    missingAttendance = profiles.filter(profile => profile.id !== "checked-in").map(profile => ({ user_id: profile.id }));
+    attendance = [{ user_id: "checked-in" }];
+    reports = [{ user_id: "submitted" }];
+    exceptions = [{ user_id: "excused" }];
+    expect((await GET(request())).status).toBe(200);
+    expect(profileSelects).toEqual(["id, attendance_reminder_enabled"]);
+    expect(mocks.send).toHaveBeenCalledTimes(2);
+    expect(mocks.send).toHaveBeenCalledWith(["enabled", "submitted"], expect.objectContaining({ type: "ATTENDANCE_REMINDER" }));
+    expect(mocks.send).toHaveBeenCalledWith(["enabled", "disabled", "checked-in"], expect.objectContaining({ type: "REPORT_DEADLINE_REMINDER" }));
+  });
+
+  it.each(["effective", "fallback"])("OPS-12 sends no attendance recipients when all opted out in the %s path", async (path) => {
+    snapshotError = path === "fallback" ? new Error("snapshot unavailable") : null;
+    mocks.jakarta.mockReturnValue({ dateStr: "2026-11-12", hours: 7, minutes: 30 });
+    scheduleRows[1].time_wib = "07:30";
+    profiles[0].attendance_reminder_enabled = false;
+    expect((await GET(request())).status).toBe(200);
+    expect(mocks.send).toHaveBeenCalledWith([], expect.objectContaining({ type: "ATTENDANCE_REMINDER" }));
+    expect(mocks.send).toHaveBeenCalledWith(["user-1"], expect.objectContaining({ type: "REPORT_DEADLINE_REMINDER" }));
+  });
+
+  it("OPS-12 reports still include opted-out santri when only the report job is due", async () => {
+    mocks.jakarta.mockReturnValue({ dateStr: "2026-11-12", hours: 21, minutes: 0 });
+    profiles[0].attendance_reminder_enabled = false;
+    expect((await GET(request())).status).toBe(200);
+    expect(mocks.send).toHaveBeenCalledExactlyOnceWith(["user-1"], expect.objectContaining({ type: "REPORT_DEADLINE_REMINDER" }));
+  });
+
+  it("OPS-12 fails rather than guessing preferences when the profile query fails", async () => {
+    mocks.jakarta.mockReturnValue({ dateStr: "2026-11-12", hours: 7, minutes: 30 });
+    profilesError = new Error("preference column unavailable");
+    expect((await GET(request())).status).toBe(500);
+    expect(mocks.send).not.toHaveBeenCalled();
   });
 
   it("keeps manual publication delivery trigger-owned, including draft transitions", () => {

@@ -1,0 +1,80 @@
+name: Pondok OS Weekly DB Backup
+
+# Backup logis mingguan untuk Supabase Free plan (tanpa PITR/daily backup berbayar).
+# Alur: supabase db dump (session pooler) -> enkripsi age -> upload Cloudflare R2.
+#
+# Secret wajib (Settings -> Secrets and variables -> Actions):
+#   SUPABASE_DB_URL        connection string SESSION POOLER (bukan direct; runner GH IPv4, direct Supabase IPv6-only)
+#   AGE_RECIPIENT          public key age (age1...); private key disimpan operator offline, tidak di CI
+#   R2_ACCOUNT_ID          Cloudflare account ID
+#   R2_ACCESS_KEY_ID       R2 API token Access Key ID (Object Read & Write)
+#   R2_SECRET_ACCESS_KEY   R2 API token Secret Access Key
+#   R2_BUCKET              nama bucket R2 tujuan
+#
+# Cakupan: skema public (tabel aplikasi + policy RLS). auth.users dan Storage TIDAK ikut;
+# lihat docs/backup-restore.md untuk batasan dan drill restore.
+
+on:
+  schedule:
+    # Minggu 17:00 UTC = Senin 00:00 WIB. Cadence < 7 hari juga menjaga project Free tidak di-pause karena idle.
+    - cron: "0 17 * * 0"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: db-backup
+  cancel-in-progress: false
+
+jobs:
+  backup:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Supabase CLI
+        uses: supabase/setup-cli@v1
+        with:
+          version: 2.122.0
+
+      - name: Dump database
+        env:
+          DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+        run: |
+          if [ -z "$DB_URL" ]; then
+            echo "::error::Secret SUPABASE_DB_URL belum diset (session pooler URL)."
+            exit 1
+          fi
+          supabase db dump --db-url "$DB_URL" -f backup.sql
+
+      - name: Encrypt dump
+        env:
+          AGE_RECIPIENT: ${{ secrets.AGE_RECIPIENT }}
+        run: |
+          if [ -z "$AGE_RECIPIENT" ]; then
+            echo "::error::Secret AGE_RECIPIENT belum diset (public key age)."
+            exit 1
+          fi
+          sudo apt-get update
+          sudo apt-get install -y age
+          age -r "$AGE_RECIPIENT" -o backup.sql.age backup.sql
+          # Hapus plaintext PII segera setelah enkripsi; runner ephemeral, tetapi jangan tinggalkan salinan mentah.
+          shred -u backup.sql
+
+      - name: Upload to Cloudflare R2
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: auto
+          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+          R2_BUCKET: ${{ secrets.R2_BUCKET }}
+        run: |
+          ENDPOINT="https://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com"
+          KEY="backups/$(date -u +%F)-$(date -u +%H%M%S).sql.age"
+          aws s3 cp backup.sql.age "s3://${R2_BUCKET}/${KEY}" --endpoint-url "$ENDPOINT"
+          # Verifikasi objek benar-benar landed (bukti, bukan hanya exit code cp).
+          aws s3api head-object --bucket "$R2_BUCKET" --key "$KEY" --endpoint-url "$ENDPOINT"
+          echo "Backup tersimpan: s3://${R2_BUCKET}/${KEY}"

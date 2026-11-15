@@ -101,7 +101,7 @@ export default function ReviewPage() {
         reportId: selectedReport.id,
         decision,
         notes: feedbackNotes,
-        reviewerName: "Ustadz Ahmad Fauzi",
+        reviewerName: currentUser.full_name,
       });
 
       if (res.success) {
@@ -121,10 +121,10 @@ export default function ReviewPage() {
                     id: `rev-${Date.now()}`,
                     reportId: r.id,
                     revisionNo: r.revisionNo,
-                    reviewerId: "usr-fauzi",
-                    reviewerName: "Ustadz Ahmad Fauzi",
+                    reviewerId: currentUser.id,
+                    reviewerName: currentUser.full_name,
                     decision,
-                    notes: feedbackNotes || (decision === "approved" ? "Disetujui tanpa catatan khusus." : ""),
+                    notes: feedbackNotes,
                     decidedAt: new Date().toISOString(),
                   },
                 ],
@@ -162,14 +162,11 @@ export default function ReviewPage() {
                 verified_user
               </span>
               <p className="font-body-sm text-body-sm text-muted-foreground">
-                Peninjau: Ustadz Ahmad Fauzi • Tim Media &amp; IT
+                Peninjau: {currentUser.full_name}
+                {currentUser.team_name ? ` • ${currentUser.team_name}` : ""}
               </p>
             </div>
           </div>
-          <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-accent text-accent-foreground font-label-sm text-label-sm shadow-xs self-start sm:self-auto">
-            <span className="w-2 h-2 rounded-full bg-primary animate-pulse"></span>
-            Batch #42
-          </span>
         </div>
 
         {/* Operational Philosophy Banner (BR-REP-06) */}
@@ -216,12 +213,28 @@ export default function ReviewPage() {
         </div>
       )}
 
+      {/* Load Error — bedakan gagal muat vs antrean kosong (UX-08) */}
+      {queueQuery.error && (
+        <div
+          role="alert"
+          className="p-4 rounded-xl flex items-center justify-between gap-3 text-sm font-medium bg-error/15 text-error border border-error/30"
+        >
+          <div className="flex items-center gap-2">
+            <span className="material-symbols-outlined text-[20px]">error</span>
+            <span>Antrean review gagal dimuat. Ini bukan berarti antrean kosong.</span>
+          </div>
+          <button type="button" onClick={() => queueQuery.refresh()} className="underline shrink-0">
+            Coba lagi
+          </button>
+        </div>
+      )}
+
       {/* Filter Tabs & Search Bar */}
       <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3">
         {/* Filter Pills (Touch Scrollable) */}
         <section
           aria-label="Status Antrean"
-          className="overflow-x-auto -mx-2 px-2 py-1 flex items-center gap-2 no-scrollbar"
+          className="overflow-x-auto py-1 flex items-center gap-2 no-scrollbar min-w-0"
         >
           <button
             type="button"
@@ -331,7 +344,7 @@ export default function ReviewPage() {
             <span>Urutkan: Terbaru</span>
           </div>
 
-          {filteredReports.length === 0 ? (
+          {filteredReports.length === 0 && !queueQuery.error ? (
             <div className="bg-card rounded-2xl p-8 sm:p-10 text-center border border-dashed border-border shadow-xs flex flex-col items-center justify-center space-y-3">
               <Illustration
                 src={
@@ -379,8 +392,18 @@ export default function ReviewPage() {
                 return (
                   <article
                     key={item.id}
+                    role="button"
+                    tabIndex={0}
+                    aria-pressed={isSelected}
+                    aria-label={`Pilih laporan ${item.authorName}`}
                     onClick={() => setSelectedReportId(item.id)}
-                    className={`bg-card rounded-xl shadow-xs p-4 flex flex-col space-y-3 relative overflow-hidden cursor-pointer transition-all border ${
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" || e.key === " ") {
+                        e.preventDefault();
+                        setSelectedReportId(item.id);
+                      }
+                    }}
+                    className={`bg-card rounded-xl shadow-xs p-4 flex flex-col space-y-3 relative overflow-hidden cursor-pointer transition-all border focus-visible:outline-2 focus-visible:outline-primary ${
                       isSelected
                         ? "border-primary ring-2 ring-primary/20 shadow-md"
                         : "border-border hover:border-primary/50"

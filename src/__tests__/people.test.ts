@@ -60,6 +60,15 @@ describe("Stage 8 — People & Teams (PRD-07)", () => {
     expect(res.message).toContain("berhasil diperbarui");
   });
 
+  it("rejects bio longer than 500 characters and invalid user id (TRC-26)", async () => {
+    const tooLong = await updatePersonalBioAction("usr-salman", "x".repeat(501));
+    expect(tooLong.success).toBe(false);
+    expect(tooLong.message).toContain("500");
+
+    const invalidId = await updatePersonalBioAction("", "bio");
+    expect(invalidId.success).toBe(false);
+  });
+
   it("verifies consistency of people statistics and team hierarchy", () => {
     expect(PEOPLE_STATS.totalActiveMembers).toBe(38);
     expect(PEOPLE_STATS.totalTeams).toBe(4);

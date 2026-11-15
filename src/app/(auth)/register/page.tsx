@@ -232,7 +232,7 @@ export default function RegisterPage() {
                         passwordStrength.level === 1
                           ? "text-error"
                           : passwordStrength.level === 2
-                          ? "text-warning"
+                          ? "text-tertiary"
                           : "text-success"
                       }`}
                     >

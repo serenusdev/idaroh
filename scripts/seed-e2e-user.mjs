@@ -1,3 +1,14 @@
+// OPS-07: this script writes test data using the service-role key. Refuse to
+// run against production and require an explicit acknowledgment so an operator
+// cannot accidentally seed a live project.
+if (process.env.NODE_ENV === "production") {
+  throw new Error("E2E seed must never run with NODE_ENV=production; it writes test data via the service-role key.");
+}
+const seedConfirmed = process.env.E2E_SEED_CONFIRM === "yes" || process.env.npm_lifecycle_event === "e2e:seed";
+if (!seedConfirmed) {
+  throw new Error("E2E seed writes test data into the target Supabase project. Set E2E_SEED_CONFIRM=yes (or run `npm run e2e:seed`) to confirm the target is non-production.");
+}
+
 const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
 const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
 const email = process.env.E2E_EMAIL;

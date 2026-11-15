@@ -12,6 +12,10 @@ export default function AdminAttendanceReviewPage() {
   const queueQuery = useCachedData("admin:attendance-review", getAttendanceReviewQueueAction);
   const queue = queueQuery.data ?? { corrections: [], exceptions: [] };
   const [notice, setNotice] = React.useState<string | null>(null);
+  const [approvingCorrection, setApprovingCorrection] = React.useState<{ id: string; requested: string } | null>(null);
+  const [approvalClassification, setApprovalClassification] = React.useState("on_time");
+  const [approvalNote, setApprovalNote] = React.useState("");
+  const [isDeciding, setIsDeciding] = React.useState(false);
 
   React.useEffect(() => {
     if (queueQuery.error) setNotice(queueQuery.error.message);
@@ -19,16 +23,37 @@ export default function AdminAttendanceReviewPage() {
 
   if (!["super_admin", "yayasan", "pengurus"].includes(user.role)) return <UnauthorizedState requiredRole="Super Admin / Pengurus / Yayasan" />;
 
-  const decide = async (kind: "correction" | "exception", id: string, decision: "approved" | "rejected") => {
-    const note = window.prompt("Catatan reviewer (opsional):", "") || "";
-    const result = kind === "correction"
-      ? await reviewAttendanceCorrectionAction(id, decision, note)
-      : await reviewAttendanceExceptionAction(id, decision, note);
-    setNotice(result.message);
-    if (result.success) {
-      queueQuery.refresh();
-      invalidateCache("attendance:history");
+  const decide = async (kind: "correction" | "exception", id: string, decision: "approved" | "rejected", effectiveClassification?: string, noteOverride?: string) => {
+    let note = noteOverride;
+    if (note === undefined) {
+      const input = window.prompt("Catatan reviewer (opsional):", "");
+      // UX-18: cancelling the prompt must abort the decision, not approve with "".
+      if (input === null) return;
+      note = input;
     }
+    setIsDeciding(true);
+    try {
+      const result = kind === "correction"
+        ? await reviewAttendanceCorrectionAction(id, decision, note, effectiveClassification)
+        : await reviewAttendanceExceptionAction(id, decision, note);
+      setNotice(result.message);
+      if (result.success) {
+        setApprovingCorrection(null);
+        queueQuery.refresh();
+        invalidateCache("attendance:history");
+      }
+    } catch {
+      setNotice("Terjadi kesalahan saat memproses keputusan. Silakan coba lagi.");
+    } finally {
+      setIsDeciding(false);
+    }
+  };
+
+  const startApproval = (item: { id: string; requestedClassification: string }) => {
+    const allowed = ["on_time", "grace", "late", "excused", "sick", "duty"];
+    setApprovingCorrection({ id: item.id, requested: item.requestedClassification });
+    setApprovalClassification(allowed.includes(item.requestedClassification) ? item.requestedClassification : "on_time");
+    setApprovalNote("");
   };
 
   return (
@@ -36,7 +61,7 @@ export default function AdminAttendanceReviewPage() {
       <header>
         <p className="font-mono text-[11px] uppercase tracking-[0.18em] text-primary">ATT-REVIEW · Approval presensi</p>
         <h1 className="text-2xl sm:text-3xl font-bold tracking-tight text-on-surface mt-1">Review koreksi dan izin</h1>
-        <p className="text-sm text-muted-foreground mt-1">Setiap keputusan mengubah data presensi dan tercatat pada audit log secara atomik.</p>
+        <p className="text-sm text-muted-foreground mt-1">Keputusan tercatat pada audit log. Catatan asli tidak diubah; hasil koreksi tampak di lapisan efektif, dan Anda tidak dapat mereview koreksi Anda sendiri.</p>
       </header>
       {notice && <div className="rounded-xl border border-primary/30 bg-accent/30 p-3 text-sm" aria-live="polite">{notice}</div>}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
@@ -46,7 +71,37 @@ export default function AdminAttendanceReviewPage() {
             {queue.corrections.length === 0 ? <p className="p-5 text-sm text-muted-foreground">Tidak ada koreksi yang menunggu.</p> : queue.corrections.map((item) => (
               <div key={item.id} className="p-4 space-y-2">
                 <div><p className="text-sm font-semibold">{item.userName} · {item.attendanceDate}</p><p className="text-xs text-muted-foreground">{item.reason} · Minta: {item.requestedClassification}</p></div>
-                <div className="flex gap-2"><button type="button" onClick={() => decide("correction", item.id, "approved")} className="h-8 px-3 rounded-lg bg-primary text-on-primary text-xs font-semibold">Setujui</button><button type="button" onClick={() => decide("correction", item.id, "rejected")} className="h-8 px-3 rounded-lg border border-error/30 text-error text-xs font-semibold">Tolak</button></div>
+                {approvingCorrection?.id === item.id ? (
+                  <div className="space-y-2 rounded-xl border border-primary/30 bg-accent/20 p-3">
+                    <label className="block text-xs font-semibold" htmlFor={`eff-class-${item.id}`}>Klasifikasi efektif bila disetujui</label>
+                    <select
+                      id={`eff-class-${item.id}`}
+                      value={approvalClassification}
+                      onChange={(event) => setApprovalClassification(event.target.value)}
+                      className="w-full h-9 px-2 rounded-lg bg-card border border-border text-xs"
+                    >
+                      <option value="on_time">Tepat Waktu (on_time)</option>
+                      <option value="grace">Toleransi (grace)</option>
+                      <option value="late">Terlambat (late)</option>
+                      <option value="excused">Izin (excused)</option>
+                      <option value="sick">Sakit (sick)</option>
+                      <option value="duty">Dinas (duty)</option>
+                    </select>
+                    <input
+                      value={approvalNote}
+                      onChange={(event) => setApprovalNote(event.target.value)}
+                      placeholder="Catatan reviewer (opsional)"
+                      aria-label="Catatan reviewer"
+                      className="w-full h-9 px-2 rounded-lg bg-card border border-border text-xs"
+                    />
+                    <div className="flex gap-2">
+                      <button type="button" disabled={isDeciding} onClick={() => { void decide("correction", item.id, "approved", approvalClassification, approvalNote); }} className="h-8 px-3 rounded-lg bg-primary text-on-primary text-xs font-semibold disabled:opacity-50">Konfirmasi Setujui</button>
+                      <button type="button" disabled={isDeciding} onClick={() => setApprovingCorrection(null)} className="h-8 px-3 rounded-lg border border-border text-xs font-semibold">Batal</button>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="flex gap-2"><button type="button" onClick={() => startApproval(item)} className="h-8 px-3 rounded-lg bg-primary text-on-primary text-xs font-semibold">Setujui</button><button type="button" onClick={() => { void decide("correction", item.id, "rejected"); }} className="h-8 px-3 rounded-lg border border-error/30 text-error text-xs font-semibold">Tolak</button></div>
+                )}
               </div>
             ))}
           </div>

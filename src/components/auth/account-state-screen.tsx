@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Illustration } from "@/components/ui/illustration";
 import { createClient } from "@/lib/supabase/client";
 import { cleanupPushNotifications } from "@/lib/notifications";
+import { getAdminContact } from "@/lib/admin-contact";
 import type { AccountStatus } from "@/lib/auth/types";
 
 export type AccountStateScreenProps =
@@ -79,6 +80,8 @@ export function AccountStateScreen(props: AccountStateScreenProps) {
   const [signingOut, setSigningOut] = React.useState(false);
   const [retrying, startRetry] = React.useTransition();
   const { title, description, illustration, retryable } = describe(props);
+  const adminContact = getAdminContact();
+  const showContact = props.kind !== "identity_error";
 
   const [logoutError, setLogoutError] = React.useState<string | null>(null);
   const handleLogout = async () => {
@@ -110,6 +113,39 @@ export function AccountStateScreen(props: AccountStateScreenProps) {
           <p className="font-mono text-[11px] text-muted-foreground/70">Kode pelacakan: {props.traceId}</p>
         )}
       </div>
+      {showContact && (
+        <div className="flex flex-col items-center gap-2 max-w-md rounded-xl border border-border bg-card px-4 py-3">
+          <p className="font-label-sm text-[12px] font-semibold text-on-surface">Butuh bantuan administrator?</p>
+          {adminContact.whatsappUrl || adminContact.email ? (
+            <div className="flex flex-wrap items-center justify-center gap-2">
+              {adminContact.whatsappUrl && (
+                <a
+                  href={adminContact.whatsappUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="inline-flex items-center gap-1.5 h-9 px-3 rounded-lg bg-primary text-on-primary text-[12px] font-semibold"
+                >
+                  <span aria-hidden="true" className="material-symbols-outlined text-[16px]">chat</span>
+                  WhatsApp Admin
+                </a>
+              )}
+              {adminContact.email && (
+                <a
+                  href={`mailto:${adminContact.email}`}
+                  className="inline-flex items-center gap-1.5 h-9 px-3 rounded-lg border border-border text-on-surface text-[12px] font-semibold"
+                >
+                  <span aria-hidden="true" className="material-symbols-outlined text-[16px]">mail</span>
+                  {adminContact.email}
+                </a>
+              )}
+            </div>
+          ) : (
+            <p className="font-body-sm text-[12px] text-muted-foreground">
+              Hubungi administrator pondok melalui pengurus tim Anda untuk bantuan akun.
+            </p>
+          )}
+        </div>
+      )}
       {logoutError && <p role="alert" className="text-sm text-destructive">{logoutError}</p>}
       <div className="flex flex-wrap items-center justify-center gap-3">
         {retryable && (

@@ -2,6 +2,7 @@
 
 import * as React from "react";
 import { Illustration } from "@/components/ui/illustration";
+import { Modal } from "@/components/ui/modal";
 import { CategorySummary, ResourceItem } from "@/modules/library/types";
 import { getResourcesAction, getCategoriesAction, getResourceStatsAction, getFavoriteResourceIdsAction, toggleFavoriteAction } from "@/modules/library/actions";
 import { useIdentity } from "@/components/auth/identity-context";
@@ -213,7 +214,7 @@ export default function ResourceLibraryPage() {
             onClick={() => setOnlyFavorites(!onlyFavorites)}
             className={`h-9 px-2.5 flex items-center gap-1 rounded-lg transition-all text-label-sm font-label-sm ${
               onlyFavorites
-                ? "bg-warning/20 text-warning font-semibold border border-warning/40"
+                ? "bg-warning/20 text-tertiary font-semibold border border-warning/40"
                 : "bg-surface-container text-on-surface-variant hover:text-primary"
             }`}
             type="button"
@@ -378,7 +379,7 @@ export default function ResourceLibraryPage() {
                   </span>
                 )}
                 {onlyFavorites && (
-                  <span className="px-2 py-0.5 rounded-md bg-warning/20 text-warning font-label-sm">
+                  <span className="px-2 py-0.5 rounded-md bg-warning/20 text-tertiary font-label-sm">
                     Favorit
                   </span>
                 )}
@@ -474,8 +475,8 @@ export default function ResourceLibraryPage() {
                       aria-label="Simpan ke Favorit"
                       className={`w-10 h-10 rounded-full flex items-center justify-center bg-surface-container-low transition-all active:scale-90 flex-shrink-0 ${
                         isFav
-                          ? "text-warning bg-warning/15"
-                          : "text-muted-foreground hover:text-warning hover:bg-accent/40"
+                          ? "text-tertiary bg-warning/15"
+                          : "text-muted-foreground hover:text-tertiary hover:bg-accent/40"
                       }`}
                       onClick={() => toggleFavorite(item.id)}
                       type="button"
@@ -492,13 +493,14 @@ export default function ResourceLibraryPage() {
                   {/* Tags */}
                   <div className="flex flex-wrap gap-1.5">
                     {item.tags.map((tag) => (
-                      <span
+                      <button
                         key={tag}
+                        type="button"
                         onClick={() => setSelectedTag(tag)}
-                        className="px-2 py-0.5 rounded-md bg-surface-container-low text-muted-foreground font-mono text-[11px] hover:text-primary hover:bg-accent/40 cursor-pointer transition-colors"
+                        className="px-2 py-0.5 rounded-md bg-surface-container-low text-muted-foreground font-mono text-[11px] hover:text-primary hover:bg-accent/40 cursor-pointer transition-colors focus-visible:outline-2 focus-visible:outline-primary"
                       >
                         #{tag}
-                      </span>
+                      </button>
                     ))}
                   </div>
 
@@ -663,8 +665,7 @@ export default function ResourceLibraryPage() {
 
       {/* DETAIL DOCUMENT MODAL (Desktop Dialog & Mobile Sheet) */}
       {detailModalItem && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm animate-in fade-in duration-200">
-          <div className="bg-card w-full max-w-2xl rounded-2xl border border-border shadow-2xl p-5 sm:p-6 space-y-4 max-h-[90vh] overflow-y-auto">
+        <Modal isOpen onClose={() => setDetailModalItem(null)} title={detailModalItem.name} backdropClassName="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm animate-in fade-in duration-200" className="bg-card w-full max-w-2xl rounded-2xl border border-border shadow-2xl p-5 sm:p-6 space-y-4 max-h-[90vh] overflow-y-auto">
             <div className="flex items-start justify-between pb-3 border-b border-border">
               <div>
                 <span className="px-2 py-0.5 rounded-md bg-accent text-accent-foreground font-mono text-[11px] font-semibold">
@@ -773,8 +774,7 @@ export default function ResourceLibraryPage() {
                 </a>
               )}
             </div>
-          </div>
-        </div>
+        </Modal>
       )}
     </div>
   );

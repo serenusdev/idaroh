@@ -1,6 +1,6 @@
 # PRD-05 — Tasks & Projects
 
-**Versi:** 2.0 · **Prefix:** TSK · **Rilis:** R3 · **Dibaca bersama:** Master PRD v2.0, PRD-01, PRD-07 **Label:** \[TERKONFIRMASI\] · \[REKOMENDASI\] · \[TERBUKA\]
+**Versi:** 2.1 · **Keputusan audit:** 2026-11-13 (§14; NOW/v1.1 mengikat cakupan rilis, bukan klaim implementasi) · **Prefix:** TSK · **Rilis:** R3 · **Dibaca bersama:** Master PRD v2.0, PRD-01, PRD-07 **Label:** \[TERKONFIRMASI\] · \[REKOMENDASI\] · \[TERBUKA\]
 
 ---
 
@@ -100,14 +100,14 @@ Transisi dijaga di database (trigger/RPC `task_transition`), bukan hanya UI. Set
 | TSK-010 | Tampilan papan Kanban (seret-lepas) + tampilan daftar; keduanya dapat difilter | S |
 | TSK-011 | Filter & pencarian: status, prioritas, assignee, tim, proyek, tenggat, label | M |
 | TSK-012 | Komentar pada tugas dengan penyebutan (@nama) memicu notifikasi | S |
-| TSK-013 | Pengingat tenggat otomatis (H-1 dan hari-H) via job | S |
+| TSK-013 | **[v1.1 — disetujui 2026-11-13]** Pengingat tenggat otomatis (H-1 dan hari-H) via job | S |
 | TSK-014 | Checklist dalam tugas | S |
-| TSK-015 | Label tugas | C |
-| TSK-016 | Duplikasi tugas/proyek sebagai template (tanpa assignee/tanggal) | C |
+| TSK-015 | **[v1.1 — disetujui 2026-11-13]** Label tugas | C |
+| TSK-016 | **[v1.1 — disetujui 2026-11-13]** Duplikasi tugas/proyek sebagai template (tanpa assignee/tanggal) | C |
 | TSK-017 | Penugasan ulang massal saat pengguna dinonaktifkan/ganti tim | S |
 | TSK-018 | Ekspor daftar tugas/proyek (CSV) oleh berwenang, beraudit | C |
 | TSK-019 | Tugas lintas tim: satu tugas dapat melibatkan assignee dari tim berbeda bila pembuat berwenang atas keduanya | C |
-| TSK-020 | Pengarsipan tugas selesai otomatis setelah N hari dari tampilan papan (tetap dapat dicari) | C |
+| TSK-020 | **[v1.1 — disetujui 2026-11-13]** Pengarsipan tugas selesai otomatis setelah N hari dari tampilan papan (tetap dapat dicari) | C |
 
 ---
 
@@ -220,3 +220,11 @@ UX: membuat tugas dari ponsel harus selesai dalam satu layar; seret-lepas Kanban
 ## 13. Metrik Modul
 
 Tugas terbuka/selesai per periode; persentase tugas terlambat; waktu median dari To Do ke Done; jumlah tugas tanpa assignee; progres proyek aktif; beban tugas terbuka per pengguna (untuk pemerataan, **bukan** penilaian kinerja).
+
+---
+
+## 14. Keputusan Audit — 2026-11-13 [TERKONFIRMASI]
+
+Change log 2.1: pengguna menyetujui deferral **v1.1** untuk **TSK-013, TSK-015, TSK-016, TSK-020**. Prioritas dan teks asal tetap ada di §5. Pengingat otomatis H-1/hari-H, label, template, dan arsip otomatis beserta model/layar/acceptance turunannya bukan release gate NOW. Bagian tenggat otomatis pada §7 dan §10.7 mengikuti TSK-013 v1.1; notifikasi penugasan/review tidak ikut ditunda.
+
+Scheduler cron-job.org dan FCM diakui di Master §0.4, tetapi keberadaan scheduler tidak berarti job tugas TSK-013 telah diimplementasi. Guard app-layer + tes scope serta RLS defense-in-depth tetap diperlukan; RLS tidak boleh dilonggarkan. Ini keputusan dokumentasi, bukan hasil pengujian.

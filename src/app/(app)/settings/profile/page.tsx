@@ -2,7 +2,16 @@
 
 import * as React from "react";
 import { LoadingSpinner } from "@/components/ui/loading-spinner";
+import { Breadcrumb } from "@/components/ui/breadcrumb";
 import { useIdentity } from "@/components/auth/identity-context";
+import {
+  getAttendanceReminderPreferenceAction,
+  updateAttendanceReminderPreferenceAction,
+} from "@/modules/notifications/actions";
+import {
+  getPersonalBioAction,
+  updatePersonalBioAction,
+} from "@/modules/people/actions";
 import {
   updateProfileAction,
   uploadAvatarAction,
@@ -15,6 +24,170 @@ import {
   type MfaFactorItem,
 } from "@/modules/iam/actions";
 
+function AttendanceReminderSettings() {
+  const [enabled, setEnabled] = React.useState<boolean | null>(null);
+  const [isLoading, setIsLoading] = React.useState(true);
+  const [isSaving, setIsSaving] = React.useState(false);
+  const [retry, setRetry] = React.useState(0);
+  const [message, setMessage] = React.useState<{ type: "success" | "error"; text: string } | null>(null);
+  const saving = React.useRef(false);
+
+  React.useEffect(() => {
+    let active = true;
+    setIsLoading(true);
+    setEnabled(null);
+    setMessage(null);
+    const load = async () => {
+      try {
+        const result = await getAttendanceReminderPreferenceAction();
+        if (!active) return;
+        if (result.success) setEnabled(result.enabled);
+        else setMessage({ type: "error", text: result.message });
+      } catch {
+        if (active) setMessage({ type: "error", text: "Gagal memuat pengingat presensi. Silakan coba lagi." });
+      } finally {
+        if (active) setIsLoading(false);
+      }
+    };
+    void load();
+    return () => { active = false; };
+  }, [retry]);
+
+  const save = async (nextEnabled: boolean) => {
+    if (enabled === null || saving.current) return;
+    saving.current = true;
+    setIsSaving(true);
+    setMessage(null);
+    try {
+      const result = await updateAttendanceReminderPreferenceAction(nextEnabled);
+      if (result.success) setEnabled(result.enabled);
+      setMessage({ type: result.success ? "success" : "error", text: result.message });
+    } catch {
+      setMessage({ type: "error", text: "Gagal menyimpan pengingat presensi. Silakan coba lagi." });
+    } finally {
+      saving.current = false;
+      setIsSaving(false);
+    }
+  };
+
+  return (
+    <section aria-labelledby="attendance-reminder-heading" className="bg-card rounded-2xl border border-border p-5 sm:p-6 shadow-xs space-y-4">
+      <div>
+        <h2 id="attendance-reminder-heading" className="font-label-md text-[15px] font-semibold text-on-surface">Pengingat Presensi</h2>
+        <p id="attendance-reminder-description" className="text-[13px] text-muted-foreground mt-1">
+          Pengingat untuk check-in kehadiran. Pengingat laporan dan notifikasi lainnya tidak berubah.
+        </p>
+      </div>
+      {isLoading ? (
+        <p role="status" className="flex items-center gap-2 text-sm text-muted-foreground"><LoadingSpinner size="sm" /> Memuat pengaturan pengingat presensi...</p>
+      ) : enabled !== null ? (
+        <label className={`flex min-h-11 items-center justify-between gap-4 ${isSaving ? "cursor-wait" : "cursor-pointer"}`}>
+          <span className="text-sm text-on-surface">Aktifkan pengingat presensi</span>
+          <span className="relative inline-flex shrink-0">
+            <input
+              type="checkbox"
+              role="switch"
+              checked={enabled}
+              disabled={isSaving}
+              onChange={(event) => { void save(event.target.checked); }}
+              aria-describedby="attendance-reminder-description"
+              className="peer sr-only"
+            />
+            <span aria-hidden="true" className="h-6 w-11 rounded-full bg-surface-container-high border border-border transition-colors peer-checked:bg-primary peer-focus-visible:ring-2 peer-focus-visible:ring-primary peer-focus-visible:ring-offset-2 peer-disabled:opacity-50" />
+            <span aria-hidden="true" className="absolute left-1 top-1 h-4 w-4 rounded-full bg-on-surface transition-transform peer-checked:translate-x-5 peer-checked:bg-on-primary peer-disabled:opacity-50" />
+          </span>
+        </label>
+      ) : (
+        <button type="button" onClick={() => setRetry((value) => value + 1)} className="h-11 px-4 rounded-xl border border-border text-sm text-on-surface hover:bg-muted">Coba lagi</button>
+      )}
+      {isSaving && <p role="status" className="text-sm text-muted-foreground">Menyimpan pengingat presensi...</p>}
+      {message && <p role={message.type === "error" ? "alert" : "status"} className={`text-sm ${message.type === "success" ? "text-success" : "text-error"}`}>{message.text}</p>}
+    </section>
+  );
+}
+
+function PersonalBioSettings({ userId }: { userId: string }) {
+  const [bio, setBio] = React.useState("");
+  const [savedBio, setSavedBio] = React.useState("");
+  const [isLoading, setIsLoading] = React.useState(true);
+  const [isSaving, setIsSaving] = React.useState(false);
+  const [message, setMessage] = React.useState<{ type: "success" | "error"; text: string } | null>(null);
+
+  React.useEffect(() => {
+    let active = true;
+    setIsLoading(true);
+    getPersonalBioAction()
+      .then((result) => {
+        if (!active) return;
+        if (result.success) {
+          setBio(result.bio);
+          setSavedBio(result.bio);
+        } else {
+          setMessage({ type: "error", text: result.message || "Gagal memuat bio profil." });
+        }
+      })
+      .catch(() => { if (active) setMessage({ type: "error", text: "Gagal memuat bio profil." }); })
+      .finally(() => { if (active) setIsLoading(false); });
+    return () => { active = false; };
+  }, [userId]);
+
+  const save = async () => {
+    if (isSaving) return;
+    setIsSaving(true);
+    setMessage(null);
+    try {
+      const result = await updatePersonalBioAction(userId, bio);
+      setMessage({ type: result.success ? "success" : "error", text: result.message });
+      if (result.success) setSavedBio(bio.trim());
+    } catch {
+      setMessage({ type: "error", text: "Gagal menyimpan bio profil." });
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  return (
+    <section aria-labelledby="personal-bio-heading" className="bg-card rounded-2xl border border-border p-5 sm:p-6 shadow-xs space-y-4">
+      <div>
+        <h2 id="personal-bio-heading" className="font-label-md text-[15px] font-semibold text-on-surface flex items-center gap-2">
+          <span className="material-symbols-outlined text-primary text-[18px]">badge</span>
+          Bio Singkat
+        </h2>
+        <p className="text-[13px] text-muted-foreground mt-1">
+          Bio non-struktural yang tampil di direktori anggota (BR-PPL-10). Maksimal 500 karakter.
+        </p>
+      </div>
+      {isLoading ? (
+        <p role="status" className="flex items-center gap-2 text-sm text-muted-foreground"><LoadingSpinner size="sm" /> Memuat bio...</p>
+      ) : (
+        <>
+          <textarea
+            value={bio}
+            onChange={(event) => setBio(event.target.value)}
+            maxLength={500}
+            rows={3}
+            aria-label="Bio singkat"
+            placeholder="Contoh: Santri backend developer & penggiat open-source."
+            className="w-full p-3 rounded-xl bg-surface-container text-on-surface text-sm border border-border focus:outline-none focus:ring-2 focus:ring-primary"
+          />
+          <div className="flex items-center justify-between gap-3">
+            <span className="text-[11px] text-muted-foreground">{bio.length}/500</span>
+            <button
+              type="button"
+              onClick={() => { void save(); }}
+              disabled={isSaving || bio.trim() === savedBio}
+              className="h-10 px-4 rounded-xl bg-primary text-on-primary text-sm font-semibold disabled:opacity-50"
+            >
+              {isSaving ? "Menyimpan..." : "Simpan Bio"}
+            </button>
+          </div>
+        </>
+      )}
+      {message && <p role={message.type === "error" ? "alert" : "status"} className={`text-sm ${message.type === "success" ? "text-success" : "text-error"}`}>{message.text}</p>}
+    </section>
+  );
+}
+
 export default function ProfileSettingsPage() {
   const { user: currentUser } = useIdentity();
 
@@ -26,6 +199,11 @@ export default function ProfileSettingsPage() {
   const [avatarPreview, setAvatarPreview] = React.useState<string | null>(null);
   const [isSavingProfile, setIsSavingProfile] = React.useState(false);
   const [profileMsg, setProfileMsg] = React.useState<{ type: "success" | "error"; text: string } | null>(null);
+
+  // Track unsaved changes (UX-20)
+  const savedFullName = currentUser.full_name || "";
+  const savedPhone = currentUser.phone_number || "";
+  const hasUnsavedProfileChanges = fullName !== savedFullName || phoneNumber !== savedPhone || !!avatarFile;
 
   // Password form
   const [currentPassword, setCurrentPassword] = React.useState("");
@@ -65,6 +243,18 @@ export default function ProfileSettingsPage() {
     setMfaMsg({ type: result.success ? "success" : "error", text: result.message });
     if (result.success) setMfaFactors(await listMfaFactorsAction());
   };
+
+  // Warn before unload when there are unsaved changes (UX-20)
+  React.useEffect(() => {
+    const handleBeforeUnload = (e: BeforeUnloadEvent) => {
+      if (hasUnsavedProfileChanges) {
+        e.preventDefault();
+        e.returnValue = "";
+      }
+    };
+    window.addEventListener("beforeunload", handleBeforeUnload);
+    return () => window.removeEventListener("beforeunload", handleBeforeUnload);
+  }, [hasUnsavedProfileChanges]);
 
   const handleAvatarChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0] ?? null;
@@ -151,6 +341,15 @@ export default function ProfileSettingsPage() {
 
   return (
     <div className="w-full max-w-2xl mx-auto pb-12 space-y-6">
+      {/* Breadcrumb (UX-17) */}
+      <Breadcrumb
+        items={[
+          { label: "Beranda", href: "/" },
+          { label: "Pengaturan Profil" },
+        ]}
+        className="mb-2"
+      />
+
       {/* Page header */}
       <div>
         <h1 className="font-headline-sm text-[22px] font-bold text-on-surface tracking-tight">
@@ -196,8 +395,9 @@ export default function ProfileSettingsPage() {
 
           {/* Full name */}
           <div className="space-y-1.5">
-            <label className="font-label-sm text-label-sm text-on-surface block">Nama Lengkap</label>
+            <label htmlFor="profile-full-name" className="font-label-sm text-label-sm text-on-surface block">Nama Lengkap</label>
             <input
+              id="profile-full-name"
               type="text"
               value={fullName}
               onChange={(e) => setFullName(e.target.value)}
@@ -208,8 +408,9 @@ export default function ProfileSettingsPage() {
 
           {/* Phone number */}
           <div className="space-y-1.5">
-            <label className="font-label-sm text-label-sm text-on-surface block">Nomor Telepon</label>
+            <label htmlFor="profile-phone" className="font-label-sm text-label-sm text-on-surface block">Nomor Telepon</label>
             <input
+              id="profile-phone"
               type="tel"
               value={phoneNumber}
               onChange={(e) => setPhoneNumber(e.target.value)}
@@ -220,8 +421,9 @@ export default function ProfileSettingsPage() {
 
           {/* Read-only fields */}
           <div className="space-y-1.5">
-            <label className="font-label-sm text-label-sm text-muted-foreground block">Email (tidak dapat diubah)</label>
+            <label htmlFor="profile-email" className="font-label-sm text-label-sm text-muted-foreground block">Email (tidak dapat diubah)</label>
             <input
+              id="profile-email"
               type="email"
               value={currentUser.email}
               readOnly
@@ -245,6 +447,14 @@ export default function ProfileSettingsPage() {
             </div>
           )}
 
+          {/* Unsaved changes indicator (UX-20) */}
+          {hasUnsavedProfileChanges && (
+            <div className="flex items-center gap-2 text-xs text-tertiary bg-tertiary/10 border border-tertiary/20 rounded-lg px-3 py-2">
+              <span className="material-symbols-outlined text-[15px]">edit</span>
+              <span>Ada perubahan yang belum disimpan</span>
+            </div>
+          )}
+
           <button
             type="submit"
             disabled={isSavingProfile}
@@ -265,6 +475,10 @@ export default function ProfileSettingsPage() {
         </form>
       </div>
 
+      {/* Keyed by the resolved identity so another account never sees stale preferences. */}
+      <PersonalBioSettings key={`bio-${currentUser.id}`} userId={currentUser.id} />
+      <AttendanceReminderSettings key={currentUser.id} />
+
       {/* Password Change */}
       <div className="bg-card rounded-2xl border border-border p-5 sm:p-6 shadow-xs space-y-5">
         <h2 className="font-label-md text-[15px] font-semibold text-on-surface flex items-center gap-2">
@@ -274,8 +488,9 @@ export default function ProfileSettingsPage() {
 
         <form onSubmit={handleChangePassword} className="space-y-4">
           <div className="space-y-1.5">
-            <label className="font-label-sm text-label-sm text-on-surface block">Kata Sandi Lama</label>
+            <label htmlFor="profile-current-password" className="font-label-sm text-label-sm text-on-surface block">Kata Sandi Lama</label>
             <input
+              id="profile-current-password"
               type="password"
               value={currentPassword}
               onChange={(e) => setCurrentPassword(e.target.value)}
@@ -287,8 +502,9 @@ export default function ProfileSettingsPage() {
           </div>
 
           <div className="space-y-1.5">
-            <label className="font-label-sm text-label-sm text-on-surface block">Kata Sandi Baru</label>
+            <label htmlFor="profile-new-password" className="font-label-sm text-label-sm text-on-surface block">Kata Sandi Baru</label>
             <input
+              id="profile-new-password"
               type="password"
               value={newPassword}
               onChange={(e) => setNewPassword(e.target.value)}
@@ -299,8 +515,9 @@ export default function ProfileSettingsPage() {
           </div>
 
           <div className="space-y-1.5">
-            <label className="font-label-sm text-label-sm text-on-surface block">Konfirmasi Kata Sandi</label>
+            <label htmlFor="profile-confirm-password" className="font-label-sm text-label-sm text-on-surface block">Konfirmasi Kata Sandi</label>
             <input
+              id="profile-confirm-password"
               type="password"
               value={confirmPassword}
               onChange={(e) => setConfirmPassword(e.target.value)}

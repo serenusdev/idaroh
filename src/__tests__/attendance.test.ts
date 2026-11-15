@@ -4,6 +4,7 @@ import {
   submitCorrectionAction,
   submitExceptionAction,
 } from "@/modules/attendance/actions";
+import { resolveCorrectionClassification } from "@/modules/attendance/classification";
 import {
   WEEK_ATTENDANCE_STRIP,
   ATTENDANCE_HISTORY,
@@ -72,5 +73,19 @@ describe("Stage 4 — Attendance Module (PRD-03)", () => {
     expect(ATTENDANCE_HISTORY.length).toBeGreaterThanOrEqual(3);
     const excuseItem = ATTENDANCE_HISTORY.find((item) => item.classification === "excused");
     expect(excuseItem?.canCorrect).toBe(false);
+  });
+
+  it("derives requested classification from reason and recomputes against policy (FUNC-12)", () => {
+    expect(resolveCorrectionClassification("missed_checkin", "", "08:00", "08:15")).toEqual({ classification: "on_time" });
+    expect(resolveCorrectionClassification("system_error", "", "08:00", "08:15")).toEqual({ classification: "on_time" });
+    expect(resolveCorrectionClassification("other", "", "08:00", "08:15")).toEqual({ classification: "excused" });
+
+    expect(resolveCorrectionClassification("wrong_time", "07:50 WIB", "08:00", "08:15")).toEqual({ classification: "on_time" });
+    expect(resolveCorrectionClassification("wrong_time", "08:08 WIB", "08:00", "08:15")).toEqual({ classification: "grace" });
+    expect(resolveCorrectionClassification("wrong_time", "08:30 WIB", "08:00", "08:15")).toEqual({ classification: "late" });
+    expect(resolveCorrectionClassification("wrong_time", "08:08 WIB", "07:30", "07:45")).toEqual({ classification: "late" });
+
+    expect(resolveCorrectionClassification("wrong_time", "", "08:00", "08:15")).toHaveProperty("error");
+    expect(resolveCorrectionClassification("unknown_category", "08:00", "08:00", "08:15")).toHaveProperty("error");
   });
 });

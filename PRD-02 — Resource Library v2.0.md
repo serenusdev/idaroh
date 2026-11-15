@@ -1,6 +1,6 @@
 # PRD-02 — Resource Library
 
-**Versi:** 2.0 · **Prefix:** LIB · **Rilis:** R1 · **Dibaca bersama:** Master PRD v2.0, PRD-01 **Label:** \[TERKONFIRMASI\] · \[REKOMENDASI\] · \[TERBUKA\]
+**Versi:** 2.1 · **Keputusan audit:** 2026-11-13 (§16; NOW/v1.1 mengikat cakupan rilis, bukan klaim implementasi) · **Prefix:** LIB · **Rilis:** R1 · **Dibaca bersama:** Master PRD v2.0, PRD-01 **Label:** \[TERKONFIRMASI\] · \[REKOMENDASI\] · \[TERBUKA\]
 
 ---
 
@@ -72,15 +72,15 @@ BR-LIB-07 menjawab kemungkinan ada resource yang tidak pantas dibaca semua santr
 | LIB-006 | Favorit pribadi + daftar "Favorit saya" | S |
 | LIB-007 | Kelola kategori dan tag terpusat; gabung (merge) tag duplikat; ganti nama tanpa memutus relasi | M |
 | LIB-008 | Impor awal dari Everything Library (§7) dengan pratinjau, validasi, laporan kesalahan | M |
-| LIB-009 | Ekspor resource (CSV/JSON) oleh pengguna berwenang, beraudit | S |
+| LIB-009 | **[v1.1 — disetujui 2026-11-13]** Ekspor resource (CSV/JSON) oleh pengguna berwenang, beraudit | S |
 | LIB-010 | Riwayat perubahan per resource: daftar revisi, perbandingan (diff) sederhana, pemulihan revisi lama | S |
 | LIB-011 | Filter: kategori, tag, status dokumentasi, visibilitas (admin), terakhir diperbarui | M |
 | LIB-012 | Visibilitas `restricted` per peran/tim | S |
-| LIB-013 | Penanda "perlu ditinjau ulang" jika `updated_at` melewati ambang (default 180 hari) | C |
-| LIB-014 | Lampiran file pada resource (PDF/gambar) via Storage terproteksi | C |
+| LIB-013 | **[v1.1 — disetujui 2026-11-13]** Penanda "perlu ditinjau ulang" jika `updated_at` melewati ambang (default 180 hari) | C |
+| LIB-014 | **[v1.1 — disetujui 2026-11-13]** Lampiran file pada resource (PDF/gambar) via Storage terproteksi | C |
 | LIB-015 | Salin tautan resmi / bagikan tautan internal (butuh login) | S |
-| LIB-016 | Pelaporan masalah pada resource ("tautan rusak / info usang") ke pengelola | C |
-| LIB-017 | Pemeriksaan URL manual (tombol "cek tautan" oleh admin) | W |
+| LIB-016 | **[v1.1 — disetujui 2026-11-13]** Pelaporan masalah pada resource ("tautan rusak / info usang") ke pengelola | C |
+| LIB-017 | **[v1.1 — disetujui 2026-11-13; asal W untuk rilis awal]** Pemeriksaan URL manual (tombol "cek tautan" oleh admin) | W (NOW) |
 
 Catatan LIB-017: verifikasi URL otomatis berada di luar scope R1 (Master/PRD awal). Jika nanti dibutuhkan, rancang sebagai job terjadwal terpisah.
 
@@ -247,3 +247,11 @@ Notifikasi opsional (C): pengelola diberi tahu saat ada laporan masalah (LIB-016
 ## 15. Metrik Modul
 
 Pencarian per hari; persentase pencarian tanpa hasil (indikator celah konten); kelengkapan dokumentasi rata-rata (bidang terisi/6); jumlah resource dengan status dokumentasi belum lengkap; resource tidak diperbarui > 180 hari; jumlah favorit per pengguna.
+
+---
+
+## 16. Keputusan Audit — 2026-11-13 [TERKONFIRMASI]
+
+Change log 2.1: pengguna menyetujui deferral **v1.1** untuk **LIB-009, LIB-013, LIB-014, LIB-016, LIB-017**. Requirement dan prioritas asal tetap tersimpan pada §4; LIB-017 tetap W untuk NOW, dengan pemeriksaan manual menjadi target v1.1. Verifikasi URL otomatis tidak menjadi scope baru. Model, notifikasi, dan acceptance terkait item tersebut berlaku pada v1.1; penundaan bukan klaim fitur sudah tersedia.
+
+Requirement lain tidak otomatis ditunda. Sesuai Master §0.4, otorisasi request dilakukan di app-layer dengan guard tests, RLS tetap defense-in-depth dan tidak boleh dilonggarkan; validasi server manual diterima tanpa mewajibkan Zod. Tidak ada tes atau perubahan kode dalam revisi dokumentasi ini.

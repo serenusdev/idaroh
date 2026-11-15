@@ -1,6 +1,6 @@
 # Pondok OS — Master PRD
 
-**Versi:** 2.0 (Production-Ready Draft) · **Tanggal:** 31 Oktober 2026 · **Menggantikan:** PRD Suite v1.0 **Organisasi:** Yayasan Pondok Quran Digitalpreneur Abdurrahman bin Auf Cirebon **Bahasa produk:** Indonesia · **Zona waktu:** Asia/Jakarta (WIB)
+**Versi:** 2.1 (Production-Ready Draft; bukan sertifikasi siap rilis) · **Tanggal:** 2026-11-13 (baseline 31 Oktober 2026) · **Menggantikan:** PRD Suite v1.0 **Organisasi:** Yayasan Pondok Quran Digitalpreneur Abdurrahman bin Auf Cirebon **Bahasa produk:** Indonesia · **Zona waktu:** Asia/Jakarta (WIB)
 
 ---
 
@@ -37,6 +37,44 @@ Setiap aturan di seluruh PRD diberi label supaya tidak ada yang tertukar antara 
 - **MoSCoW:** **M** = Must (wajib rilis modul), **S** = Should, **C** = Could, **W** = Won't (sekarang).
 - ID requirement: `PREFIX-NNN` (IAM-001, ATT-003, dst). ID tidak dipakai ulang. Requirement yang dibatalkan ditandai *Dibatalkan*, bukan dihapus.
 - ID keputusan terbuka: `OD-NNN`. ID aturan bisnis: `BR-<PREFIX>-NN`.
+
+### 0.4 Keputusan Audit Disetujui — 2026-11-13
+
+**[TERKONFIRMASI oleh pengguna]** NOW = wajib ditangani untuk rilis awal yang diaudit; **v1.1 = rilis produk lanjutan**, bukan versi dokumen (dokumen ini 2.1). Keputusan bertanggal ini dan catatan keputusan modul meng-override baseline R0–R4 hanya untuk item yang disebut. Requirement asal, prioritas MoSCoW, model target, dan acceptance terkait tetap disimpan; label v1.1 berarti ditunda secara eksplisit, **bukan selesai atau dihapus**. Item lain tidak otomatis ditunda. Perubahan ini hanya dokumentasi; tidak membuktikan deployment, guard, MFA, scheduler, atau tes telah berhasil.
+
+| Keputusan | Cakupan yang disetujui |
+| --- | --- |
+| TRC-05 / REP-012 | **M NOW:** riwayat laporan pribadi berupa daftar sederhana; tanggal, status pengumpulan/review terpisah, akses detail milik sendiri. Bukan hanya laporan hari ini. |
+| OPS-12 / ATT-013 | **M NOW:** satu toggle opt-out pengingat absensi per pengguna, dipersistenkan dan dihormati pengiriman in-app/push. Prioritas asal ATT-013 adalah S; keputusan ini menaikkannya menjadi M. Bukan pusat preferensi lengkap. |
+| TRC-10 / IAM-012 | Enforcement MFA saat login **v1.1**. **Release gate NOW:** seluruh Super Admin yang sudah ada wajib mengaktifkan dan memverifikasi TOTP secara manual; operator mencatat bukti tanpa secret/recovery code. Ini kontrol operasional, bukan klaim aplikasi memaksa MFA/AAL2. |
+| TRC-28 / FUNC-16 | Otorisasi NOW di app-layer (identitas server, akun aktif, role, scope, guard tests), dengan RLS sebagai defense-in-depth; **RLS tidak boleh dinonaktifkan atau dilonggarkan**. Perubahan peran memakai server action + guard; RPC atomik beraudit tetap **target v1.1**, belum dinyatakan sudah diperbaiki. |
+| TRC-29 / OD-010 | FCM, presence/heartbeat, dan scheduler eksternal **cron-job.org** diakui sebagai bagian sistem. Android/Capacitor wrapper diakui keberadaannya tetapi **dikecualikan dari release gate**; tidak menjadikan native app wajib rilis. Presence bukan bukti absensi. |
+| TRC-30 / ADM-001 | Rilis awal cukup **dua view**: santri/pribadi dan admin gabungan, tetap ber-scope. Dashboard khusus koordinator (tim) serta pemisahan view Yayasan/Super Admin disimpan sebagai **v1.1**. |
+| TRC-25 / PPL-002 | CRUD tim melalui aplikasi **v1.1**, termasuk penundaan Must asal yang disetujui. Interim: operator mengelola lewat [prosedur SQL tim](docs/operator-team-sql.md), transaksi beraudit, tanpa hapus. |
+| UX-23 / SCH-012 | Konsolidasi model audiens **v1.1**; target semua/peran/tim/individu tetap dipertahankan. Tidak boleh memperluas akses atau menyamakan kategori anggota dengan role otorisasi. |
+| REG-01 / REG-03 / IAM-017 | **NOW:** lima kategori klaim keanggotaan: Santri, Ustadz, Pengurus, Yayasan, Lainnya; bukan role auth dan tidak memberi hak akses. Checkbox privasi + versi dan waktu server persetujuan disimpan; IAM-017 (termasuk persetujuan ulang saat versi berubah) bukan deferral. |
+| B: REG-05 / REG-07 | **NOW:** nomor HP wajib dan terlindungi; validasi manual di server diterima, **Zod tidak diwajibkan**. Baseline HP opsional dan Zod wajib dicatat sebagai aturan asal, bukan kontrak aktif. |
+| B: TRC-09 / OD-016 | **NOW:** pembuatan/pengiriman awal laporan tanggal lampau (backfill) diblokir. Terlambat setelah 21.00 pada hari yang sama tetap diterima; revisi laporan yang sudah terkirim mengikuti REP-009. Kontrak asal backfill 7 hari/izin pengurus disimpan sebagai **v1.1**. |
+| B: TRC-12 / OD-004 | Reviewer koreksi absensi **pengurus+** (pengurus, yayasan, super_admin) yang berwenang; koordinator saja tidak cukup. Tetap larang review diri sendiri dan wajib audit. |
+| B: SCH-007 | Bentrok jadwal yang terdeteksi **ditolak**, bukan hanya peringatan. |
+| B: PPL-008 | Direktori koordinator terbatas anggota **tim yang dipimpinnya**, bukan seluruh organisasi; pembatasan juga di server, termasuk pencarian/detail. |
+
+**C — daftar deferral v1.1 yang disetujui (prioritas asal tetap ada pada baris modul):**
+
+| Modul | Requirement v1.1 |
+| --- | --- |
+| IAM | IAM-018; **IAM-017 tetap NOW** |
+| ATT | **ATT-011 (M: penundaan eksplisit disetujui)**, ATT-015 (S), ATT-017, ATT-018 |
+| REP | REP-006, REP-015, REP-016, REP-017, REP-018, REP-019, REP-020 |
+| LIB | LIB-009, LIB-013, LIB-014, LIB-016, LIB-017 (asal W untuk rilis awal) |
+| TSK | TSK-013, TSK-015, TSK-016, TSK-020 |
+| SCH | SCH-018, SCH-020 |
+| PPL | PPL-010, PPL-012, PPL-014, PPL-016 |
+| ADM | ADM-005, ADM-013, ADM-017 |
+
+ATT-011 benar-benar **M** pada baseline root PRD-03 baris 126; ATT-015 **S** pada baris 130. Antrean hari tertutup (ATT-011) dikeluarkan dari release gate dengan persetujuan eksplisit ini; status `no_checkin` tetap bukan alpa otomatis. Keberadaan snapshot/presence tidak memenuhi antrean atau layar live tersebut.
+
+Rincian scheduler dan batas bukti operasi: [ADR cron-job.org](docs/ADR-2026-11-13-cron-job-org.md). Kriteria rilis tetap membutuhkan bukti terpisah; tidak ada SQL, tes, atau perubahan provider yang dijalankan oleh pembaruan dokumentasi ini.
 
 ---
 
@@ -88,11 +126,11 @@ Detail lengkap, permission, dan state akun ada di **PRD-01**.
 
 ### 4.1 In Scope
 
-Autentikasi & persetujuan akun; RBAC; dashboard; Resource Library (migrasi Everything Library); absensi; laporan aktivitas harian; tugas & proyek; jadwal & pengumuman; orang & tim; analitik & administrasi; audit log; notifikasi in-app.
+Autentikasi & persetujuan akun; RBAC; dashboard; Resource Library (migrasi Everything Library); absensi; laporan aktivitas harian; tugas & proyek; jadwal & pengumuman; orang & tim; analitik & administrasi; audit log; notifikasi in-app. **[2026-11-13]** FCM (termasuk dukungan native), presence/heartbeat, dan scheduler eksternal cron-job.org diakui; cakupan release gate mengikuti §0.4.
 
 ### 4.2 Out of Scope (rilis awal)
 
-Website publik/profil; registrasi publik bebas; akuntansi/keuangan; payroll; LMS penuh; ujian online; aplikasi native iOS/Android; perangkat biometrik; GPS wajib; pengenalan wajah; penilaian kinerja berbasis AI; integrasi eksternal yang belum disetujui.
+Website publik/profil; registrasi publik bebas; akuntansi/keuangan; payroll; LMS penuh; ujian online; aplikasi native iOS/Android sebagai produk wajib rilis; perangkat biometrik; GPS wajib; pengenalan wajah; penilaian kinerja berbasis AI; integrasi eksternal yang belum disetujui. **[2026-11-13]** Baseline mengecualikan native iOS/Android; Android/Capacitor wrapper yang sudah ada kini diakui, tetapi **di luar release gate**. FCM dan cron-job.org adalah integrasi yang disetujui, bukan scope drift yang harus dicabut.
 
 ### 4.3 Catatan tentang "Registrasi"
 
@@ -136,19 +174,19 @@ Semua OD dikumpulkan di sini. Kolom *Default sementara* adalah yang dipakai deve
 | OD-001 | Apakah pengurus/anggota yayasan wajib laporan harian | Tidak wajib; kewajiban ditentukan flag `report_required` per profil | REP |
 | OD-002 | Status final yang tidak check-in setelah 08.15 | Tampil "Belum Check-in" (unrecorded); **tidak** otomatis "Alpa"; butuh peninjauan | ATT |
 | OD-003 | Laporan boleh diedit setelah kirim sebelum review | Boleh, selama belum berstatus `approved`; tiap edit disimpan sebagai revisi | REP |
-| OD-004 | Siapa menyetujui koreksi absensi | Pengurus yang ditugaskan; level persetujuan konfigurable (1 level) | ATT |
+| OD-004 | Siapa menyetujui koreksi absensi | **Diputuskan 2026-11-13: pengurus+ berwenang; koordinator saja ditolak.** Asal: pengurus ditugaskan; level konfigurable (1 level) | ATT |
 | OD-005 | Delegasi review | Tidak ada delegasi; penugasan ulang oleh admin | REP |
 | OD-006 | Retensi data | Tidak ada penghapusan otomatis sampai diputuskan; arsip logis | Semua |
 | OD-007 | Pengecualian pelaporan saat izin/cuti | Hari dengan status izin/sakit disetujui = tidak wajib lapor | REP/ATT |
 | OD-008 | Hierarki peran final & matriks permission | Matriks default di PRD-01 | IAM |
 | OD-009 | Metode verifikasi akun / identitas login | Email + persetujuan admin; fallback akun dibuatkan admin | IAM |
-| OD-010 | Kanal notifikasi | In-app dulu; Web Push (PWA) berikutnya; WhatsApp ditunda | Semua |
+| OD-010 | Kanal notifikasi | **2026-11-13: in-app dan FCM/push diakui; Android wrapper bukan release gate.** Asal: in-app lalu Web Push; WhatsApp tetap ditunda | Semua |
 | OD-011 | Kategori laporan tetap atau configurable | Configurable (tabel), isi awal dari usulan | REP |
 | OD-012 | Pengecualian absensi untuk kegiatan khusus | Kalender non-operasional/pengecualian per tanggal | ATT |
 | OD-013 | Batas detik klasifikasi absensi | Dipotong ke menit (5.2) | ATT |
 | OD-014 | Posisi "Ustadz" dalam model peran | Atribut `member_type` + peran Pengurus dengan kapabilitas reviewer | IAM/PPL |
 | OD-015 | Jendela buka check-in (paling awal) & batas akhir check-in terlambat | Buka 04.00, tutup 23.59; configurable | ATT |
-| OD-016 | Batas mundur pengiriman laporan tanggal lampau | 7 hari; configurable | REP |
+| OD-016 | Batas mundur pengiriman laporan tanggal lampau | **NOW (2026-11-13): backfill diblokir. v1.1 (kontrak asal): 7 hari configurable**, izin pengurus di luar batas | REP |
 | OD-017 | Satu laporan/hari berisi banyak item aktivitas atau satu aktivitas saja | Satu laporan/hari, 1–N item | REP |
 | OD-018 | Pengguna di bawah 18 tahun (anak) & persetujuan data pribadi | Wajib dikonsultasikan; minimalkan data | Semua |
 | OD-019 | Jumlah pengguna dan puncak beban | Asumsi 50–500 pengguna | Teknis |
@@ -172,13 +210,13 @@ Stack awal (Next.js + TypeScript, Tailwind + shadcn/ui, Supabase, Vercel, GitHub
 | Auth | **Supabase Auth** (email+password; TOTP MFA untuk peran tinggi) | Sudah terintegrasi dengan RLS |
 | Storage | **Supabase Storage** (bucket privat + signed URL + policy) | Satu sistem otorisasi |
 | Hosting | **Vercel** | Deploy sederhana; lihat catatan paket 7.4 |
-| Validasi | **Zod** (skema dipakai ulang di form & server) | Satu sumber kebenaran validasi |
+| Validasi | **Server-side wajib; manual diterima, Zod opsional** (2026-11-13) | Asal: Zod bersama form/server; keputusan B menghapus kewajiban library, bukan validasi |
 | Form | **React Hook Form** + resolver Zod | Form ringan, mobile friendly |
 | Data klien | Server Components default; **TanStack Query** hanya untuk interaksi interaktif (mis. kanban, polling notifikasi) | Hindari kompleksitas state |
 | Tanggal/zona | **date-fns** + timezone helper; semua kalkulasi kebijakan di **DB** | Menghindari bug zona waktu di klien |
 | Migrasi | **Supabase CLI** (SQL migration di repo) + `supabase gen types` | Skema terversi, reproducible |
 | Tes | **Vitest** (unit), **Playwright** (E2E), **pgTAP** (tes RLS & fungsi DB) | RLS salah = kebocoran data; wajib dites otomatis |
-| Job terjadwal | **pg\_cron** + Supabase Edge Functions / Route Handler terproteksi | Rekap harian, pengingat, snapshot |
+| Job terjadwal | **cron-job.org eksternal → Route Handler terproteksi** (NOW, 2026-11-13; [ADR](docs/ADR-2026-11-13-cron-job-org.md)) | Asal: pg\_cron + Edge Functions/Route Handler; bukan scheduler aktif yang boleh diasumsikan. Waktu bisnis tetap di aplikasi/DB |
 | Email transaksional | **Resend** (atau SMTP kustom di Supabase Auth) | Pengiriman email andal; domain terverifikasi |
 | Anti-bot | **Cloudflare Turnstile** pada form pengajuan akun | Endpoint publik rawan spam |
 | Rate limiting | Upstash Redis atau tabel rate-limit di DB (pilih saat implementasi) | Login, pengajuan akun, ekspor |
@@ -194,7 +232,7 @@ Stack awal (Next.js + TypeScript, Tailwind + shadcn/ui, Supabase, Vercel, GitHub
 | Laravel + Filament | Sangat cepat untuk admin CRUD, tetapi pindah bahasa/ekosistem dan hosting; keunggulan tidak sebanding untuk developer TypeScript |
 | Prisma/Drizzle sebagai jalur data utama | ORM yang konek langsung (service role) **mem-bypass RLS**, melemahkan prinsip "otorisasi di database". Boleh dipakai terbatas untuk skrip migrasi/laporan, bukan jalur request pengguna |
 | tRPC / GraphQL | Server Actions + RPC Postgres sudah cukup; menambah lapisan tanpa manfaat |
-| Firebase | Model NoSQL kurang cocok untuk relasi, audit, dan laporan |
+| Firebase sebagai database utama | Model NoSQL kurang cocok untuk relasi, audit, dan laporan; **bukan penolakan FCM**, yang diakui untuk push pada 2026-11-13 |
 | Self-hosted Supabase/VPS | Beban operasional tinggi untuk tim kecil; pertimbangkan hanya jika kedaulatan data mewajibkan |
 
 ### 7.4 Catatan Produksi yang Sering Terlewat
@@ -211,10 +249,10 @@ Stack awal (Next.js + TypeScript, Tailwind + shadcn/ui, Supabase, Vercel, GitHub
 | Lapisan | Tanggung jawab | Tidak boleh |
 | --- | --- | --- |
 | **Database** | Invarian: waktu server, klasifikasi, unik per hari, state machine, RLS, audit trigger | Berisi logika tampilan |
-| **Service (TypeScript)** | Orkestrasi, validasi Zod, notifikasi, ekspor, integrasi | Menggantikan RLS atau menghitung waktu absensi di klien |
+| **Service (TypeScript)** | Otorisasi app-layer (sesi, status, role, scope), guard tests, orkestrasi, validasi server manual/Zod, notifikasi, ekspor, integrasi | Melonggarkan/menonaktifkan RLS atau menghitung waktu absensi di klien |
 | **UI** | Presentasi, UX, aksesibilitas | Menjadi satu-satunya pembatas akses |
 
-**Aturan emas:** jika sebuah aturan harus tetap benar walau klien dimodifikasi, aturan itu hidup di database.
+**[2026-11-13] Aturan aktif:** aturan keamanan harus ditegakkan di server tepercaya, bukan UI. Guard app-layer wajib sebelum penggunaan service-role yang melewati RLS; RLS tetap defense-in-depth dan tidak boleh dilonggarkan. Invarian data (unik, waktu server, integritas transaksi) tetap di database. **Kontrak asal/target konsolidasi v1.1:** "jika sebuah aturan harus tetap benar walau klien dimodifikasi, aturan itu hidup di database"; tidak boleh dibaca sebagai klaim seluruh action saat ini sudah berotorisasi lewat DB.
 
 ### 7.6 Struktur Repo (usulan)
 
@@ -227,7 +265,7 @@ Stack awal (Next.js + TypeScript, Tailwind + shadcn/ui, Supabase, Vercel, GitHub
 /docs/                 # PRD, ADR (Architecture Decision Record)
 ```
 
-Setiap keputusan teknis penting dicatat sebagai **ADR** singkat di `/docs/adr`.
+Setiap keputusan teknis penting dicatat sebagai **ADR** singkat. Struktur usulan asal: `/docs/adr`; keputusan 2026-11-13 memakai lokasi yang sudah ada, [docs/ADR-2026-11-13-cron-job-org.md](docs/ADR-2026-11-13-cron-job-org.md).
 
 ### 7.7 Lingkungan
 
@@ -267,7 +305,7 @@ Migrasi diuji di staging sebelum produksi. Tidak ada perubahan skema manual lewa
 
 Contoh: `attendance.record.read` dengan scope `team`.
 
-Peran memberi sekumpulan permission+scope; penugasan peran dapat **bercakupan** (global atau tim tertentu). Cek akses dilakukan di database lewat fungsi helper `app.has_permission(...)`, dipakai di RLS dan RPC.
+Peran memberi sekumpulan permission+scope; penugasan peran dapat **bercakupan** (global atau tim tertentu). **[NOW, 2026-11-13]** Cek akses request ada di app-layer melalui identitas server, status aktif, role dan scope, dibuktikan guard tests; RLS tetap defense-in-depth tanpa pelonggaran. **[v1.1 — kontrak konsolidasi asal]** Cek akses database lewat `app.has_permission(...)` di seluruh RLS/RPC tetap target, bukan klaim implementasi setiap action sudah memakai helper ini.
 
 ### 9.2 Matriks Kapabilitas Ringkas (default, mengikuti OD-008)
 
@@ -335,7 +373,7 @@ Aturan: notifikasi dibuat dalam transaksi yang sama dengan peristiwa asalnya (ta
 
 - Mutasi dari UI: Server Actions memanggil RPC/tabel terproteksi RLS. Route Handler hanya untuk ekspor, webhook, dan endpoint cron (diautentikasi secret).
 - Daftar besar wajib **keyset/cursor pagination**, default 25–50 baris.
-- Semua input divalidasi Zod di server, tidak hanya di klien.
+- **[NOW, 2026-11-13]** Semua input divalidasi di server, tidak hanya di klien; validasi manual diterima, Zod opsional. Asal: Zod diwajibkan; keputusan B mengganti kewajiban library, bukan pemeriksaan input.
 
 ### 10.6 Aksesibilitas dan Responsif
 
@@ -369,10 +407,10 @@ Target angka di bawah adalah **\[REKOMENDASI\]** dan diverifikasi saat uji beban
 
 | Ancaman | Kontrol |
 | --- | --- |
-| Eskalasi hak akses (pemohon mengangkat diri jadi admin) | Peran hanya ditulis lewat RPC admin; tidak ada policy tulis peran untuk pengguna; guard "super admin terakhir" |
-| Akun belum disetujui mengakses data | Helper `app.is_active_member()` di setiap policy |
+| Eskalasi hak akses (pemohon mengangkat diri jadi admin) | NOW: server action + guard; tidak ada policy tulis peran untuk pengguna; guard "super admin terakhir" tetap diwajibkan. v1.1: kontrak asal RPC admin atomik beraudit, belum diklaim terpenuhi |
+| Akun belum disetujui mengakses data | NOW: guard status aktif di server + RLS tetap default-deny; v1.1: konsolidasi kontrak asal helper `app.is_active_member()` di setiap policy |
 | Manipulasi waktu absensi | Waktu hanya dari `now()` server di RPC; klien tidak mengirim waktu |
-| IDOR (membuka data orang lain lewat ID) | RLS berbasis `auth.uid()` + scope; tes pgTAP per tabel |
+| IDOR (membuka data orang lain lewat ID) | Guard kepemilikan/penugasan/tim di app-layer + guard tests; RLS berbasis `auth.uid()` + scope dan tes pgTAP terpisah; tidak ada pelonggaran RLS |
 | Spam pengajuan akun / brute force | Turnstile, rate limit, pesan error seragam (anti user enumeration) |
 | Kebocoran file | Bucket privat, signed URL singkat, policy storage |
 | Injeksi/XSS (terutama konten Markdown Resource Library) | Parameterized query; sanitasi render Markdown; CSP ketat |
@@ -396,7 +434,7 @@ Target angka di bawah adalah **\[REKOMENDASI\]** dan diverifikasi saat uji beban
 | Tingkat | Alat | Fokus |
 | --- | --- | --- |
 | Database | pgTAP | RLS per tabel/peran, fungsi klasifikasi, state machine, constraint |
-| Unit | Vitest | Validasi Zod, util, logika service |
+| Unit | Vitest | Validasi server manual/Zod (asal Zod), util, logika service, guard tests role/status/scope |
 | E2E | Playwright | Alur kritis: pengajuan→persetujuan→login, check-in, kirim & review laporan |
 | Manual/UAT | Pilot pengguna | Kenyamanan mobile, kosakata, kasus tepi |
 
@@ -417,7 +455,7 @@ Fitur selesai jika: (1) requirement terdokumentasi, (2) aturan bisnis diimplemen
 
 ## 14. Roadmap dan Kriteria Rilis
 
-Tanpa estimasi tanggal karena kapasitas pengembang belum dikonfirmasi; urutan dan *exit criteria* yang mengikat.
+Tanpa estimasi tanggal karena kapasitas pengembang belum dikonfirmasi; urutan dan *exit criteria* yang mengikat. **[2026-11-13]** Tabel R0–R4 adalah baseline; pengecualian NOW/v1.1 §0.4 mengikat release gate awal: dua view dashboard, SQL tim interim, ATT-011 ditunda eksplisit, TOTP manual seluruh Super Admin existing, dan Android wrapper dikecualikan. Tidak ada deferral implisit atas requirement lain.
 
 | Rilis | Isi | Exit criteria |
 | --- | --- | --- |
@@ -463,6 +501,7 @@ Tanpa estimasi tanggal karena kapasitas pengembang belum dikonfirmasi; urutan da
 | --- | --- | --- |
 | 1.0 | — | PRD Suite awal (draft) |
 | 2.0 | 31 Okt 2026 | Dipecah 9 dokumen; stack diperkuat; model otorisasi, konvensi data, NFR terukur, kebijakan berversi, 20 OD terkonsolidasi; roadmap diperbaiki |
+| 2.1 | 2026-11-13 | Keputusan audit pengguna (§0.4): NOW/v1.1 eksplisit di seluruh root PRD, prioritas ATT-011 M dan ATT-015 S dikonfirmasi, gate TOTP manual, otorisasi app-layer + RLS tanpa pelonggaran, dua view awal, integrasi diakui, ADR scheduler dan SQL operator tim; bukan klaim implementasi selesai |
 
 ---
 

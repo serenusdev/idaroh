@@ -92,7 +92,33 @@ export const resolveIdentity = cache(async (): Promise<IdentityState> => {
 
     if (profileResult.error) return identityError('profiles', profileResult.error);
     const profile = profileResult.data;
-    if (!profile) return { state: 'profile_missing', email: user.email ?? '' };
+    if (!profile) {
+      // TRC-02: Check if this auth user has a pending/rejected account request.
+      // If so, return 'inactive' with the appropriate status so the user sees
+      // "Menunggu Persetujuan" instead of "Profil Akun Belum Tersedia".
+      const { data: accountReq } = await admin
+        .from('account_requests')
+        .select('status')
+        .eq('auth_user_id', user.id)
+        .maybeSingle();
+      if (accountReq?.status === 'pending') {
+        return {
+          state: 'inactive',
+          status: 'pending',
+          email: user.email ?? '',
+          fullName: '',
+        };
+      }
+      if (accountReq?.status === 'rejected') {
+        return {
+          state: 'inactive',
+          status: 'rejected',
+          email: user.email ?? '',
+          fullName: '',
+        };
+      }
+      return { state: 'profile_missing', email: user.email ?? '' };
+    }
 
     if (profile.session_revoked_at) {
       const { data: sessionData } = await supabase.auth.getSession();

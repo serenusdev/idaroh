@@ -100,7 +100,7 @@ export function getJakartaTime() {
     hours,
     minutes,
     seconds,
-    totalMinutes: hours * 60 + minutes + (seconds > 0 ? 0.5 : 0),
+    totalMinutes: hours * 60 + minutes,
     now,
   };
 }

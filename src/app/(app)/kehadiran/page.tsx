@@ -13,6 +13,7 @@ import { useIdentity } from "@/components/auth/identity-context";
 import { useCachedData } from "@/hooks/use-cached-data";
 import { LiveClock } from "@/components/ui/live-clock";
 import { Illustration } from "@/components/ui/illustration";
+import { Modal } from "@/components/ui/modal";
 
 export default function KehadiranPage() {
   const { user } = useIdentity();
@@ -29,6 +30,23 @@ export default function KehadiranPage() {
   const historyItems: AttendanceRecordItem[] = historyQuery.data ?? [];
   const policy = policyQuery.data ?? null;
   const loadError = historyQuery.error?.message || policyQuery.error?.message || null;
+  // Filter/sort state for attendance history (UX-08)
+  const [attFilter, setAttFilter] = React.useState<"all" | "on_time" | "grace" | "late" | "excused">("all");
+  const [attSort, setAttSort] = React.useState<"desc" | "asc">("desc");
+  // Pagination
+  const [attPage, setAttPage] = React.useState(1);
+  const ATT_PAGE_SIZE = 10;
+
+  const filteredHistory = React.useMemo(() => {
+    const items = attFilter === "all"
+      ? historyItems
+      : historyItems.filter((i) => i.classification === attFilter);
+    const sorted = attSort === "asc" ? [...items].reverse() : items;
+    return sorted;
+  }, [historyItems, attFilter, attSort]);
+
+  const pagedHistory = filteredHistory.slice(0, attPage * ATT_PAGE_SIZE);
+  const hasMore = filteredHistory.length > pagedHistory.length;
 
   React.useEffect(() => {
     const now = new Date();
@@ -52,6 +70,8 @@ export default function KehadiranPage() {
   const [correctionReason, setCorrectionReason] = React.useState("other");
   const [correctionNotes, setCorrectionNotes] = React.useState("");
   const [correctionSuccessMsg, setCorrectionSuccessMsg] = React.useState("");
+  const [correctionError, setCorrectionError] = React.useState<string | null>(null);
+  const [isSubmittingCorrection, setIsSubmittingCorrection] = React.useState(false);
 
   // Exception / Leave Modal State
   const [isExceptionOpen, setIsExceptionOpen] = React.useState(false);
@@ -60,25 +80,33 @@ export default function KehadiranPage() {
   const [exceptionDateFrom, setExceptionDateFrom] = React.useState("");
   const [exceptionDateTo, setExceptionDateTo] = React.useState("");
   const [exceptionSuccessMsg, setExceptionSuccessMsg] = React.useState("");
+  const [exceptionError, setExceptionError] = React.useState<string | null>(null);
+  const [isSubmittingException, setIsSubmittingException] = React.useState(false);
 
   const handleCheckin = async () => {
+    if (isProcessing) return;
     setIsProcessing(true);
     setCheckinError(null);
-    const res = await checkInAttendanceAction();
-    setIsProcessing(false);
-    if (res.success) {
-      setCheckedIn(true);
-      setCheckedInTime(res.timeStr);
-      setCheckedInStatus(
-        res.classification === "on_time"
-          ? "Tepat Waktu"
-          : res.classification === "grace"
-          ? "Masa Toleransi"
-          : "Terlambat"
-      );
-      historyQuery.refresh();
-    } else {
-      setCheckinError(res.message || "Gagal mencatat presensi. Silakan coba lagi.");
+    try {
+      const res = await checkInAttendanceAction();
+      if (res.success) {
+        setCheckedIn(true);
+        setCheckedInTime(res.timeStr);
+        setCheckedInStatus(
+          res.classification === "on_time"
+            ? "Tepat Waktu"
+            : res.classification === "grace"
+            ? "Masa Toleransi"
+            : "Terlambat"
+        );
+        historyQuery.refresh();
+      } else {
+        setCheckinError(res.message || "Gagal mencatat presensi. Silakan coba lagi.");
+      }
+    } catch {
+      setCheckinError("Terjadi kesalahan saat mencatat presensi. Silakan coba lagi.");
+    } finally {
+      setIsProcessing(false);
     }
   };
 
@@ -86,46 +114,66 @@ export default function KehadiranPage() {
     setSelectedHistoryItem(item);
     setCorrectionNotes("");
     setCorrectionSuccessMsg("");
+    setCorrectionError(null);
     setIsCorrectionOpen(true);
   };
 
   const handleCorrectionSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!selectedHistoryItem) return;
-
-    const res = await submitCorrectionAction({
-      attendanceDate: selectedHistoryItem.dateStr,
-      recordedTime: selectedHistoryItem.timeStr,
-      reasonCategory: correctionReason,
-      notes: correctionNotes,
-    });
-
-    if (res.success) {
-      setCorrectionSuccessMsg(res.message);
-      historyQuery.refresh();
-      setTimeout(() => {
-        setIsCorrectionOpen(false);
-        setCorrectionSuccessMsg("");
-      }, 1400);
+    if (!selectedHistoryItem || isSubmittingCorrection) return;
+    setIsSubmittingCorrection(true);
+    setCorrectionError(null);
+    try {
+      const res = await submitCorrectionAction({
+        attendanceDate: selectedHistoryItem.dateStr,
+        recordedTime: selectedHistoryItem.timeStr,
+        reasonCategory: correctionReason,
+        notes: correctionNotes,
+      });
+      if (res.success) {
+        setCorrectionSuccessMsg(res.message);
+        historyQuery.refresh();
+        setTimeout(() => {
+          setIsCorrectionOpen(false);
+          setCorrectionSuccessMsg("");
+        }, 1400);
+      } else {
+        setCorrectionError(res.message || "Gagal mengirim koreksi presensi. Silakan coba lagi.");
+      }
+    } catch {
+      setCorrectionError("Terjadi kesalahan saat mengirim koreksi. Silakan coba lagi.");
+    } finally {
+      setIsSubmittingCorrection(false);
     }
   };
 
   const handleExceptionSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    const res = await submitExceptionAction(
-      exceptionDateFrom,
-      exceptionDateTo,
-      exceptionType,
-      exceptionReason
-    );
-    if (res.success) {
-      setExceptionSuccessMsg(res.message);
-      historyQuery.refresh();
-      setTimeout(() => {
-        setIsExceptionOpen(false);
-        setExceptionSuccessMsg("");
-        setExceptionReason("");
-      }, 1400);
+    if (isSubmittingException) return;
+    setIsSubmittingException(true);
+    setExceptionError(null);
+    try {
+      const res = await submitExceptionAction(
+        exceptionDateFrom,
+        exceptionDateTo,
+        exceptionType,
+        exceptionReason
+      );
+      if (res.success) {
+        setExceptionSuccessMsg(res.message);
+        historyQuery.refresh();
+        setTimeout(() => {
+          setIsExceptionOpen(false);
+          setExceptionSuccessMsg("");
+          setExceptionReason("");
+        }, 1400);
+      } else {
+        setExceptionError(res.message || "Gagal mengirim permohonan izin / sakit. Silakan coba lagi.");
+      }
+    } catch {
+      setExceptionError("Terjadi kesalahan saat mengirim permohonan. Silakan coba lagi.");
+    } finally {
+      setIsSubmittingException(false);
     }
   };
 
@@ -202,7 +250,7 @@ export default function KehadiranPage() {
               </p>
             </div>
             <div className="bg-card rounded-xl p-2.5 shadow-xs border border-border/40">
-              <p className="font-label-sm text-[11px] text-warning font-semibold flex items-center justify-center gap-1">
+              <p className="font-label-sm text-[11px] text-tertiary font-semibold flex items-center justify-center gap-1">
                 <span className="material-symbols-outlined text-[14px]">timelapse</span>
                 Toleransi
               </p>
@@ -364,12 +412,12 @@ export default function KehadiranPage() {
                   calendar_month
                 </span>
                 <h3 className="font-headline-sm text-headline-sm text-on-surface font-semibold">
-                  Peta Kehadiran Bulanan
+                  Ringkasan Kehadiran
                 </h3>
               </div>
               <div className="flex items-center gap-1 bg-surface-container-low px-2.5 py-1 rounded-lg border border-border/40">
-                <span className="font-label-sm text-label-sm text-on-surface font-semibold capitalize">
-                  {new Date().toLocaleDateString("id-ID", { month: "long", year: "numeric" })}
+                <span className="font-label-sm text-label-sm text-on-surface font-semibold">
+                  30 record terakhir
                 </span>
               </div>
             </div>
@@ -403,8 +451,11 @@ export default function KehadiranPage() {
               </div>
             </div>
 
-            {/* Monthly Stats Summary Cards (3 Columns) */}
-            <div className="grid grid-cols-3 gap-2.5 pt-1">
+            {/* Stats Summary Cards (3 Columns) — dihitung dari 30 record terakhir */}
+            <p className="text-[11px] text-muted-foreground pt-1">
+              Dihitung dari 30 record presensi terakhir, bukan bulan kalender berjalan.
+            </p>
+            <div className="grid grid-cols-3 gap-2.5">
               <div className="bg-surface-container-low rounded-xl p-3 flex flex-col items-center text-center border border-border/30">
                 <span className="material-symbols-outlined text-success text-[20px] mb-1">
                   check_circle
@@ -417,7 +468,7 @@ export default function KehadiranPage() {
                 </span>
               </div>
               <div className="bg-surface-container-low rounded-xl p-3 flex flex-col items-center text-center border border-border/30">
-                <span className="material-symbols-outlined text-warning text-[20px] mb-1">
+                <span className="material-symbols-outlined text-tertiary text-[20px] mb-1">
                   timelapse
                 </span>
                 <span className="font-headline-sm text-headline-sm font-bold text-on-surface">
@@ -459,6 +510,42 @@ export default function KehadiranPage() {
               </span>
             </div>
 
+            {/* Filter & Sort controls (UX-08) */}
+            <div className="flex items-center gap-2 flex-wrap pb-1">
+              <div className="flex items-center gap-1 overflow-x-auto no-scrollbar">
+                {([
+                  { id: "all", label: "Semua" },
+                  { id: "on_time", label: "Tepat Waktu" },
+                  { id: "grace", label: "Toleransi" },
+                  { id: "excused", label: "Izin" },
+                ] as const).map((f) => (
+                  <button
+                    key={f.id}
+                    type="button"
+                    onClick={() => { setAttFilter(f.id); setAttPage(1); }}
+                    className={`px-2.5 py-1 rounded-full text-[11px] font-medium whitespace-nowrap transition-all ${
+                      attFilter === f.id
+                        ? "bg-primary text-on-primary"
+                        : "bg-surface-container text-on-surface hover:bg-accent"
+                    }`}
+                  >
+                    {f.label}
+                  </button>
+                ))}
+              </div>
+              <button
+                type="button"
+                onClick={() => setAttSort((s) => s === "desc" ? "asc" : "desc")}
+                aria-label={attSort === "desc" ? "Urutkan terlama dulu" : "Urutkan terbaru dulu"}
+                className="flex items-center gap-1 px-2.5 py-1 rounded-full bg-surface-container text-on-surface hover:bg-accent text-[11px] font-medium"
+              >
+                <span className="material-symbols-outlined text-[13px]">
+                  {attSort === "desc" ? "arrow_downward" : "arrow_upward"}
+                </span>
+                {attSort === "desc" ? "Terbaru" : "Terlama"}
+              </button>
+            </div>
+
             {/* History Records List */}
             <div className="space-y-2.5">
               {historyItems.length === 0 ? (
@@ -467,8 +554,10 @@ export default function KehadiranPage() {
                   <p className="font-label-md text-on-surface text-[13px]">Belum ada riwayat presensi tercatat</p>
                   <p className="text-[11px] text-muted-foreground">Lakukan check-in presensi di atas untuk mulai mencatat riwayat.</p>
                 </div>
+              ) : pagedHistory.length === 0 ? (
+                <p className="text-center text-xs text-muted-foreground py-6">Tidak ada data untuk filter ini.</p>
               ) : (
-                historyItems.map((item) => (
+                pagedHistory.map((item) => (
                 <div
                   key={item.id}
                   className="bg-surface-container-low rounded-xl p-3.5 space-y-2 border border-border/40 transition-all hover:border-primary/30"
@@ -491,7 +580,7 @@ export default function KehadiranPage() {
                       </span>
                     ) : item.classification === "grace" ? (
                       <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-surface-container text-on-surface font-label-sm text-label-sm font-semibold">
-                        <span className="material-symbols-outlined text-[13px] text-warning">
+                        <span className="material-symbols-outlined text-[13px] text-tertiary">
                           timelapse
                         </span>
                         Masa Toleransi
@@ -531,21 +620,31 @@ export default function KehadiranPage() {
             <div className="pt-2">
               <button
                 className="w-full min-h-[48px] bg-secondary-container text-on-secondary-container hover:bg-secondary-fixed rounded-xl flex items-center justify-center gap-2 p-3 active:scale-[0.99] transition-all font-label-md text-label-md font-semibold border border-border/50"
-                onClick={() => setIsExceptionOpen(true)}
+                onClick={() => { setExceptionError(null); setExceptionSuccessMsg(""); setIsExceptionOpen(true); }}
                 type="button"
               >
                 <span className="material-symbols-outlined text-[20px]">edit_note</span>
                 <span>Ajukan Keterangan Izin / Sakit</span>
               </button>
             </div>
+            {/* Load more pagination */}
+            {hasMore && (
+              <button
+                type="button"
+                onClick={() => setAttPage((p) => p + 1)}
+                aria-label="Muat lebih banyak riwayat presensi"
+                className="w-full h-10 rounded-xl bg-surface-container text-on-surface text-xs font-semibold hover:bg-accent transition-colors"
+              >
+                Muat lebih banyak riwayat
+              </button>
+            )}
           </div>
         </div>
       </div>
 
       {/* MODAL 1: Correction Modal Dialog (ATT-007) */}
       {isCorrectionOpen && selectedHistoryItem && (
-        <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 bg-black/40 backdrop-blur-sm animate-in fade-in duration-200">
-          <div className="w-full max-w-lg bg-card rounded-t-3xl sm:rounded-2xl p-5 sm:p-6 shadow-2xl space-y-4 max-h-[85vh] overflow-y-auto border border-border">
+        <Modal isOpen onClose={() => setIsCorrectionOpen(false)} title="Formulir Koreksi Presensi" backdropClassName="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 bg-black/40 backdrop-blur-sm animate-in fade-in duration-200" className="w-full max-w-lg bg-card rounded-t-3xl sm:rounded-2xl p-5 sm:p-6 shadow-2xl space-y-4 max-h-[85vh] overflow-y-auto border border-border">
             <div className="w-12 h-1.5 bg-muted rounded-full mx-auto sm:hidden mb-1" />
             <div className="flex items-center justify-between pb-2 border-b border-border/40">
               <div>
@@ -572,11 +671,17 @@ export default function KehadiranPage() {
               </div>
             ) : (
               <form onSubmit={handleCorrectionSubmit} className="space-y-3.5">
+                {correctionError && (
+                  <div role="alert" className="rounded-xl border border-error/30 bg-error-container/30 p-3 text-sm text-error">
+                    {correctionError}
+                  </div>
+                )}
                 <div>
-                  <label className="block font-label-sm text-label-sm font-semibold text-on-surface mb-1">
+                  <label htmlFor="correction-reason" className="block font-label-sm text-label-sm font-semibold text-on-surface mb-1">
                     Alasan Penyesuaian
                   </label>
                   <select
+                    id="correction-reason"
                     className="w-full h-12 bg-surface-container text-on-surface rounded-xl px-3 font-body-md text-[15px] focus:outline-none focus:ring-2 focus:ring-primary border border-border"
                     value={correctionReason}
                     onChange={(e) => setCorrectionReason(e.target.value)}
@@ -597,10 +702,11 @@ export default function KehadiranPage() {
                 </div>
 
                 <div>
-                  <label className="block font-label-sm text-label-sm font-semibold text-on-surface mb-1">
+                  <label htmlFor="correction-notes" className="block font-label-sm text-label-sm font-semibold text-on-surface mb-1">
                     Catatan Tambahan (Opsional)
                   </label>
                   <textarea
+                    id="correction-notes"
                     className="w-full bg-surface-container text-on-surface rounded-xl p-3 font-body-md text-[15px] focus:outline-none focus:ring-2 focus:ring-primary resize-none border border-border"
                     placeholder="Tuliskan keterangan detail untuk verifikator..."
                     rows={3}
@@ -618,22 +724,22 @@ export default function KehadiranPage() {
                     Batal
                   </button>
                   <button
-                    className="flex-1 h-12 bg-primary text-on-primary rounded-xl font-label-md text-label-md font-semibold shadow-xs"
+                    className="flex-1 h-12 bg-primary text-on-primary rounded-xl font-label-md text-label-md font-semibold shadow-xs disabled:opacity-50 flex items-center justify-center gap-2"
                     type="submit"
+                    disabled={isSubmittingCorrection}
                   >
-                    Kirim Pengajuan
+                    {isSubmittingCorrection && <span className="w-4 h-4 border-2 border-current border-t-transparent rounded-full animate-spin" />}
+                    {isSubmittingCorrection ? "Mengirim..." : "Kirim Pengajuan"}
                   </button>
                 </div>
               </form>
             )}
-          </div>
-        </div>
+        </Modal>
       )}
 
       {/* MODAL 2: Sickness / Leave Exception Modal */}
       {isExceptionOpen && (
-        <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 bg-black/40 backdrop-blur-sm animate-in fade-in duration-200">
-          <div className="w-full max-w-lg bg-card rounded-t-3xl sm:rounded-2xl p-5 sm:p-6 shadow-2xl space-y-4 max-h-[85vh] overflow-y-auto border border-border">
+        <Modal isOpen onClose={() => setIsExceptionOpen(false)} title="Permohonan Izin / Sakit" backdropClassName="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 bg-black/40 backdrop-blur-sm animate-in fade-in duration-200" className="w-full max-w-lg bg-card rounded-t-3xl sm:rounded-2xl p-5 sm:p-6 shadow-2xl space-y-4 max-h-[85vh] overflow-y-auto border border-border">
             <div className="w-12 h-1.5 bg-muted rounded-full mx-auto sm:hidden mb-1" />
             <div className="flex items-center justify-between pb-2 border-b border-border/40">
               <div>
@@ -660,21 +766,30 @@ export default function KehadiranPage() {
               </div>
             ) : (
               <form onSubmit={handleExceptionSubmit} className="space-y-3.5">
+                {exceptionError && (
+                  <div role="alert" className="rounded-xl border border-error/30 bg-error-container/30 p-3 text-sm text-error">
+                    {exceptionError}
+                  </div>
+                )}
                 <div>
-                  <label className="block font-label-sm text-label-sm font-semibold text-on-surface mb-1">
+                  <label htmlFor="exception-date-from" className="block font-label-sm text-label-sm font-semibold text-on-surface mb-1">
                     Rentang Tanggal
                   </label>
                   <div className="grid grid-cols-2 gap-2">
                     <input
+                      id="exception-date-from"
                       type="date"
                       required
+                      aria-label="Tanggal mulai izin"
                       value={exceptionDateFrom}
                       onChange={(e) => setExceptionDateFrom(e.target.value)}
                       className="h-12 bg-surface-container text-on-surface rounded-xl px-3 font-body-md text-[15px] border border-border"
                     />
                     <input
+                      id="exception-date-to"
                       type="date"
                       required
+                      aria-label="Tanggal selesai izin"
                       min={exceptionDateFrom || undefined}
                       value={exceptionDateTo}
                       onChange={(e) => setExceptionDateTo(e.target.value)}
@@ -683,10 +798,11 @@ export default function KehadiranPage() {
                   </div>
                 </div>
                 <div>
-                  <label className="block font-label-sm text-label-sm font-semibold text-on-surface mb-1">
+                  <label htmlFor="exception-type" className="block font-label-sm text-label-sm font-semibold text-on-surface mb-1">
                     Jenis Keterangan
                   </label>
                   <select
+                    id="exception-type"
                     className="w-full h-12 bg-surface-container text-on-surface rounded-xl px-3 font-body-md text-[15px] focus:outline-none focus:ring-2 focus:ring-primary border border-border"
                     value={exceptionType}
                     onChange={(e) => setExceptionType(e.target.value)}
@@ -698,10 +814,11 @@ export default function KehadiranPage() {
                 </div>
 
                 <div>
-                  <label className="block font-label-sm text-label-sm font-semibold text-on-surface mb-1">
+                  <label htmlFor="exception-reason" className="block font-label-sm text-label-sm font-semibold text-on-surface mb-1">
                     Alasan Lengkap
                   </label>
                   <textarea
+                    id="exception-reason"
                     required
                     className="w-full bg-surface-container text-on-surface rounded-xl p-3 font-body-md text-[15px] focus:outline-none focus:ring-2 focus:ring-primary resize-none border border-border"
                     placeholder="Jelaskan alasan dan perkiraan tanggal kembali..."
@@ -720,16 +837,17 @@ export default function KehadiranPage() {
                     Batal
                   </button>
                   <button
-                    className="flex-1 h-12 bg-primary text-on-primary rounded-xl font-label-md text-label-md font-semibold shadow-xs"
+                    className="flex-1 h-12 bg-primary text-on-primary rounded-xl font-label-md text-label-md font-semibold shadow-xs disabled:opacity-50 flex items-center justify-center gap-2"
                     type="submit"
+                    disabled={isSubmittingException}
                   >
-                    Ajukan Keterangan
+                    {isSubmittingException && <span className="w-4 h-4 border-2 border-current border-t-transparent rounded-full animate-spin" />}
+                    {isSubmittingException ? "Mengirim..." : "Ajukan Keterangan"}
                   </button>
                 </div>
               </form>
             )}
-          </div>
-        </div>
+        </Modal>
       )}
     </div>
   );

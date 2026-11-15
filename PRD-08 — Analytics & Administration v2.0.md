@@ -1,6 +1,6 @@
 # PRD-08 — Analytics & Administration
 
-**Versi:** 2.0 · **Prefix:** ADM · **Rilis:** R4 (konfigurasi & audit dasar dari R1) · **Dibaca bersama:** Master PRD v2.0, seluruh PRD modul **Label:** \[TERKONFIRMASI\] · \[REKOMENDASI\] · \[TERBUKA\]
+**Versi:** 2.1 · **Keputusan audit:** 2026-11-13 (§17; NOW/v1.1 mengikat cakupan rilis, bukan klaim implementasi) · **Prefix:** ADM · **Rilis:** R4 (konfigurasi & audit dasar dari R1) · **Dibaca bersama:** Master PRD v2.0, seluruh PRD modul **Label:** \[TERKONFIRMASI\] · \[REKOMENDASI\] · \[TERBUKA\]
 
 ---
 
@@ -122,11 +122,11 @@ Semua memakai **status efektif** (setelah koreksi disetujui).
 
 | ID | Persyaratan | Prioritas |
 | --- | --- | --- |
-| ADM-001 | Dasbor operasional per peran (Master §8.3): Pengurus, Yayasan, Koordinator (tim), Super Admin (teknis) | M |
+| ADM-001 | **[NOW: dua view, Master §0.4]** Santri/pribadi dan admin gabungan. **[v1.1 — kontrak asal per peran]** Dasbor Pengurus, Yayasan, Koordinator (tim), Super Admin (teknis); rujukan asal Master §8.3 tidak tersedia, lihat §17 | M |
 | ADM-002 | Analitik absensi: ringkasan harian, tingkat tepat waktu/toleransi/terlambat/belum check-in, tren mingguan & bulanan, drill-down ke daftar | M |
 | ADM-003 | Analitik laporan: tingkat pengumpulan, terlambat, belum melapor, backlog review (dengan usia), revisi | M |
 | ADM-004 | Analitik tugas: terbuka, selesai, terlambat, progres proyek | S |
-| ADM-005 | Analitik Resource Library: penggunaan, kategori populer, pencarian tanpa hasil, status dokumentasi | C |
+| ADM-005 | **[v1.1 — disetujui 2026-11-13]** Analitik Resource Library: penggunaan, kategori populer, pencarian tanpa hasil, status dokumentasi | C |
 | ADM-006 | Ekspor CSV/XLSX/PDF untuk rekap yang diizinkan; ekspor beraudit, berbatas baris, dapat berjalan asinkron | M |
 | ADM-007 | Pengaturan sistem berversi: hari operasional, jam absensi, jendela check-in, tenggat laporan, zona waktu, kalender non-operasional, ambang pengingat, kategori laporan, batas file | M |
 | ADM-008 | Audit log: penelusuran dengan filter (aktor, aksi, entitas, tanggal), tampilan sebelum/sesudah ter-redaksi | M |
@@ -134,11 +134,11 @@ Semua memakai **status efektif** (setelah koreksi disetujui).
 | ADM-010 | Alur usulan→persetujuan perubahan kebijakan (dua langkah) dengan pratinjau dampak | S |
 | ADM-011 | Pemantauan kesehatan sistem: status job terjadwal, antrean notifikasi, kegagalan terbaru (tanpa membuka data pribadi) | S |
 | ADM-012 | Manajemen kategori/tag/daftar referensi (kategori laporan, kategori acara) dari satu pusat | S |
-| ADM-013 | Rekap periodik otomatis (mingguan ke Pengurus; bulanan ke Yayasan) sebagai notifikasi/PDF | C |
+| ADM-013 | **[v1.1 — disetujui 2026-11-13]** Rekap periodik otomatis (mingguan ke Pengurus; bulanan ke Yayasan) sebagai notifikasi/PDF | C |
 | ADM-014 | Pembekuan periode (period lock): bulan yang sudah direkap resmi tidak dapat dikoreksi tanpa otorisasi khusus beraudit | C |
 | ADM-015 | Konfigurasi retensi data dan antrean pemusnahan terjadwal (diaktifkan hanya setelah OD-006 diputuskan) | W (ditunda) |
 | ADM-016 | Kontrol akses ekspor: izin ekspor per jenis data, batas frekuensi | S |
-| ADM-017 | Halaman "Tentang Data": definisi metrik (§4) dapat dibaca pengguna berwenang di dalam aplikasi | S |
+| ADM-017 | **[v1.1 — disetujui 2026-11-13]** Halaman "Tentang Data": definisi metrik (§4) dapat dibaca pengguna berwenang di dalam aplikasi | S |
 
 ---
 
@@ -247,9 +247,9 @@ Database (skema + data + fungsi/policy), file Storage, konfigurasi lingkungan (s
 
 | Layar | Pengguna | Isi |
 | --- | --- | --- |
-| Dasbor Pengurus | Pengurus | Absensi hari ini, laporan belum masuk, backlog review, tugas terlambat |
-| Dasbor Yayasan | Yayasan | Tren mingguan/bulanan, kepatuhan, ringkasan antrean |
-| Dasbor Tim | Koordinator | Ringkasan tim: absensi, laporan, tugas |
+| Dasbor Pengurus (NOW: admin gabungan, §17) | Pengurus; Yayasan/Super Admin sesuai scope | Absensi hari ini, laporan belum masuk, backlog review, tugas terlambat; view tidak memperluas izin |
+| Dasbor Yayasan [v1.1 — view terpisah] | Yayasan | Tren mingguan/bulanan, kepatuhan, ringkasan antrean |
+| Dasbor Tim [v1.1 — view khusus] | Koordinator | Ringkasan tim: absensi, laporan, tugas |
 | Analitik Absensi / Laporan / Tugas | Berwenang | Grafik + filter periode/tim + drill-down |
 | Ekspor | Berwenang | Pilih jenis, periode, format; riwayat ekspor |
 | Pengaturan Kebijakan | Admin / Yayasan | Versi aktif, draft, usulan, riwayat, pratinjau dampak |
@@ -321,3 +321,17 @@ UX: setiap grafik punya tabel alternatif dan label teks (aksesibilitas); tooltip
 ## 16. Metrik Modul
 
 Keberhasilan job terjadwal; waktu muat dasbor p75; jumlah ekspor per bulan dan ukuran; kegagalan pemulihan pada uji kuartalan (target 0); jumlah perubahan kebijakan per kuartal; jumlah entri audit tanpa pelaku (target 0 selain job sistem).
+
+---
+
+## 17. Keputusan Audit — 2026-11-13 [TERKONFIRMASI]
+
+Change log 2.1; keputusan pengguna berikut mengikuti Master §0.4, tanpa klaim implementasi/operasi terverifikasi.
+
+- **TRC-30 / ADM-001 — NOW:** cukup **dua view awal**, yaitu santri/pribadi (termasuk koordinator pada beranda awal) dan admin gabungan (pengurus/yayasan/super_admin). Pemilihan view tidak memberi tambahan izin: agregat, detail, dan aksi tetap mengikuti role/scope, termasuk pembatasan teknis Super Admin. **v1.1:** dashboard khusus koordinator per tim, ringkasan strategis Yayasan, dan dashboard teknis Super Admin terpisah. Kontrak asal per peran dan layar §11 dipertahankan sebagai v1.1; rujukan lama "Master §8.3" tidak ada, acuan keputusan yang benar Master §0.4.
+- **C — v1.1:** ADM-005 (analitik Library), ADM-013 (rekap otomatis periodik), ADM-017 (halaman Tentang Data). Rumus metrik tetap terdokumentasi di §4 walau halaman dalam aplikasi ditunda. ADM-015 tetap W sesuai keputusan retensi semula; tidak diaktifkan lewat revisi ini.
+- **Operasi NOW:** FCM, presence/heartbeat, dan cron-job.org diakui; Android wrapper ada tetapi di luar release gate. Ikuti [ADR scheduler](docs/ADR-2026-11-13-cron-job-org.md). `/api/cron/backups` menghasilkan **manifest metadata, bukan backup database/Storage atau bukti restore**; ADM-009 tetap membutuhkan bukti backup nyata dan pemulihan terpisah.
+- **Kontrol NOW:** guard app-layer + guard tests untuk akses agregat/ekspor, RLS defense-in-depth tidak boleh dilonggarkan. Semua Super Admin existing wajib mengaktifkan dan memverifikasi TOTP secara manual sebagai release gate; enforcement MFA login tetap **v1.1**. Aktivasi faktor bukan bukti enforcement.
+- **Interim tim:** PPL-002 v1.1; SQL operator menggunakan [runbook tim](docs/operator-team-sql.md). Audit operasi privileged wajib menyimpan aktor manusia, alasan, referensi perubahan, sebelum/sesudah yang aman; jangan menganggap bypass RLS oleh service-role sebagai kontrol akses atau audit otomatis.
+
+Acceptance NOW: dua view tidak membocorkan data lintas scope; release gate TOTP manual memiliki bukti; heartbeat/job dan backup dibuktikan terpisah. Dokumen ini bukan hasil tes, operasi provider, atau eksekusi SQL.

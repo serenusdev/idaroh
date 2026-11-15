@@ -7,6 +7,7 @@ import { sendPushToUsers } from "@/lib/fcm";
 import { requireAuthUser, requireRole, getJakartaTime } from "@/lib/auth/guards";
 import { isDateOnly, isNonEmptyString, isPlainRecord, isTimeOnly } from "@/lib/input-validation";
 import { throwQueryError } from "@/lib/query-error";
+import { friendlyActionError } from "@/lib/action-error";
 import { INITIAL_USER_DAILY_REPORT, REPORT_CATEGORIES, REVIEW_QUEUE_REPORTS } from "./data";
 import { DailyReport, MyReportHistoryOptions, MyReportHistoryPage, ReportCategory, ReportItem, ReviewDecision } from "./types";
 
@@ -570,7 +571,7 @@ export async function submitReportAction(
     console.error("Failed to submit report to Supabase:", err);
     return {
       success: false,
-      message: "Gagal mengirimkan laporan: " + err.message,
+      message: friendlyActionError(err, "Gagal mengirimkan laporan. Silakan coba lagi."),
       isLate,
       submittedAtTime,
     };
@@ -601,7 +602,7 @@ export async function reviewReportAction(
   const reviewer = await requireRole(["super_admin", "yayasan", "pengurus", "koordinator"]);
 
   if (process.env.VITEST) {
-    const revName = payload.reviewerName || "Ustadz Ahmad Fauzi";
+    const revName = payload.reviewerName || reviewer.full_name;
     return {
       success: true,
       message:

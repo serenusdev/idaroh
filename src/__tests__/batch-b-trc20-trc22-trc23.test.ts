@@ -93,7 +93,7 @@ describe("TRC-22 — Task reviewer", () => {
   });
 
   it("rejects invalid decision value", async () => {
-    const res = await submitTaskReviewAction("tsk-01", "invalid" as any, "some note");
+    const res = await submitTaskReviewAction("tsk-01", "invalid" as unknown as Parameters<typeof submitTaskReviewAction>[1], "some note");
     expect(res.success).toBe(false);
     expect(res.message).toContain("tidak valid");
   });
@@ -120,7 +120,7 @@ describe("TRC-22 — Task reviewer", () => {
 });
 
 // ── TRC-23: mention parser + assignable member scope ────────────────────────
-import { parseMentionUsernames } from "@/modules/operations/actions";
+import { parseMentionUsernames } from "@/modules/operations/mentions";
 import { addTaskCommentAction } from "@/modules/operations/actions";
 import { getAssignableMembersAction } from "@/modules/tasks/actions";
 

@@ -6,6 +6,7 @@ import { useIdentity } from "@/components/auth/identity-context";
 import { UnauthorizedState } from "@/components/ui/unauthorized-state";
 import { LoadingSpinner } from "@/components/ui/loading-spinner";
 import { Illustration } from "@/components/ui/illustration";
+import { Modal } from "@/components/ui/modal";
 import {
   getEventsAction,
   getAdminAnnouncementsAction,
@@ -46,6 +47,7 @@ export default function AdminJadwalPage() {
   const events: ScheduleEventItem[] = eventsQuery.data ?? [];
   const announcements: AnnouncementItem[] = announcementsQuery.data ?? [];
   const isLoadingData = eventsQuery.isLoading || announcementsQuery.isLoading;
+  const loadError = eventsQuery.error || announcementsQuery.error;
   const [feedbackNotice, setFeedbackNotice] = React.useState<{
     type: "success" | "error";
     message: string;
@@ -333,7 +335,23 @@ export default function AdminJadwalPage() {
       </div>
 
       {/* Content Area */}
-      {isLoadingData ? (
+      {loadError ? (
+        <div role="alert" className="flex flex-col items-center justify-center p-12 bg-card rounded-xl border border-error/30 text-center">
+          <span className="material-symbols-outlined text-[40px] text-error">error</span>
+          <h3 className="font-headline-sm text-base font-semibold text-on-surface mt-2">Data Jadwal Gagal Dimuat</h3>
+          <p className="font-body-sm text-xs text-muted-foreground mt-1 max-w-md">
+            Sistem tidak dapat memuat agenda/pengumuman. Ini bukan berarti data kosong. Silakan coba lagi.
+          </p>
+          <button
+            type="button"
+            onClick={() => { eventsQuery.refresh(); announcementsQuery.refresh(); }}
+            className="mt-4 inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-primary text-on-primary font-label-md text-xs shadow-xs"
+          >
+            <span className="material-symbols-outlined text-[16px]">refresh</span>
+            Coba Lagi
+          </button>
+        </div>
+      ) : isLoadingData ? (
         <div className="flex flex-col items-center justify-center p-12 bg-card rounded-xl border border-border">
           <LoadingSpinner size="md" />
           <p className="font-body-sm text-xs text-muted-foreground mt-2">Memuat data dari database...</p>
@@ -508,8 +526,7 @@ export default function AdminJadwalPage() {
 
       {/* Modal: Tambah Agenda Baru */}
       {isEventModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-xs">
-          <div className="bg-card w-full max-w-lg rounded-2xl p-6 shadow-xl border border-border space-y-4 animate-in fade-in zoom-in-95 duration-150">
+        <Modal isOpen onClose={() => setIsEventModalOpen(false)} title="Tambah Agenda Kegiatan Baru" backdropClassName="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-xs" className="bg-card w-full max-w-lg rounded-2xl p-6 shadow-xl border border-border space-y-4 animate-in fade-in zoom-in-95 duration-150">
             <div className="flex items-center justify-between pb-3 border-b border-border">
               <div className="flex items-center gap-2">
                 <span className="material-symbols-outlined text-primary text-[24px]">event</span>
@@ -527,10 +544,11 @@ export default function AdminJadwalPage() {
 
             <form onSubmit={handleCreateEvent} className="space-y-3.5">
               <div className="space-y-1">
-                <label className="font-label-sm text-xs text-on-surface font-medium">
+                <label htmlFor="event-title" className="font-label-sm text-xs text-on-surface font-medium">
                   Judul Agenda <span className="text-error">*</span>
                 </label>
                 <input
+                  id="event-title"
                   type="text"
                   required
                   value={eventForm.title}
@@ -542,10 +560,11 @@ export default function AdminJadwalPage() {
 
               <div className="grid grid-cols-2 gap-3">
                 <div className="space-y-1">
-                  <label className="font-label-sm text-xs text-on-surface font-medium">
+                  <label htmlFor="event-category" className="font-label-sm text-xs text-on-surface font-medium">
                     Kategori Agenda
                   </label>
                   <select
+                    id="event-category"
                     value={eventForm.category}
                     onChange={(e) =>
                       setEventForm({
@@ -563,10 +582,11 @@ export default function AdminJadwalPage() {
                 </div>
 
                 <div className="space-y-1">
-                  <label className="font-label-sm text-xs text-on-surface font-medium">
+                  <label htmlFor="event-location" className="font-label-sm text-xs text-on-surface font-medium">
                     Lokasi Kegiatan <span className="text-error">*</span>
                   </label>
                   <input
+                    id="event-location"
                     type="text"
                     required
                     value={eventForm.location}
@@ -579,10 +599,11 @@ export default function AdminJadwalPage() {
 
               <div className="grid grid-cols-2 gap-3">
                 <div className="space-y-1">
-                  <label className="font-label-sm text-xs text-on-surface font-medium">
+                  <label htmlFor="event-starts" className="font-label-sm text-xs text-on-surface font-medium">
                     Waktu Mulai <span className="text-error">*</span>
                   </label>
                   <input
+                    id="event-starts"
                     type="datetime-local"
                     required
                     value={eventForm.startsAt}
@@ -592,10 +613,11 @@ export default function AdminJadwalPage() {
                 </div>
 
                 <div className="space-y-1">
-                  <label className="font-label-sm text-xs text-on-surface font-medium">
+                  <label htmlFor="event-ends" className="font-label-sm text-xs text-on-surface font-medium">
                     Waktu Selesai <span className="text-error">*</span>
                   </label>
                   <input
+                    id="event-ends"
                     type="datetime-local"
                     required
                     value={eventForm.endsAt}
@@ -606,10 +628,11 @@ export default function AdminJadwalPage() {
               </div>
 
               <div className="space-y-1">
-                <label className="font-label-sm text-xs text-on-surface font-medium">
+                <label htmlFor="event-description" className="font-label-sm text-xs text-on-surface font-medium">
                   Deskripsi / Catatan Tambahan (Opsional)
                 </label>
                 <textarea
+                  id="event-description"
                   rows={2}
                   value={eventForm.description}
                   onChange={(e) => setEventForm({ ...eventForm, description: e.target.value })}
@@ -619,10 +642,11 @@ export default function AdminJadwalPage() {
               </div>
 
               <div className="space-y-1">
-                <label className="font-label-sm text-xs text-on-surface font-medium">
+                <label htmlFor="event-audience" className="font-label-sm text-xs text-on-surface font-medium">
                   Sasaran Peserta (granular)
                 </label>
                 <select
+                  id="event-audience"
                   value={eventForm.audienceScope}
                   onChange={(e) => setEventForm({ ...eventForm, audienceScope: e.target.value as typeof eventForm.audienceScope })}
                   className="w-full h-10 px-2 rounded-lg bg-surface-container-low text-on-surface text-sm border border-border focus:ring-2 focus:ring-primary focus:outline-none"
@@ -636,16 +660,16 @@ export default function AdminJadwalPage() {
 
               <div className="grid grid-cols-2 gap-3">
                 <div className="space-y-1">
-                  <label className="font-label-sm text-xs text-on-surface font-medium">Pengulangan</label>
-                  <select value={eventForm.recurrenceRule} onChange={(e) => setEventForm({ ...eventForm, recurrenceRule: e.target.value as typeof eventForm.recurrenceRule })} className="w-full h-10 px-2 rounded-lg bg-surface-container-low text-on-surface text-sm border border-border focus:ring-2 focus:ring-primary focus:outline-none">
+                  <label htmlFor="event-recurrence" className="font-label-sm text-xs text-on-surface font-medium">Pengulangan</label>
+                  <select id="event-recurrence" value={eventForm.recurrenceRule} onChange={(e) => setEventForm({ ...eventForm, recurrenceRule: e.target.value as typeof eventForm.recurrenceRule })} className="w-full h-10 px-2 rounded-lg bg-surface-container-low text-on-surface text-sm border border-border focus:ring-2 focus:ring-primary focus:outline-none">
                     <option value="none">Tidak berulang</option>
                     <option value="daily">Setiap hari</option>
                     <option value="weekly">Setiap minggu</option>
                   </select>
                 </div>
                 <div className="space-y-1">
-                  <label className="font-label-sm text-xs text-on-surface font-medium">Berulang sampai</label>
-                  <input type="datetime-local" value={eventForm.recurrenceUntil} onChange={(e) => setEventForm({ ...eventForm, recurrenceUntil: e.target.value })} disabled={eventForm.recurrenceRule === "none"} className="w-full h-10 px-2 rounded-lg bg-surface-container-low text-on-surface text-xs border border-border focus:ring-2 focus:ring-primary focus:outline-none disabled:opacity-50" />
+                  <label htmlFor="event-recurrence-until" className="font-label-sm text-xs text-on-surface font-medium">Berulang sampai</label>
+                  <input id="event-recurrence-until" type="datetime-local" value={eventForm.recurrenceUntil} onChange={(e) => setEventForm({ ...eventForm, recurrenceUntil: e.target.value })} disabled={eventForm.recurrenceRule === "none"} className="w-full h-10 px-2 rounded-lg bg-surface-container-low text-on-surface text-xs border border-border focus:ring-2 focus:ring-primary focus:outline-none disabled:opacity-50" />
                 </div>
               </div>
 
@@ -667,14 +691,12 @@ export default function AdminJadwalPage() {
                 </button>
               </div>
             </form>
-          </div>
-        </div>
+        </Modal>
       )}
 
       {/* Modal: Buat Pengumuman Baru */}
       {isAnnouncementModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-xs">
-          <div className="bg-card w-full max-w-lg rounded-2xl p-6 shadow-xl border border-border space-y-4 animate-in fade-in zoom-in-95 duration-150">
+        <Modal isOpen onClose={() => setIsAnnouncementModalOpen(false)} title="Siarkan Pengumuman Baru" backdropClassName="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-xs" className="bg-card w-full max-w-lg rounded-2xl p-6 shadow-xl border border-border space-y-4 animate-in fade-in zoom-in-95 duration-150">
             <div className="flex items-center justify-between pb-3 border-b border-border">
               <div className="flex items-center gap-2">
                 <span className="material-symbols-outlined text-primary text-[24px]">campaign</span>
@@ -692,10 +714,11 @@ export default function AdminJadwalPage() {
 
             <form onSubmit={handleCreateAnnouncement} className="space-y-3.5">
               <div className="space-y-1">
-                <label className="font-label-sm text-xs text-on-surface font-medium">
+                <label htmlFor="ann-title" className="font-label-sm text-xs text-on-surface font-medium">
                   Judul Pengumuman <span className="text-error">*</span>
                 </label>
                 <input
+                  id="ann-title"
                   type="text"
                   required
                   value={announcementForm.title}
@@ -709,10 +732,11 @@ export default function AdminJadwalPage() {
 
               <div className="grid grid-cols-2 gap-3">
                 <div className="space-y-1">
-                  <label className="font-label-sm text-xs text-on-surface font-medium">
+                  <label htmlFor="ann-priority" className="font-label-sm text-xs text-on-surface font-medium">
                     Prioritas Siaran
                   </label>
                   <select
+                    id="ann-priority"
                     value={announcementForm.priority}
                     onChange={(e) =>
                       setAnnouncementForm({
@@ -728,10 +752,11 @@ export default function AdminJadwalPage() {
                 </div>
 
                 <div className="space-y-1">
-                  <label className="font-label-sm text-xs text-on-surface font-medium">
+                  <label htmlFor="ann-target-label" className="font-label-sm text-xs text-on-surface font-medium">
                     Target Audiens
                   </label>
                   <input
+                    id="ann-target-label"
                     type="text"
                     value={announcementForm.targetAudienceLabel}
                     onChange={(e) =>
@@ -747,10 +772,11 @@ export default function AdminJadwalPage() {
               </div>
 
               <div className="space-y-1">
-                <label className="font-label-sm text-xs text-on-surface font-medium">
+                <label htmlFor="ann-audience" className="font-label-sm text-xs text-on-surface font-medium">
                   Target Audiens Granular
                 </label>
                 <select
+                  id="ann-audience"
                   value={announcementForm.audienceScope}
                   onChange={(e) => setAnnouncementForm({ ...announcementForm, audienceScope: e.target.value as typeof announcementForm.audienceScope })}
                   className="w-full h-10 px-2 rounded-lg bg-surface-container-low text-on-surface text-sm border border-border focus:ring-2 focus:ring-primary focus:outline-none"
@@ -764,27 +790,28 @@ export default function AdminJadwalPage() {
 
               <div className="grid grid-cols-2 gap-3">
                 <div className="space-y-1">
-                  <label className="font-label-sm text-xs text-on-surface font-medium">Workflow</label>
-                  <select value={announcementForm.status} onChange={(e) => setAnnouncementForm({ ...announcementForm, status: e.target.value as typeof announcementForm.status })} className="w-full h-10 px-2 rounded-lg bg-surface-container-low text-on-surface text-sm border border-border focus:ring-2 focus:ring-primary focus:outline-none">
+                  <label htmlFor="ann-status" className="font-label-sm text-xs text-on-surface font-medium">Workflow</label>
+                  <select id="ann-status" value={announcementForm.status} onChange={(e) => setAnnouncementForm({ ...announcementForm, status: e.target.value as typeof announcementForm.status })} className="w-full h-10 px-2 rounded-lg bg-surface-container-low text-on-surface text-sm border border-border focus:ring-2 focus:ring-primary focus:outline-none">
                     <option value="published">Terbitkan</option>
                     <option value="draft">Simpan sebagai draft</option>
                   </select>
                 </div>
                 <div className="space-y-1">
-                  <label className="font-label-sm text-xs text-on-surface font-medium">Terbit terjadwal (opsional)</label>
-                  <input type="datetime-local" value={announcementForm.scheduledFor} onChange={(e) => setAnnouncementForm({ ...announcementForm, scheduledFor: e.target.value, status: e.target.value ? "draft" : announcementForm.status })} className="w-full h-10 px-2 rounded-lg bg-surface-container-low text-on-surface text-xs border border-border focus:ring-2 focus:ring-primary focus:outline-none" />
+                  <label htmlFor="ann-scheduled" className="font-label-sm text-xs text-on-surface font-medium">Terbit terjadwal (opsional)</label>
+                  <input id="ann-scheduled" type="datetime-local" value={announcementForm.scheduledFor} onChange={(e) => setAnnouncementForm({ ...announcementForm, scheduledFor: e.target.value, status: e.target.value ? "draft" : announcementForm.status })} className="w-full h-10 px-2 rounded-lg bg-surface-container-low text-on-surface text-xs border border-border focus:ring-2 focus:ring-primary focus:outline-none" />
                 </div>
               </div>
               <div className="space-y-1">
-                <label className="font-label-sm text-xs text-on-surface font-medium">Kedaluwarsa (opsional)</label>
-                <input type="datetime-local" value={announcementForm.expiresAt} onChange={(e) => setAnnouncementForm({ ...announcementForm, expiresAt: e.target.value })} className="w-full h-10 px-2 rounded-lg bg-surface-container-low text-on-surface text-xs border border-border focus:ring-2 focus:ring-primary focus:outline-none" />
+                <label htmlFor="ann-expires" className="font-label-sm text-xs text-on-surface font-medium">Kedaluwarsa (opsional)</label>
+                <input id="ann-expires" type="datetime-local" value={announcementForm.expiresAt} onChange={(e) => setAnnouncementForm({ ...announcementForm, expiresAt: e.target.value })} className="w-full h-10 px-2 rounded-lg bg-surface-container-low text-on-surface text-xs border border-border focus:ring-2 focus:ring-primary focus:outline-none" />
               </div>
 
               <div className="space-y-1">
-                <label className="font-label-sm text-xs text-on-surface font-medium">
+                <label htmlFor="ann-body" className="font-label-sm text-xs text-on-surface font-medium">
                   Isi Pesan Pengumuman <span className="text-error">*</span>
                 </label>
                 <textarea
+                  id="ann-body"
                   required
                   rows={4}
                   value={announcementForm.bodyMarkdown}
@@ -817,8 +844,7 @@ export default function AdminJadwalPage() {
                 </button>
               </div>
             </form>
-          </div>
-        </div>
+        </Modal>
       )}
     </div>
   );

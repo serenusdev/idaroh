@@ -26,10 +26,15 @@ export function TaskDiscussion({ taskId }: { taskId: string }) {
     event.preventDefault();
     if (!body.trim()) return;
     setLoading(true);
-    const result = await addTaskCommentAction(taskId, body, []);
-    setFeedback(result.message);
-    if (result.success) { setBody(""); await load(); }
-    setLoading(false);
+    try {
+      const result = await addTaskCommentAction(taskId, body, []);
+      setFeedback(result.message);
+      if (result.success) { setBody(""); await load(); }
+    } catch {
+      setFeedback("Komentar belum dapat dikirim. Silakan coba lagi.");
+    } finally {
+      setLoading(false);
+    }
   };
 
   const upload = async (event: React.ChangeEvent<HTMLInputElement>) => {
@@ -39,20 +44,30 @@ export function TaskDiscussion({ taskId }: { taskId: string }) {
     form.set("taskId", taskId);
     form.set("file", file);
     setLoading(true);
-    const result = await uploadTaskAttachmentAction(form);
-    setFeedback(result.message);
-    if (result.success) await load();
-    setLoading(false);
-    event.target.value = "";
+    try {
+      const result = await uploadTaskAttachmentAction(form);
+      setFeedback(result.message);
+      if (result.success) await load();
+    } catch {
+      setFeedback("Lampiran belum dapat diunggah. Silakan coba lagi.");
+    } finally {
+      setLoading(false);
+      event.target.value = "";
+    }
   };
 
   const removeAttachment = async (attachment: TaskAttachmentItem) => {
     if (!window.confirm(`Hapus lampiran "${attachment.fileName}"?`)) return;
     setLoading(true);
-    const result = await deleteTaskAttachmentAction(attachment.id);
-    setFeedback(result.message);
-    if (result.success) await load();
-    setLoading(false);
+    try {
+      const result = await deleteTaskAttachmentAction(attachment.id);
+      setFeedback(result.message);
+      if (result.success) await load();
+    } catch {
+      setFeedback("Lampiran belum dapat dihapus. Silakan coba lagi.");
+    } finally {
+      setLoading(false);
+    }
   };
 
   return (

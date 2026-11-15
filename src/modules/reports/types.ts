@@ -62,6 +62,31 @@ export interface DailyReport {
   isBeingInspected?: boolean;
 }
 
+export interface MyReportHistoryEntry {
+  id: string;
+  reportDate: string;
+  submissionStatus: SubmissionStatus;
+  reviewStatus: ReviewStatus;
+  isLate: boolean;
+  firstSubmittedAt: string | null;
+  items: ReportItem[];
+  latestReview: {
+    decision: ReviewDecision;
+    notes: string;
+    decidedAt: string;
+  } | null;
+}
+
+export interface MyReportHistoryOptions {
+  before?: string | null; // Exclusive report_date cursor (YYYY-MM-DD).
+  limit?: number;
+}
+
+export interface MyReportHistoryPage {
+  reports: MyReportHistoryEntry[];
+  nextCursor: string | null;
+}
+
 export interface ReportQueueFilterCounts {
   pending: number;
   revision: number;

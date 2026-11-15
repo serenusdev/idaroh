@@ -4,6 +4,8 @@ import * as React from "react";
 import Link from "next/link";
 import { UnauthorizedState } from "@/components/ui/unauthorized-state";
 import { Illustration } from "@/components/ui/illustration";
+import { ConfirmDialog } from "@/components/ui/confirm-dialog";
+import { Modal } from "@/components/ui/modal";
 import { useIdentity } from "@/components/auth/identity-context";
 import {
   getAccountRequestsAction,
@@ -33,6 +35,8 @@ export default function AdminUsersPage() {
   const [isRejectModalOpen, setIsRejectModalOpen] = React.useState(false);
   const [rejectionTargetId, setRejectionTargetId] = React.useState<string | null>(null);
   const [rejectionReason, setRejectionReason] = React.useState("");
+  const [rejectError, setRejectError] = React.useState<string | null>(null);
+  const [isRejecting, setIsRejecting] = React.useState(false);
 
   // Admin edit user modal state
   const [editUserTarget, setEditUserTarget] = React.useState<ActiveUserItem | null>(null);
@@ -45,6 +49,11 @@ export default function AdminUsersPage() {
   });
   const [editUserMsg, setEditUserMsg] = React.useState<{ type: "success" | "error"; text: string } | null>(null);
   const [isEditingUser, setIsEditingUser] = React.useState(false);
+  // Confirm dialog for destructive actions (UX-04)
+  const [adminConfirmDialog, setAdminConfirmDialog] = React.useState<{
+    isOpen: boolean; title: string; description?: string; onConfirm: () => void;
+  }>({ isOpen: false, title: "", onConfirm: () => {} });
+  const [adminToast, setAdminToast] = React.useState<{ type: "success" | "error"; text: string } | null>(null);
 
   // Dynamic Data
   const requestsQuery = useCachedData("admin:account-requests", getAccountRequestsAction);
@@ -172,37 +181,67 @@ export default function AdminUsersPage() {
   const openRejectDialog = (cardId: string) => {
     setRejectionTargetId(cardId);
     setRejectionReason("");
+    setRejectError(null);
     setIsRejectModalOpen(true);
   };
 
   const handleConfirmReject = async () => {
-    if (!rejectionTargetId) return;
-    const res = await rejectAccountApplicationAction(
-      rejectionTargetId,
-      rejectionReason || "Persyaratan belum terpenuhi."
-    );
-    if (res.success) {
-      setRejectedCards((prev) => ({ ...prev, [rejectionTargetId]: rejectionReason || "Ditolak" }));
-      reload();
+    if (!rejectionTargetId || isRejecting) return;
+    const reason = rejectionReason.trim();
+    if (!reason) {
+      setRejectError("Alasan penolakan wajib diisi sebelum menolak permohonan.");
+      return;
     }
-    setIsRejectModalOpen(false);
+    setIsRejecting(true);
+    setRejectError(null);
+    try {
+      const res = await rejectAccountApplicationAction(rejectionTargetId, reason);
+      if (res.success) {
+        setRejectedCards((prev) => ({ ...prev, [rejectionTargetId]: reason }));
+        reload();
+        setIsRejectModalOpen(false);
+      } else {
+        setRejectError(res.message || "Gagal menolak permohonan. Silakan coba lagi.");
+      }
+    } catch {
+      setRejectError("Terjadi kesalahan saat menolak permohonan. Silakan coba lagi.");
+    } finally {
+      setIsRejecting(false);
+    }
   };
 
-  const handleResetSession = async (userId: string) => {
-    const res = await resetUserSessionAction(userId);
-    if (res.success) {
-      setResetSessions((prev) => ({ ...prev, [userId]: true }));
-    }
+  const handleResetSession = (userId: string) => {
+    setAdminConfirmDialog({
+      isOpen: true,
+      title: "Cabut semua sesi & perangkat pengguna ini?",
+      description: "Pengguna akan keluar dari semua perangkat dan harus masuk kembali. Tindakan ini tidak dapat dibatalkan.",
+      onConfirm: async () => {
+        setAdminConfirmDialog((prev) => ({ ...prev, isOpen: false }));
+        const res = await resetUserSessionAction(userId);
+        if (res.success) {
+          setResetSessions((prev) => ({ ...prev, [userId]: true }));
+        } else {
+          setAdminToast({ type: "error", text: res.message });
+        }
+      },
+    });
   };
 
-  const handleRevokeDevice = async (userId: string, deviceId: string) => {
-    if (!window.confirm("Cabut akses push dari perangkat ini?")) return;
-    const res = await revokeDeviceTokenAction(deviceId);
-    if (res.success) {
-      setRevokedDevices((prev) => ({ ...prev, [deviceId]: true }));
-      setActiveUsers((prev) => prev.map((user) => user.id === userId ? { ...user, devices: user.devices.filter((device) => device.id !== deviceId), devicesCount: Math.max(0, user.devicesCount - 1), deviceInfo: user.devices.length > 1 ? `${user.devices.length - 1} Perangkat Aktif` : "Belum ada perangkat terhubung" } : user));
-    }
-    if (!res.success) console.error(res.message);
+  const handleRevokeDevice = (userId: string, deviceId: string) => {
+    setAdminConfirmDialog({
+      isOpen: true,
+      title: "Cabut akses push dari perangkat ini?",
+      description: "Perangkat tidak akan lagi menerima notifikasi push. Tindakan ini tidak dapat dibatalkan.",
+      onConfirm: async () => {
+        setAdminConfirmDialog((prev) => ({ ...prev, isOpen: false }));
+        const res = await revokeDeviceTokenAction(deviceId);
+        if (res.success) {
+          setRevokedDevices((prev) => ({ ...prev, [deviceId]: true }));
+          setActiveUsers((prev) => prev.map((user) => user.id === userId ? { ...user, devices: user.devices.filter((device) => device.id !== deviceId), devicesCount: Math.max(0, user.devicesCount - 1), deviceInfo: user.devices.length > 1 ? `${user.devices.length - 1} Perangkat Aktif` : "Belum ada perangkat terhubung" } : user));
+        }
+        if (!res.success) setAdminToast({ type: "error", text: res.message });
+      },
+    });
   };
 
   const openEditUser = (user: ActiveUserItem) => {
@@ -217,24 +256,51 @@ export default function AdminUsersPage() {
     setEditUserMsg(null);
   };
 
-  const handleSaveEditUser = async (e: React.FormEvent) => {
-    e.preventDefault();
+  const performSaveEditUser = async () => {
     if (!editUserTarget) return;
     setIsEditingUser(true);
     setEditUserMsg(null);
-    const res = await adminUpdateUserAction(editUserTarget.id, {
-      fullName: editUserForm.fullName,
-      phoneNumber: editUserForm.phoneNumber,
-      status: editUserForm.status,
-      teamName: editUserForm.teamName,
-      memberType: editUserForm.memberType,
-    });
-    setEditUserMsg({ type: res.success ? "success" : "error", text: res.message });
-    if (res.success) {
-      reload();
-      setTimeout(() => setEditUserTarget(null), 1200);
+    try {
+      const res = await adminUpdateUserAction(editUserTarget.id, {
+        fullName: editUserForm.fullName,
+        phoneNumber: editUserForm.phoneNumber,
+        status: editUserForm.status,
+        teamName: editUserForm.teamName,
+        memberType: editUserForm.memberType,
+      });
+      setEditUserMsg({ type: res.success ? "success" : "error", text: res.message });
+      if (res.success) {
+        reload();
+        setTimeout(() => setEditUserTarget(null), 1200);
+      }
+    } catch {
+      setEditUserMsg({ type: "error", text: "Gagal menyimpan perubahan. Silakan coba lagi." });
+    } finally {
+      setIsEditingUser(false);
     }
-    setIsEditingUser(false);
+  };
+
+  const handleSaveEditUser = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editUserTarget) return;
+    const nextStatus = editUserForm.status;
+    const isDestructive =
+      (nextStatus === "suspended" || nextStatus === "deactivated") &&
+      nextStatus !== editUserTarget.status;
+    if (isDestructive) {
+      const actionLabel = nextStatus === "suspended" ? "menangguhkan" : "menonaktifkan permanen";
+      setAdminConfirmDialog({
+        isOpen: true,
+        title: `Konfirmasi ${actionLabel} akun?`,
+        description: `Akun ${editUserTarget.fullName} akan kehilangan akses setelah status diubah. Perubahan ini tercatat pada audit log.`,
+        onConfirm: () => {
+          setAdminConfirmDialog((prev) => ({ ...prev, isOpen: false }));
+          void performSaveEditUser();
+        },
+      });
+      return;
+    }
+    void performSaveEditUser();
   };
 
   const handleCreateManual = async (e: React.FormEvent) => {
@@ -489,15 +555,21 @@ export default function AdminUsersPage() {
                     {/* Detail Box Metadata */}
                     <div className="rounded-lg bg-surface-container-low p-2.5 flex flex-col gap-1.5 border border-border/40">
                       <div className="flex items-center justify-between font-label-sm text-label-sm">
-                        <span className="text-muted-foreground">Klaim Peran Awal:</span>
+                        <span className="text-muted-foreground">Klaim Kategori:</span>
                         <span className="text-on-surface font-semibold capitalize">
-                          {applicant.roleRequested} ({applicant.teamRequested})
+                          {applicant.claimedMemberType ?? "Belum tercatat"} ({applicant.teamRequested})
                         </span>
                       </div>
                       <div className="flex items-center justify-between font-mono text-[12px]">
                         <span className="text-muted-foreground">Waktu Pengajuan:</span>
                         <span className="text-on-surface-variant">{applicant.createdAt}</span>
                       </div>
+                      <p className="text-xs text-muted-foreground">Kategori tidak menentukan peran. Tetapkan hak akses secara terpisah di bawah.</p>
+                      <p className="text-xs text-muted-foreground">
+                        Persetujuan privasi: {applicant.privacyConsentVersion && applicant.privacyConsentAt
+                          ? `versi ${applicant.privacyConsentVersion} · ${new Date(applicant.privacyConsentAt).toLocaleString("id-ID", { timeZone: "Asia/Jakarta" })} WIB`
+                          : "Belum tercatat (pengajuan lama atau impor)."}
+                      </p>
                       {applicant.notes && applicant.notes !== "-" && (
                         <div className="pt-1 mt-0.5">
                           <p className="font-body-sm text-[13px] text-on-surface-variant italic bg-card/60 p-2 rounded">
@@ -856,26 +928,35 @@ export default function AdminUsersPage() {
 
       {/* MODAL 1: Jalur B Manual Account Creation */}
       {isImportModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm">
-          <div className="bg-card w-full max-w-xl rounded-2xl border border-border shadow-2xl p-5 sm:p-6 space-y-4">
+        <Modal
+          isOpen
+          onClose={() => setIsImportModalOpen(false)}
+          title="Impor anggota dari CSV"
+          backdropClassName="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm"
+          className="bg-card w-full max-w-xl rounded-2xl border border-border shadow-2xl p-5 sm:p-6 space-y-4"
+        >
             <div className="flex items-start justify-between pb-3 border-b border-border">
               <div><h3 className="font-headline-sm text-headline-sm text-on-surface">Impor anggota dari CSV</h3><p className="text-xs text-muted-foreground mt-1">Baris yang lolos validasi masuk ke antrean persetujuan akun; tidak langsung aktif.</p></div>
               <button type="button" onClick={() => setIsImportModalOpen(false)} className="w-8 h-8 rounded-full flex items-center justify-center text-muted-foreground hover:bg-muted"><span className="material-symbols-outlined text-[18px]">close</span></button>
             </div>
             <form onSubmit={handleImportMembers} className="space-y-3">
-              <input type="file" accept=".csv,text/csv" onChange={(e) => { const file = e.target.files?.[0]; if (!file) return; setImportFileName(file.name); const reader = new FileReader(); reader.onload = () => setImportCsv(String(reader.result || "")); reader.readAsText(file); }} className="w-full text-xs text-muted-foreground" />
-              <textarea value={importCsv} onChange={(e) => setImportCsv(e.target.value)} rows={8} placeholder={'full_name,email,phone_number,member_type,team_name\nAhmad,ahmad@example.com,0812...,santri,Sentra Digitalpreneur'} className="w-full rounded-xl border border-border bg-surface-container-low p-3 font-mono text-xs focus:outline-none focus:ring-2 focus:ring-primary" required />
+              <input type="file" accept=".csv,text/csv" aria-label="Berkas CSV anggota" onChange={(e) => { const file = e.target.files?.[0]; if (!file) return; setImportFileName(file.name); const reader = new FileReader(); reader.onload = () => setImportCsv(String(reader.result || "")); reader.readAsText(file); }} className="w-full text-xs text-muted-foreground" />
+              <textarea value={importCsv} aria-label="Isi CSV anggota" onChange={(e) => setImportCsv(e.target.value)} rows={8} placeholder={'full_name,email,phone_number,member_type,team_name\nAhmad,ahmad@example.com,0812...,santri,Sentra Digitalpreneur'} className="w-full rounded-xl border border-border bg-surface-container-low p-3 font-mono text-xs focus:outline-none focus:ring-2 focus:ring-primary" required />
               <p className="text-[11px] text-muted-foreground">Kolom wajib: <code>full_name</code>, <code>email</code>. Kolom tambahan: <code>phone_number</code>, <code>member_type</code>, <code>team_name</code>, <code>attendance_required</code>, <code>report_required</code>.</p>
               {importFeedback && <div className="rounded-lg bg-surface-container-low p-3 text-xs text-on-surface" aria-live="polite">{importFeedback}</div>}
               <div className="flex justify-end gap-2 pt-2 border-t border-border"><button type="button" onClick={() => setIsImportModalOpen(false)} className="px-4 py-2 rounded-lg text-xs text-muted-foreground hover:bg-muted">Batal</button><button type="submit" disabled={isImporting} className="px-4 py-2 rounded-lg bg-primary text-on-primary text-xs font-semibold disabled:opacity-50">{isImporting ? "Memproses…" : "Validasi & Impor"}</button></div>
             </form>
-          </div>
-        </div>
+        </Modal>
       )}
 
       {isManualModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm animate-in fade-in duration-200">
-          <div className="bg-card w-full max-w-lg rounded-2xl border border-border shadow-2xl p-5 sm:p-6 space-y-4">
+        <Modal
+          isOpen
+          onClose={() => setIsManualModalOpen(false)}
+          title="Buat Akun Santri (Jalur B Admin)"
+          backdropClassName="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm animate-in fade-in duration-200"
+          className="bg-card w-full max-w-lg rounded-2xl border border-border shadow-2xl p-5 sm:p-6 space-y-4"
+        >
             <div className="flex items-center justify-between pb-3 border-b border-border">
               <div className="flex items-center gap-2">
                 <span className="material-symbols-outlined text-primary text-[24px]">person_add</span>
@@ -899,10 +980,11 @@ export default function AdminUsersPage() {
             ) : (
               <form onSubmit={handleCreateManual} className="space-y-3.5">
                 <div>
-                  <label className="font-label-sm text-label-sm text-on-surface font-semibold block mb-1">
+                  <label htmlFor="manual-full-name" className="font-label-sm text-label-sm text-on-surface font-semibold block mb-1">
                     Nama Lengkap
                   </label>
                   <input
+                    id="manual-full-name"
                     required
                     type="text"
                     placeholder="Contoh: Bilal bin Rabah"
@@ -913,10 +995,11 @@ export default function AdminUsersPage() {
                 </div>
 
                 <div>
-                  <label className="font-label-sm text-label-sm text-on-surface font-semibold block mb-1">
+                  <label htmlFor="manual-email" className="font-label-sm text-label-sm text-on-surface font-semibold block mb-1">
                     Alamat Email (atau sintetis santri)
                   </label>
                   <input
+                    id="manual-email"
                     required
                     type="email"
                     placeholder="nama@pondok.id"
@@ -927,10 +1010,11 @@ export default function AdminUsersPage() {
                 </div>
 
                 <div>
-                  <label className="font-label-sm text-label-sm text-on-surface font-semibold block mb-1">
+                  <label htmlFor="manual-phone" className="font-label-sm text-label-sm text-on-surface font-semibold block mb-1">
                     Nomor WhatsApp
                   </label>
                   <input
+                    id="manual-phone"
                     required
                     type="tel"
                     placeholder="08123456789"
@@ -941,10 +1025,11 @@ export default function AdminUsersPage() {
                 </div>
 
                 <div>
-                  <label className="font-label-sm text-label-sm text-on-surface font-semibold block mb-1">
+                  <label htmlFor="manual-team" className="font-label-sm text-label-sm text-on-surface font-semibold block mb-1">
                     Penugasan Sentra
                   </label>
                   <select
+                    id="manual-team"
                     className="w-full h-11 px-3 rounded-xl bg-surface-container border border-border text-[15px] focus:outline-none focus:ring-2 focus:ring-primary"
                     value={manualForm.teamName}
                     onChange={(e) => setManualForm({ ...manualForm, teamName: e.target.value })}
@@ -972,14 +1057,18 @@ export default function AdminUsersPage() {
                 </div>
               </form>
             )}
-          </div>
-        </div>
+        </Modal>
       )}
 
       {/* MODAL 2: Rejection Reason Confirmation */}
       {isRejectModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm animate-in fade-in duration-200">
-          <div className="bg-card w-full max-w-md rounded-2xl border border-border shadow-2xl p-5 space-y-3.5">
+        <Modal
+          isOpen
+          onClose={() => setIsRejectModalOpen(false)}
+          title="Tolak Permohonan Akun"
+          backdropClassName="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm animate-in fade-in duration-200"
+          className="bg-card w-full max-w-md rounded-2xl border border-border shadow-2xl p-5 space-y-3.5"
+        >
             <div className="flex items-center gap-2 text-destructive">
               <span className="material-symbols-outlined text-[24px]">warning</span>
               <h3 className="font-headline-sm text-headline-sm text-on-surface">
@@ -991,42 +1080,56 @@ export default function AdminUsersPage() {
             </p>
 
             <div>
-              <label className="font-label-sm text-label-sm text-on-surface font-semibold block mb-1">
+              <label htmlFor="rejection-reason" className="font-label-sm text-label-sm text-on-surface font-semibold block mb-1">
                 Alasan Penolakan
               </label>
               <textarea
+                id="rejection-reason"
                 required
                 rows={3}
                 placeholder="Tuliskan alasan penolakan untuk arsip audit..."
                 className="w-full p-3 rounded-xl bg-surface-container border border-border text-[14px] focus:outline-none focus:ring-2 focus:ring-primary"
                 value={rejectionReason}
-                onChange={(e) => setRejectionReason(e.target.value)}
+                onChange={(e) => { setRejectionReason(e.target.value); if (rejectError) setRejectError(null); }}
               />
             </div>
+
+            {rejectError && (
+              <div role="alert" className="rounded-xl border border-error/30 bg-error-container/30 p-3 text-[13px] text-error">
+                {rejectError}
+              </div>
+            )}
 
             <div className="flex gap-2 pt-2">
               <button
                 type="button"
                 onClick={() => setIsRejectModalOpen(false)}
-                className="flex-1 h-11 rounded-xl bg-card border border-border text-on-surface-variant font-label-md"
+                disabled={isRejecting}
+                className="flex-1 h-11 rounded-xl bg-card border border-border text-on-surface-variant font-label-md disabled:opacity-50"
               >
                 Batal
               </button>
               <button
                 type="button"
                 onClick={handleConfirmReject}
-                className="flex-1 h-11 rounded-xl bg-destructive text-white font-label-md shadow-sm"
+                disabled={isRejecting || !rejectionReason.trim()}
+                className="flex-1 h-11 rounded-xl bg-destructive text-white font-label-md shadow-sm disabled:opacity-50 flex items-center justify-center gap-2"
               >
-                Konfirmasi Tolak
+                {isRejecting && <span className="w-4 h-4 border-2 border-current border-t-transparent rounded-full animate-spin" />}
+                {isRejecting ? "Memproses..." : "Konfirmasi Tolak"}
               </button>
             </div>
-          </div>
-        </div>
+        </Modal>
       )}
       {/* MODAL 3: Admin Edit User */}
       {editUserTarget && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm animate-in fade-in duration-200">
-          <div className="bg-card w-full max-w-md rounded-2xl border border-border shadow-2xl p-5 space-y-4">
+        <Modal
+          isOpen
+          onClose={() => setEditUserTarget(null)}
+          title="Edit Profil Pengguna"
+          backdropClassName="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm animate-in fade-in duration-200"
+          className="bg-card w-full max-w-md rounded-2xl border border-border shadow-2xl p-5 space-y-4"
+        >
             <div className="flex items-center justify-between pb-3 border-b border-border">
               <div className="flex items-center gap-2">
                 <span className="material-symbols-outlined text-primary text-[22px]">manage_accounts</span>
@@ -1045,8 +1148,9 @@ export default function AdminUsersPage() {
 
             <form onSubmit={handleSaveEditUser} className="space-y-3.5">
               <div>
-                <label className="font-label-sm text-label-sm text-on-surface font-semibold block mb-1">Nama Lengkap</label>
+                <label htmlFor="edit-full-name" className="font-label-sm text-label-sm text-on-surface font-semibold block mb-1">Nama Lengkap</label>
                 <input
+                  id="edit-full-name"
                   type="text"
                   required
                   value={editUserForm.fullName}
@@ -1055,8 +1159,9 @@ export default function AdminUsersPage() {
                 />
               </div>
               <div>
-                <label className="font-label-sm text-label-sm text-on-surface font-semibold block mb-1">Nomor Telepon</label>
+                <label htmlFor="edit-phone" className="font-label-sm text-label-sm text-on-surface font-semibold block mb-1">Nomor Telepon</label>
                 <input
+                  id="edit-phone"
                   type="tel"
                   value={editUserForm.phoneNumber}
                   onChange={(e) => setEditUserForm({ ...editUserForm, phoneNumber: e.target.value })}
@@ -1065,8 +1170,9 @@ export default function AdminUsersPage() {
                 />
               </div>
               <div>
-                <label className="font-label-sm text-label-sm text-on-surface font-semibold block mb-1">Status Akun</label>
+                <label htmlFor="edit-status" className="font-label-sm text-label-sm text-on-surface font-semibold block mb-1">Status Akun</label>
                 <select
+                  id="edit-status"
                   value={editUserForm.status}
                   onChange={(e) => setEditUserForm({ ...editUserForm, status: e.target.value })}
                   className="w-full h-11 px-3 rounded-xl bg-surface-container border border-border text-[14px] focus:outline-none focus:ring-2 focus:ring-primary"
@@ -1077,8 +1183,9 @@ export default function AdminUsersPage() {
                 </select>
               </div>
               <div>
-                <label className="font-label-sm text-label-sm text-on-surface font-semibold block mb-1">Tim / Sentra</label>
+                <label htmlFor="edit-team" className="font-label-sm text-label-sm text-on-surface font-semibold block mb-1">Tim / Sentra</label>
                 <input
+                  id="edit-team"
                   type="text"
                   value={editUserForm.teamName}
                   onChange={(e) => setEditUserForm({ ...editUserForm, teamName: e.target.value })}
@@ -1086,8 +1193,9 @@ export default function AdminUsersPage() {
                 />
               </div>
               <div>
-                <label className="font-label-sm text-label-sm text-on-surface font-semibold block mb-1">Tipe Anggota</label>
+                <label htmlFor="edit-member-type" className="font-label-sm text-label-sm text-on-surface font-semibold block mb-1">Tipe Anggota</label>
                 <input
+                  id="edit-member-type"
                   type="text"
                   value={editUserForm.memberType}
                   onChange={(e) => setEditUserForm({ ...editUserForm, memberType: e.target.value })}
@@ -1125,9 +1233,38 @@ export default function AdminUsersPage() {
                 </button>
               </div>
             </form>
-          </div>
+        </Modal>
+      )}
+
+      {/* Admin toast notifications (UX-05) */}
+      {adminToast && (
+        <div
+          className={`fixed bottom-24 md:bottom-6 left-1/2 -translate-x-1/2 z-[100] flex items-center gap-3 rounded-xl border px-4 py-3 shadow-lg text-sm font-medium max-w-sm w-full mx-4 ${
+            adminToast.type === "success"
+              ? "bg-card border-success/30 text-success"
+              : "bg-card border-error/30 text-error"
+          }`}
+          role="status"
+        >
+          <span className="material-symbols-outlined text-[20px] shrink-0">
+            {adminToast.type === "success" ? "check_circle" : "error"}
+          </span>
+          <p className="flex-1">{adminToast.text}</p>
+          <button onClick={() => setAdminToast(null)} aria-label="Tutup" className="text-on-surface-variant hover:text-on-surface">
+            <span className="material-symbols-outlined text-[18px]">close</span>
+          </button>
         </div>
       )}
+
+      <ConfirmDialog
+        isOpen={adminConfirmDialog.isOpen}
+        onClose={() => setAdminConfirmDialog((prev) => ({ ...prev, isOpen: false }))}
+        onConfirm={adminConfirmDialog.onConfirm}
+        title={adminConfirmDialog.title}
+        description={adminConfirmDialog.description}
+        confirmLabel="Ya, Lanjutkan"
+        variant="destructive"
+      />
     </div>
   );
 }

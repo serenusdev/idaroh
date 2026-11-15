@@ -12,6 +12,7 @@ import { ManualAccountPayload } from "./types";
 import { sendPushToUsers } from "@/lib/fcm";
 import { enforceRateLimit } from "@/lib/rate-limit";
 import { throwQueryError } from "@/lib/query-error";
+import { friendlyActionError } from "@/lib/action-error";
 import { MEMBER_CATEGORIES, REGISTRATION_PRIVACY_VERSION, type ClaimedMemberType } from "./registration";
 
 const VALID_ROLES = ["super_admin", "yayasan", "pengurus", "koordinator", "santri"] as const;
@@ -171,6 +172,27 @@ export async function submitAccountApplicationAction(payload: {
     return { success: false, message: "Catatan permohonan maksimal 500 karakter." };
   }
 
+  // SEC-11 + TRC-01: Fail-closed Turnstile validation before any external
+  // breach lookup or DB work. If TURNSTILE_SECRET_KEY is not set, reject — do NOT bypass.
+  if (!process.env.VITEST) {
+    const turnstileSecret = process.env.TURNSTILE_SECRET_KEY;
+    if (!turnstileSecret) {
+      return { success: false, message: "Verifikasi keamanan belum dikonfigurasi. Hubungi administrator sistem." };
+    }
+    if (!payload.turnstileToken) {
+      return { success: false, message: "Verifikasi keamanan wajib diselesaikan." };
+    }
+    const verification = await fetch("https://challenges.cloudflare.com/turnstile/v0/siteverify", {
+      method: "POST",
+      headers: { "content-type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({ secret: turnstileSecret, response: payload.turnstileToken }),
+    });
+    const result = (await verification.json()) as { success?: boolean };
+    if (!verification.ok || !result.success) {
+      return { success: false, message: "Verifikasi keamanan gagal. Silakan coba lagi." };
+    }
+  }
+
   // REG-02: Check password against Have I Been Pwned breach database.
   // Graceful: if HIBP is unreachable the check is skipped (fail open).
   if (!process.env.VITEST) {
@@ -190,27 +212,6 @@ export async function submitAccountApplicationAction(payload: {
 
   try {
     const supabase = createAdminClient();
-    // SEC-11 + TRC-01: Fail-closed Turnstile validation.
-    // If TURNSTILE_SECRET_KEY is not set, reject the request — do NOT bypass.
-    // Operator must set the secret AFTER the widget is deployed to production.
-    if (!process.env.VITEST) {
-      const turnstileSecret = process.env.TURNSTILE_SECRET_KEY;
-      if (!turnstileSecret) {
-        return { success: false, message: "Verifikasi keamanan belum dikonfigurasi. Hubungi administrator sistem." };
-      }
-      if (!payload.turnstileToken) {
-        return { success: false, message: "Verifikasi keamanan wajib diselesaikan." };
-      }
-      const verification = await fetch("https://challenges.cloudflare.com/turnstile/v0/siteverify", {
-        method: "POST",
-        headers: { "content-type": "application/x-www-form-urlencoded" },
-        body: new URLSearchParams({ secret: turnstileSecret, response: payload.turnstileToken }),
-      });
-      const result = (await verification.json()) as { success?: boolean };
-      if (!verification.ok || !result.success) {
-        return { success: false, message: "Verifikasi keamanan gagal. Silakan coba lagi." };
-      }
-    }
     if (!process.env.VITEST) {
       const allowed = await enforceRateLimit(
         `register:${payload.email.trim().toLowerCase()}`,
@@ -342,7 +343,7 @@ export async function submitAccountApplicationAction(payload: {
     }
     return {
       success: false,
-      message: err.message || "Gagal mengirimkan pengajuan akun. Silakan coba kembali.",
+      message: friendlyActionError(err, "Gagal mengirimkan pengajuan akun. Silakan coba kembali."),
     };
   }
 }
@@ -569,7 +570,7 @@ export async function approveAccountApplicationAction(
     console.error("Failed to approve account in Supabase:", err);
     return {
       success: false,
-      message: err.message || "Gagal menyetujui akun. Silakan coba kembali.",
+      message: friendlyActionError(err, "Gagal menyetujui akun. Silakan coba kembali."),
     };
   }
 
@@ -639,7 +640,7 @@ export async function rejectAccountApplicationAction(
     console.error("Failed to reject account in Supabase:", err);
     return {
       success: false,
-      message: err.message || "Gagal menolak akun. Silakan coba kembali.",
+      message: friendlyActionError(err, "Gagal menolak akun. Silakan coba kembali."),
     };
   }
 
@@ -851,7 +852,7 @@ export async function revokeDeviceTokenAction(deviceId: string): Promise<ActionR
     return { success: true, message: `Perangkat ${device.device_label || device.platform} berhasil dicabut.` };
   } catch (error: any) {
     console.error("Failed to revoke device token:", error);
-    return { success: false, message: error.message || "Gagal mencabut perangkat." };
+    return { success: false, message: friendlyActionError(error, "Gagal mencabut perangkat.") };
   }
 }
 
@@ -892,7 +893,7 @@ export async function enrollMfaAction(): Promise<ActionResult<{ factorId: string
     if (error || !data || !("totp" in data) || !data.totp) throw error || new Error("Data enrollment MFA tidak tersedia.");
     return { success: true, message: "QR MFA berhasil dibuat. Pindai dengan aplikasi authenticator.", data: { factorId: data.id, qrCode: data.totp.qr_code, secret: data.totp.secret } };
   } catch (err: any) {
-    return { success: false, message: err.message || "Gagal memulai enrollment MFA." };
+    return { success: false, message: friendlyActionError(err, "Gagal memulai enrollment MFA.") };
   }
 }
 
@@ -908,7 +909,7 @@ export async function verifyMfaAction(factorId: string, code: string): Promise<A
     if (error) throw error;
     return { success: true, message: "MFA berhasil diaktifkan pada akun ini." };
   } catch (err: any) {
-    return { success: false, message: err.message || "Kode MFA tidak valid." };
+    return { success: false, message: friendlyActionError(err, "Kode MFA tidak valid.") };
   }
 }
 
@@ -922,7 +923,7 @@ export async function unenrollMfaAction(factorId: string): Promise<ActionResult>
     if (error) throw error;
     return { success: true, message: "Faktor MFA berhasil dicabut." };
   } catch (err: any) {
-    return { success: false, message: err.message || "Gagal mencabut MFA." };
+    return { success: false, message: friendlyActionError(err, "Gagal mencabut MFA.") };
   }
 }
 
@@ -977,7 +978,7 @@ export async function updateProfileAction(payload: {
     return { success: true, message: "Profil berhasil diperbarui." };
   } catch (err: any) {
     console.error("updateProfileAction error:", err);
-    return { success: false, message: err.message || "Gagal memperbarui profil." };
+    return { success: false, message: friendlyActionError(err, "Gagal memperbarui profil.") };
   }
 }
 
@@ -1025,7 +1026,7 @@ export async function uploadAvatarAction(
     };
   } catch (err: any) {
     console.error("uploadAvatarAction error:", err);
-    return { success: false, message: err.message || "Gagal mengunggah foto profil." };
+    return { success: false, message: friendlyActionError(err, "Gagal mengunggah foto profil.") };
   }
 }
 
@@ -1044,7 +1045,7 @@ export async function deleteAvatarAction(storagePath: string): Promise<ActionRes
     return { success: true, message: "Avatar sementara dibersihkan." };
   } catch (err: any) {
     console.error("deleteAvatarAction error:", err);
-    return { success: false, message: err.message || "Gagal membersihkan avatar sementara." };
+    return { success: false, message: friendlyActionError(err, "Gagal membersihkan avatar sementara.") };
   }
 }
 
@@ -1101,7 +1102,7 @@ export async function changePasswordAction(
     return { success: true, message: "Kata sandi berhasil diperbarui." };
   } catch (err: any) {
     console.error("changePasswordAction error:", err);
-    return { success: false, message: err.message || "Gagal memperbarui kata sandi." };
+    return { success: false, message: friendlyActionError(err, "Gagal memperbarui kata sandi.") };
   }
 }
 
@@ -1229,6 +1230,6 @@ export async function adminUpdateUserAction(
     return { success: true, message: "Profil pengguna berhasil diperbarui." };
   } catch (err: any) {
     console.error("adminUpdateUserAction error:", err);
-    return { success: false, message: err.message || "Gagal memperbarui profil pengguna." };
+    return { success: false, message: friendlyActionError(err, "Gagal memperbarui profil pengguna.") };
   }
 }

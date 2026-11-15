@@ -7,6 +7,7 @@ import { hasMinimumRole, requireAuthUser, requireRole } from "@/lib/auth/guards"
 import { INITIAL_PEOPLE_PROFILES, INITIAL_TEAMS } from "./data";
 import { PersonProfile, TeamStructureItem } from "./types";
 import { throwQueryError } from "@/lib/query-error";
+import { maskPhoneNumber } from "./masking";
 
 /**
  * Server Action: Query all people profiles from Supabase
@@ -18,7 +19,7 @@ export async function getPeopleAction(): Promise<PersonProfile[]> {
 
     const { data: profiles, error } = await supabase
       .from("profiles")
-      .select("id, email, full_name, phone_number, avatar_url, status, member_type, team_name, notes, created_at, updated_at, last_seen_at")
+      .select("id, email, full_name, phone_number, avatar_url, status, member_type, team_name, bio, created_at, updated_at, last_seen_at")
       .eq("status", "active")
       .order("created_at", { ascending: true })
       .limit(500);
@@ -88,7 +89,7 @@ export async function getPeopleAction(): Promise<PersonProfile[]> {
 
       return visibleProfiles.map((p: any) => {
         const phone = p.phone_number || "";
-        const phoneMasked = phone ? phone.replace(/(\d{4})\d{4}(\d{2,4})/, "$1-••••-$2") : "-";
+        const phoneMasked = maskPhoneNumber(phone);
         const reviewer = (assignments || []).find((assignment: any) => assignment.reviewee_id === p.id);
         const isCurrentUser = currentUser ? p.id === currentUser.id : false;
         const userMemberships = membershipsByUser.get(p.id) || [];
@@ -121,7 +122,7 @@ export async function getPeopleAction(): Promise<PersonProfile[]> {
             attendanceRequired: dutyByUser.get(p.id)?.attendanceRequired ?? isSantri,
             reportRequired: dutyByUser.get(p.id)?.reportRequired ?? isSantri,
           },
-          bio: p.notes || "",
+          bio: p.bio || "",
           primaryReviewerName: reviewer ? reviewerMap.get(reviewer.reviewer_id) || "" : "",
         };
       });
@@ -342,7 +343,7 @@ export async function revealContactNumberAction(
 
     if (profile.phone_number) {
       const phone = profile.phone_number;
-      const masked = phone.replace(/(\d{4})\d{4}(\d{2,4})/, "$1-••••-$2");
+      const masked = maskPhoneNumber(phone);
 
       if (!isAuthorized) {
         return {
@@ -363,20 +364,10 @@ export async function revealContactNumberAction(
     return { success: false, message: "Gagal mengambil nomor kontak." };
   }
 
-  const targetPerson = INITIAL_PEOPLE_PROFILES.find((p) => p.id === targetUserId);
-
-  if (!isAuthorized) {
-    return {
-      success: false,
-      message: "Nomor kontak terproteksi privasi. Hanya pengurus berwenang atau pemilik akun yang dapat melihat.",
-      phoneNumber: targetPerson?.phoneMasked,
-    };
-  }
-
+  // Nomor kontak tidak ditemukan di database — jangan kembalikan data fixture.
   return {
-    success: true,
-    phoneNumber: targetPerson?.phoneUnmasked,
-    message: "Kontak berhasil ditampilkan.",
+    success: false,
+    message: "Nomor kontak tidak tersedia.",
   };
 }
 
@@ -388,22 +379,44 @@ export async function updatePersonalBioAction(
   bio: string
 ): Promise<{ success: boolean; message: string }> {
   const caller = await requireAuthUser();
+  if (typeof userId !== "string" || userId.length === 0 || userId.length > 100) {
+    return { success: false, message: "ID pengguna tidak valid." };
+  }
   if (caller.id !== userId && !hasMinimumRole(caller, "pengurus")) {
     throw new Error("FORBIDDEN: Anda hanya dapat memperbarui bio akun Anda sendiri.");
   }
+  const cleanBio = typeof bio === "string" ? bio.trim() : "";
+  if (cleanBio.length > 500) {
+    return { success: false, message: "Bio maksimal 500 karakter." };
+  }
+  if (process.env.VITEST) {
+    return { success: true, message: "Bio profil berhasil diperbarui." };
+  }
   try {
     const supabase = createAdminClient();
-    if (userId.length > 30) {
-      const { error } = await supabase.from("profiles").update({ notes: bio }).eq("id", userId);
-      if (error) throw error;
-    }
+    const { error } = await supabase.from("profiles").update({ bio: cleanBio }).eq("id", userId);
+    if (error) throw error;
   } catch (err) {
     console.error("Failed to update personal bio:", err);
     return { success: false, message: "Gagal memperbarui bio profil." };
   }
 
-  return {
-    success: true,
-    message: `Bio profil untuk ${userId} berhasil diperbarui: "${bio.slice(0, 30)}"`,
-  };
+  return { success: true, message: "Bio profil berhasil diperbarui." };
+}
+
+/**
+ * Server Action: Load the caller's own bio (TRC-26, settings/profile).
+ */
+export async function getPersonalBioAction(): Promise<{ success: boolean; bio: string; message?: string }> {
+  const caller = await requireAuthUser();
+  if (process.env.VITEST) return { success: true, bio: "" };
+  try {
+    const supabase = createAdminClient();
+    const { data, error } = await supabase.from("profiles").select("bio").eq("id", caller.id).maybeSingle();
+    if (error) throw error;
+    return { success: true, bio: data?.bio || "" };
+  } catch (err) {
+    console.error("Failed to load personal bio:", err);
+    return { success: false, bio: "", message: "Gagal memuat bio profil." };
+  }
 }

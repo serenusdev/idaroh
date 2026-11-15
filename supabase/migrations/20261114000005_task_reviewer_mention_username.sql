@@ -16,27 +16,31 @@ UPDATE public.profiles
 SET username = lower(regexp_replace(regexp_replace(full_name, '[^A-Za-z0-9 _]', '', 'g'), '\s+', '_', 'g'))
 WHERE username IS NULL;
 
--- Make username unique (deduplicate by appending row number where needed)
--- Step: assign unique usernames to any duplicates by appending _N
+-- Make username unique: rename every row after the first per username,
+-- appending _N and skipping candidates that already exist.
 DO $$
 DECLARE
   r record;
+  candidate text;
   n integer;
 BEGIN
   FOR r IN
-    SELECT username, array_agg(id ORDER BY created_at) AS ids
-    FROM public.profiles
-    WHERE username IS NOT NULL
-    GROUP BY username
-    HAVING count(*) > 1
+    SELECT id, username
+    FROM (
+      SELECT id, username,
+             row_number() OVER (PARTITION BY username ORDER BY created_at, id) AS rn
+      FROM public.profiles
+      WHERE username IS NOT NULL
+    ) ranked
+    WHERE rn > 1
   LOOP
     n := 2;
-    FOREACH r.ids[n:] SLICE 0 IN ARRAY r.ids[2:] LOOP
-      UPDATE public.profiles
-      SET username = r.username || '_' || n
-      WHERE id = r.ids[n];
+    candidate := r.username || '_' || n;
+    WHILE EXISTS (SELECT 1 FROM public.profiles WHERE username = candidate) LOOP
       n := n + 1;
+      candidate := r.username || '_' || n;
     END LOOP;
+    UPDATE public.profiles SET username = candidate WHERE id = r.id;
   END LOOP;
 END $$;
 

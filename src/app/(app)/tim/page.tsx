@@ -2,6 +2,7 @@
 
 import * as React from "react";
 import { Illustration } from "@/components/ui/illustration";
+import { Modal } from "@/components/ui/modal";
 import { PersonProfile, TeamStructureItem } from "@/modules/people/types";
 import {
   revealContactNumberAction,
@@ -253,8 +254,17 @@ export default function TimPage() {
                 teams.map((t) => (
                   <div
                     key={t.id}
+                    role="button"
+                    tabIndex={0}
+                    aria-label={`Buka tab tim ${t.name}`}
                     onClick={() => setActiveTab("tim")}
-                    className="p-3 rounded-xl bg-surface-container-low hover:bg-accent/40 cursor-pointer flex items-center justify-between gap-3 transition-all border border-border/40"
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" || e.key === " ") {
+                        e.preventDefault();
+                        setActiveTab("tim");
+                      }
+                    }}
+                    className="p-3 rounded-xl bg-surface-container-low hover:bg-accent/40 cursor-pointer flex items-center justify-between gap-3 transition-all border border-border/40 focus-visible:outline-2 focus-visible:outline-primary"
                   >
                     <div className="flex items-center gap-2.5 min-w-0">
                       <div className="w-9 h-9 rounded-lg bg-surface text-primary flex items-center justify-center shrink-0 border border-border/40">
@@ -592,8 +602,7 @@ export default function TimPage() {
 
       {/* Modal Dialog: Detail Profil Anggota */}
       {selectedPerson && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-xs">
-          <div className="bg-card rounded-2xl w-full max-w-md p-5 sm:p-6 shadow-xl border border-border space-y-4">
+        <Modal isOpen onClose={() => setSelectedPerson(null)} title={selectedPerson.name} backdropClassName="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-xs" className="bg-card rounded-2xl w-full max-w-md p-5 sm:p-6 shadow-xl border border-border space-y-4">
             <div className="flex items-center justify-between pb-2 border-b border-border">
               <span className="font-label-sm text-xs text-primary font-semibold uppercase">
                 Profil Anggota Pondok OS
@@ -666,8 +675,7 @@ export default function TimPage() {
                 Tutup
               </button>
             </div>
-          </div>
-        </div>
+        </Modal>
       )}
     </div>
   );

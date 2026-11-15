@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { getResourcesAction } from "@/modules/library/actions";
+import { getResourceBySlugAction } from "@/modules/library/actions";
 
 export default async function ResourceDetailPage({
   params,
@@ -8,10 +8,12 @@ export default async function ResourceDetailPage({
   params: Promise<{ slug: string }>;
 }) {
   const { slug } = await params;
-  const resource = (await getResourcesAction("", "all")).find((item) => item.slug === slug);
+  const resource = await getResourceBySlugAction(slug);
 
   if (!resource) notFound();
 
+  // BR-LIB-02: keenam bidang wajib tampil; bidang kosong diberi penanda jujur,
+  // bukan dibuang atau diisi informasi karangan.
   const sections = [
     ["Cara Akses / Setup", resource.accessSetup],
     ["Cara Penggunaan", resource.howToUse],
@@ -19,7 +21,7 @@ export default async function ResourceDetailPage({
     ["Batasan & Catatan", resource.limitationsCautions],
     ["Sumber Resmi", resource.officialSources],
     ["Status Dokumentasi", resource.documentationStatus],
-  ].filter(([, value]) => value);
+  ];
 
   return (
     <main className="mx-auto flex w-full max-w-4xl flex-col gap-6 pb-16">
@@ -47,7 +49,9 @@ export default async function ResourceDetailPage({
         {sections.map(([title, content]) => (
           <article key={title} className="rounded-2xl border border-border bg-card p-5">
             <h2 className="text-sm font-semibold uppercase tracking-wide text-primary">{title}</h2>
-            <p className="mt-3 whitespace-pre-wrap text-sm leading-relaxed text-on-surface-variant">{content}</p>
+            <p className={`mt-3 whitespace-pre-wrap text-sm leading-relaxed ${content ? "text-on-surface-variant" : "italic text-muted-foreground"}`}>
+              {content || "Belum didokumentasikan"}
+            </p>
           </article>
         ))}
       </section>

@@ -1,6 +1,6 @@
 # PRD-03 — Attendance (Absensi)
 
-**Versi:** 2.0 · **Prefix:** ATT · **Rilis:** R2 · **Dibaca bersama:** Master PRD v2.0, PRD-01, PRD-07 **Label:** \[TERKONFIRMASI\] · \[REKOMENDASI\] · \[TERBUKA\]
+**Versi:** 2.1 · **Keputusan audit:** 2026-11-13 (§16; NOW/v1.1 mengikat cakupan rilis, bukan klaim implementasi) · **Prefix:** ATT · **Rilis:** R2 · **Dibaca bersama:** Master PRD v2.0, PRD-01, PRD-07 **Label:** \[TERKONFIRMASI\] · \[REKOMENDASI\] · \[TERBUKA\]
 
 ---
 
@@ -57,7 +57,7 @@ Menggantikan absensi via WhatsApp dengan pencatatan **check-in mandiri** yang ak
 | `no_checkin` (Belum Check-in) | Dihitung sistem: wajib absen, hari operasional, tidak ada check-in & tidak ada keterangan | **Bukan** alpa (OD-002) |
 | `non_operational` | Hari libur/Minggu | Tidak masuk statistik |
 
-**Penting:** status final `no_checkin` hanya *label tampilan hasil perhitungan*. Penetapan menjadi "alpa" atau status lain menunggu keputusan OD-002 dan **harus melalui peninjauan manusia**; sistem menyediakan antrean peninjauan, bukan keputusan otomatis.
+**Penting:** status final `no_checkin` hanya *label tampilan hasil perhitungan*. Penetapan menjadi "alpa" atau status lain menunggu keputusan OD-002 dan **harus melalui peninjauan manusia**; **[v1.1 — ATT-011, 2026-11-13]** sistem menyediakan antrean peninjauan, bukan keputusan otomatis. Antrean ditunda, bukan dianggap sudah tersedia NOW.
 
 ---
 
@@ -123,14 +123,14 @@ attendance_check_in():
 | ATT-008 | Review koreksi: setujui/tolak + catatan; catatan asli tetap utuh; semua tercatat audit | M |
 | ATT-009 | Ringkasan harian/mingguan/bulanan: jumlah & persentase on\_time, grace, late, izin, sakit, belum check-in | M |
 | ATT-010 | Konfigurasi kebijakan: hari operasional, jam batas, jendela check-in, kalender non-operasional — berversi dan beraudit | M |
-| ATT-011 | Antrean peninjauan "Belum Check-in" untuk hari yang telah ditutup, agar penanggung jawab menetapkan penanganan (OD-002) | M |
+| ATT-011 | **[v1.1 — penundaan Must disetujui pengguna 2026-11-13, §16]** Antrean peninjauan "Belum Check-in" untuk hari yang telah ditutup, agar penanggung jawab menetapkan penanganan (OD-002) | M |
 | ATT-012 | Keterangan izin/sakit: diajukan pengguna (atau diinput pereview atas nama pengguna) + persetujuan | S |
-| ATT-013 | Pengingat check-in (in-app) sebelum 08.00 bagi yang belum check-in; dapat dinonaktifkan per pengguna | S |
+| ATT-013 | **[NOW — OPS-12, 2026-11-13]** Pengingat check-in (in-app) sebelum 08.00 bagi yang belum check-in; dapat dinonaktifkan per pengguna melalui satu toggle | M (asal S; dinaikkan oleh keputusan pengguna) |
 | ATT-014 | Ekspor rekap (CSV/Excel) oleh yang berwenang, beraudit | S |
-| ATT-015 | Tampilan "belum check-in" langsung (live) bagi pengurus pada rentang 08.00–09.00 | S |
+| ATT-015 | **[v1.1 — disetujui 2026-11-13]** Tampilan "belum check-in" langsung (live) bagi pengurus pada rentang 08.00–09.00 | S |
 | ATT-016 | Penandaan pengecualian kegiatan khusus pada tanggal tertentu (OD-012) | S |
-| ATT-017 | Input manual oleh pengurus untuk kasus teknis (sistem down) dengan alasan wajib & audit, ditandai `source = manual` | S |
-| ATT-018 | Penanda perangkat/jam aneh (selisih jam klien > ambang) untuk peninjauan, bukan penolakan | C |
+| ATT-017 | **[v1.1 — disetujui 2026-11-13]** Input manual oleh pengurus untuk kasus teknis (sistem down) dengan alasan wajib & audit, ditandai `source = manual` | S |
+| ATT-018 | **[v1.1 — disetujui 2026-11-13]** Penanda perangkat/jam aneh (selisih jam klien > ambang) untuk peninjauan, bukan penolakan | C |
 
 ---
 
@@ -152,7 +152,7 @@ attendance_check_in():
 ### 6.3 Aturan
 
 - Pemohon tidak boleh menyetujui koreksi miliknya sendiri.
-- Pereview ditentukan oleh penugasan (PRD-07); fallback ke pengurus berwenang jika tidak ada (OD-004).
+- **[NOW, 2026-11-13]** Pereview koreksi wajib pengurus+ (pengurus/yayasan/super_admin) yang berwenang; koordinator saja tidak cukup. Asal: pereview ditentukan penugasan (PRD-07), fallback pengurus (OD-004); penugasan kini harus tunduk pada batas role ini.
 - Jumlah level persetujuan **configurable** (default 1); tabel `approval_policies` menyimpan aturan sehingga OD-004 dapat diputuskan tanpa mengubah skema.
 - Batas pengajuan: maksimal N hari setelah tanggal terkait (default 7, configurable).
 - Bukti: file via Storage privat; wajib/tidaknya mengikuti jenis (configurable).
@@ -178,7 +178,7 @@ Job bersifat **idempoten** (aman dijalankan ulang), mencatat hasil ke log job, d
 | `attendance.checkin` | ✓ | ✓ | ✓ (bila wajib) | opsional | — |
 | `attendance.record.read` | own | team | all/assigned | all | — |
 | `attendance.correction.request` | own | own | own | own | — |
-| `attendance.correction.review` | — | opsional (tim) | assigned/all | — | — |
+| `attendance.correction.review` (NOW 2026-11-13; asal koordinator opsional) | — | — | assigned/all | berwenang (pengurus+) | berwenang (pengurus+) |
 | `attendance.exception.manage` | — | — | ✓ | — | — |
 | `attendance.manual_entry` | — | — | ✓ | — | — |
 | `attendance.policy.manage` | — | — | — | ✓ (persetujuan) | ✓ (eksekusi) |
@@ -198,7 +198,7 @@ Job bersifat **idempoten** (aman dijalankan ulang), mencatat hasil ke log job, d
 | Ajukan Koreksi/Keterangan | Form singkat + unggah bukti |
 | Monitoring Harian | Tabel per scope, filter, status "belum check-in" |
 | Antrean Review Koreksi | Daftar pending, detail, setujui/tolak |
-| Antrean Peninjauan Belum Check-in | Hari tertutup yang butuh keputusan |
+| Antrean Peninjauan Belum Check-in [v1.1 — ATT-011] | Hari tertutup yang butuh keputusan; penundaan Must disetujui 2026-11-13 |
 | Rekap | Mingguan/bulanan + ekspor |
 | Pengaturan Kebijakan | Jam batas, hari operasional, libur, versi & riwayat |
 
@@ -245,7 +245,7 @@ Warna tidak boleh menjadi satu-satunya penanda (aksesibilitas): sertakan ikon/te
 5. Koreksi melalui pengajuan→review; catatan asli tetap utuh; status efektif & audit terlihat.
 6. Pengguna tidak dapat menulis langsung ke `attendance_records` (tes RLS).
 7. Rekap harian/mingguan/bulanan konsisten dengan data sumber (rekonsiliasi sampel).
-8. Hari ditutup menghasilkan status `no_checkin` tanpa menandainya alpa; muncul di antrean peninjauan.
+8. Hari ditutup menghasilkan status `no_checkin` tanpa menandainya alpa; **[v1.1 — ATT-011, penundaan M disetujui 2026-11-13]** muncul di antrean peninjauan.
 9. Mengubah kebijakan tidak mengubah klasifikasi data historis.
 10. Uji beban: 100% pengguna check-in dalam 5 menit tanpa error pada ukuran pengguna yang diasumsikan (OD-019).
 
@@ -271,7 +271,7 @@ Warna tidak boleh menjadi satu-satunya penanda (aksesibilitas): sertakan ikon/te
 | ID | Keputusan | Default sementara |
 | --- | --- | --- |
 | OD-002 | Status final tanpa check-in | `no_checkin` + antrean peninjauan |
-| OD-004 | Wewenang persetujuan koreksi | Pereview ditugaskan, 1 level, configurable |
+| OD-004 | Wewenang persetujuan koreksi | **NOW 2026-11-13: pengurus+ berwenang, bukan koordinator saja**; asal pereview ditugaskan, 1 level configurable |
 | OD-007 | Izin/cuti & kewajiban | Keterangan disetujui menghapus kewajiban hari itu |
 | OD-012 | Pengecualian kegiatan khusus | Kalender non-operasional/pengecualian |
 | OD-013 | Batas detik | Dipotong ke menit |
@@ -284,3 +284,17 @@ Warna tidak boleh menjadi satu-satunya penanda (aksesibilitas): sertakan ikon/te
 ## 15. Metrik Modul
 
 Tingkat kehadiran harian; persentase on\_time / grace / late (didefinisikan di PRD-08 §4); jumlah `no_checkin` per hari; waktu rata-rata review koreksi; jumlah koreksi per bulan; persentase check-in yang berhasil pada percobaan pertama.
+
+---
+
+## 16. Keputusan Audit — 2026-11-13 [TERKONFIRMASI]
+
+Change log 2.1; berlaku sesuai Master §0.4, bukan klaim implementasi selesai.
+
+- **ATT-011: prioritas asal M (baris 126). Pengguna secara eksplisit menyetujui penundaan Must ini ke v1.1**, sehingga antrean peninjauan hari tertutup bukan release gate NOW. Deskripsi, prioritas, layar §9, dan acceptance §12.8 bagian antrean tetap disimpan sebagai v1.1. `no_checkin` tetap status informatif, bukan alpa/keputusan hukuman otomatis; jangan menganggap snapshot sebagai antrean yang sudah tersedia.
+- **ATT-015: prioritas asal S (baris 130), v1.1.** Layar live 08.00–09.00 ditunda, tidak disamakan dengan presence/heartbeat. **ATT-017 (S) dan ATT-018 (C) juga v1.1**, dengan alasan/audit serta aturan diagnostik asal dipertahankan.
+- **OPS-12 / ATT-013 — M NOW:** naik dari prioritas asal S. Sediakan **satu toggle** pengingat absensi pada preferensi pengguna, tersimpan di server dan hanya dapat diubah pemiliknya. Saat opt-out aktif, jangan mengirim pengingat absensi kepada pengguna itu, baik in-app maupun FCM/push; opt-in memulihkan pengingat berikutnya tanpa mengirim ulang kejadian lama. Tidak perlu pusat preferensi banyak kategori untuk memenuhi keputusan ini; notifikasi keputusan koreksi bukan pengingat absensi dan tidak ikut dibungkam.
+- **B / TRC-12 — NOW:** reviewer koreksi = **pengurus+** (pengurus/yayasan/super_admin yang berwenang); koordinator tanpa peran tersebut tidak boleh review. Mengganti baseline koordinator opsional pada §8; penugasan tidak boleh mengangkat kewenangan koordinator. Larangan self-review, catatan asli tak berubah, status efektif, alasan, dan audit tetap wajib.
+- **Scheduler:** cron-job.org memicu route terproteksi, sedangkan waktu bisnis memakai WIB; lihat [ADR](docs/ADR-2026-11-13-cron-job-org.md). Keberadaan endpoint tidak membuktikan provider aktif, pengiriman berhasil, atau job penutupan hari lengkap.
+
+Acceptance NOW tambahan: toggle bertahan setelah login ulang; opt-out dihormati setiap jalur pengingat; akun lain tidak dapat mengubahnya; koordinator saja dan pemohon sendiri ditolak saat review. Guard app-layer dan RLS diuji terpisah tanpa melonggarkan policy. Bukti penerimaan masih harus dikumpulkan; tidak ada tes yang dijalankan dalam perubahan dokumentasi ini.

@@ -2,6 +2,8 @@
 
 import * as React from "react";
 import { Illustration } from "@/components/ui/illustration";
+import { ConfirmDialog } from "@/components/ui/confirm-dialog";
+import { Modal } from "@/components/ui/modal";
 import {
   ProjectItem,
   TaskItem,
@@ -24,6 +26,8 @@ import {
   createProjectAction,
   updateProjectAction,
   archiveProjectAction,
+  getAssignableMembersAction,
+  assignReviewerToTaskAction,
 } from "@/modules/tasks/actions";
 import { TaskDiscussion } from "@/components/tasks/task-discussion";
 import { useIdentity } from "@/components/auth/identity-context";
@@ -60,6 +64,20 @@ export default function TugasPage() {
     text: string;
   } | null>(null);
 
+  // Confirm dialog state for destructive actions
+  const [confirmDialog, setConfirmDialog] = React.useState<{
+    isOpen: boolean;
+    title: string;
+    description?: string;
+    onConfirm: () => void;
+  }>({ isOpen: false, title: "", onConfirm: () => {} });
+
+  const openConfirm = (title: string, description: string, onConfirm: () => void) => {
+    setConfirmDialog({ isOpen: true, title, description, onConfirm });
+  };
+
+  const closeConfirm = () => setConfirmDialog((prev) => ({ ...prev, isOpen: false }));
+
   // New Task Dialog State
   const [isDialogOpen, setIsDialogOpen] = React.useState(false);
   const [newTitle, setNewTitle] = React.useState("");
@@ -71,6 +89,18 @@ export default function TugasPage() {
   const [newDescription, setNewDescription] = React.useState("");
   const [editingTaskId, setEditingTaskId] = React.useState<string | null>(null);
   const [isCreating, setIsCreating] = React.useState(false);
+  const [assignableMembers, setAssignableMembers] = React.useState<{ id: string; name: string; role: string }[]>([]);
+  const [newAssigneeIds, setNewAssigneeIds] = React.useState<string[]>([]);
+  const [newReviewerId, setNewReviewerId] = React.useState("");
+
+  React.useEffect(() => {
+    if (!isDialogOpen || editingTaskId) return;
+    let active = true;
+    getAssignableMembersAction()
+      .then((members) => { if (active) setAssignableMembers(members); })
+      .catch(() => { if (active) setAssignableMembers([]); });
+    return () => { active = false; };
+  }, [isDialogOpen, editingTaskId]);
   const [isProjectDialogOpen, setIsProjectDialogOpen] = React.useState(false);
   const [editingProjectId, setEditingProjectId] = React.useState<string | null>(null);
   const [isSavingProject, setIsSavingProject] = React.useState(false);
@@ -181,6 +211,10 @@ export default function TugasPage() {
   const handleCreateTask = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!newTitle.trim()) return;
+    if (!editingTaskId && newRequiresReview && !newReviewerId) {
+      setToastMessage({ type: "error", text: "Pilih reviewer terlebih dahulu untuk tugas yang wajib review." });
+      return;
+    }
 
     setIsCreating(true);
     try {
@@ -195,12 +229,17 @@ export default function TugasPage() {
         dueDateIso: newDueDate || undefined,
         description: newDescription,
         visibility: newVisibility,
+        assigneeIds: editingTaskId ? undefined : newAssigneeIds,
       };
       const res = editingTaskId
         ? await updateTaskAction(editingTaskId, taskPayload)
         : await createTaskAction(taskPayload);
 
       if (res.success) {
+        if (!editingTaskId && newRequiresReview && newReviewerId && res.taskId) {
+          const reviewRes = await assignReviewerToTaskAction(res.taskId, newReviewerId);
+          if (!reviewRes.success) setToastMessage({ type: "error", text: reviewRes.message });
+        }
         const nextTask: TaskItem = {
           id: editingTaskId || res.taskId || `tsk-${Date.now()}`,
           projectId: newProjectId,
@@ -215,7 +254,10 @@ export default function TugasPage() {
           dueDateStr: newDueDate,
           isDueToday: Boolean(newDueDate && newDueDate === new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Jakarta" }).format(new Date())),
           checklist: [],
-          assignees: [],
+          assignees: editingTaskId ? [] : newAssigneeIds.map((id) => {
+            const member = assignableMembers.find((m) => m.id === id);
+            return { userId: id, name: member?.name || id, role: member?.role || "santri" };
+          }),
         };
 
         setTasks((prev) => editingTaskId
@@ -226,6 +268,8 @@ export default function TugasPage() {
         setNewTitle("");
         setNewDescription("");
         setNewVisibility("team");
+        setNewAssigneeIds([]);
+        setNewReviewerId("");
         setEditingTaskId(null);
       } else {
         setToastMessage({ type: "error", text: res.message });
@@ -241,10 +285,16 @@ export default function TugasPage() {
   };
 
   const handleDeleteTask = async (task: TaskItem) => {
-    if (!window.confirm(`Arsipkan tugas "${task.title}"?`)) return;
-    const result = await deleteTaskAction(task.id);
-    setToastMessage({ type: result.success ? "success" : "error", text: result.message });
-    if (result.success) setTasks((current) => current.filter((item) => item.id !== task.id));
+    openConfirm(
+      `Arsipkan tugas "${task.title}"?`,
+      "Tugas akan diarsipkan. Riwayat dan komentar tetap dipertahankan.",
+      async () => {
+        closeConfirm();
+        const result = await deleteTaskAction(task.id);
+        setToastMessage({ type: result.success ? "success" : "error", text: result.message });
+        if (result.success) setTasks((current) => current.filter((item) => item.id !== task.id));
+      }
+    );
   };
 
   const handleEditTask = (task: TaskItem) => {
@@ -286,11 +336,30 @@ export default function TugasPage() {
   };
 
   const handleArchiveProject = async (project: ProjectItem) => {
-    if (!window.confirm(`Arsipkan proyek "${project.name}"? Task dan riwayatnya tetap dipertahankan.`)) return;
-    const result = await archiveProjectAction(project.id);
-    setToastMessage({ type: result.success ? "success" : "error", text: result.message });
-    if (result.success) setProjects((current) => current.filter((item) => item.id !== project.id));
+    openConfirm(
+      `Arsipkan proyek "${project.name}"?`,
+      "Task dan riwayatnya tetap dipertahankan.",
+      async () => {
+        closeConfirm();
+        const result = await archiveProjectAction(project.id);
+        setToastMessage({ type: result.success ? "success" : "error", text: result.message });
+        if (result.success) setProjects((current) => current.filter((item) => item.id !== project.id));
+      }
+    );
   };
+
+  // Keyboard shortcut: Escape to close modals
+  React.useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        if (isDialogOpen) setIsDialogOpen(false);
+        if (isProjectDialogOpen) setIsProjectDialogOpen(false);
+        if (confirmDialog.isOpen) closeConfirm();
+      }
+    };
+    document.addEventListener("keydown", handleKeyDown);
+    return () => document.removeEventListener("keydown", handleKeyDown);
+  }, [isDialogOpen, isProjectDialogOpen, confirmDialog.isOpen]);
 
   const overdueCount = tasks.filter((t) => t.isOverdue).length;
   const todayCount = tasks.filter((t) => t.isDueToday).length;
@@ -301,6 +370,8 @@ export default function TugasPage() {
       {/* Toast Alert Notice */}
       {toastMessage && (
         <div
+          role="status"
+          aria-live="polite"
           className={`p-4 rounded-xl flex items-center justify-between gap-3 text-sm font-medium shadow-xs transition-all ${
             toastMessage.type === "success"
               ? "bg-success/15 text-success border border-success/30"
@@ -324,6 +395,26 @@ export default function TugasPage() {
             className="text-on-surface-variant hover:text-on-surface"
           >
             <span className="material-symbols-outlined text-[18px]">close</span>
+          </button>
+        </div>
+      )}
+
+      {/* Load Error — bedakan gagal muat vs daftar kosong (UX-08) */}
+      {(tasksQuery.error || projectsQuery.error) && (
+        <div
+          role="alert"
+          className="p-4 rounded-xl flex items-center justify-between gap-3 text-sm font-medium bg-error/15 text-error border border-error/30"
+        >
+          <div className="flex items-center gap-2">
+            <span className="material-symbols-outlined text-[20px]">error</span>
+            <span>Data tugas/proyek gagal dimuat. Ini bukan berarti daftar kosong.</span>
+          </div>
+          <button
+            type="button"
+            onClick={() => { tasksQuery.refresh(); projectsQuery.refresh(); }}
+            className="underline shrink-0"
+          >
+            Coba lagi
           </button>
         </div>
       )}
@@ -507,11 +598,11 @@ export default function TugasPage() {
         </div>
 
         {/* Right Column: Dynamic Tab Content (col-span-8) */}
-        <div className="lg:col-span-8 space-y-4">
+        <div className="lg:col-span-8 space-y-4 min-w-0">
           {activeTab === "my_tasks" && (
             <div className="space-y-4">
               {/* Horizontal Filter Chips */}
-              <div className="flex items-center gap-2 overflow-x-auto pb-1 pt-0.5 no-scrollbar -mx-2 px-2">
+              <div className="flex items-center gap-2 overflow-x-auto pb-1 pt-0.5 no-scrollbar">
                 <button
                   type="button"
                   onClick={() => setTimeFilter("all")}
@@ -585,7 +676,7 @@ export default function TugasPage() {
 
               {/* Task Groups Section (TSK-009) */}
               <div className="space-y-4">
-                {filteredTasks.length === 0 ? (
+                {filteredTasks.length === 0 && !tasksQuery.error ? (
                   <div className="p-8 sm:p-10 text-center bg-card rounded-2xl border border-dashed border-border flex flex-col items-center justify-center space-y-3">
                     <Illustration
                       src="/illustrations/undraw_done_erdp.svg"
@@ -903,8 +994,7 @@ export default function TugasPage() {
 
       {/* Modal Dialog: Tambah Tugas Baru */}
       {isDialogOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-xs">
-          <div className="bg-card rounded-2xl w-full max-w-lg p-5 sm:p-6 shadow-xl border border-border space-y-4">
+        <Modal isOpen onClose={() => setIsDialogOpen(false)} title={editingTaskId ? "Edit Tugas" : "Buat Tugas Baru"} backdropClassName="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-xs" className="bg-card rounded-2xl w-full max-w-lg max-h-[85vh] overflow-y-auto p-5 sm:p-6 shadow-xl border border-border space-y-4">
             <div className="flex items-center justify-between pb-2 border-b border-border">
               <div className="flex items-center gap-2">
                 <span className="material-symbols-outlined text-primary text-[22px]">
@@ -1033,6 +1123,53 @@ export default function TugasPage() {
                 </label>
               </div>
 
+              {!editingTaskId && (
+                <div className="space-y-1">
+                  <label className="text-xs font-semibold text-on-surface block">
+                    Tugaskan Kepada (Opsional)
+                  </label>
+                  {assignableMembers.length === 0 ? (
+                    <p className="text-[11px] text-muted-foreground">Tidak ada anggota tim yang dapat ditugaskan.</p>
+                  ) : (
+                    <div className="flex flex-wrap gap-1.5 max-h-28 overflow-y-auto" role="group" aria-label="Pilih assignee">
+                      {assignableMembers.map((m) => {
+                        const selected = newAssigneeIds.includes(m.id);
+                        return (
+                          <button
+                            key={m.id}
+                            type="button"
+                            aria-pressed={selected}
+                            onClick={() => setNewAssigneeIds((prev) => selected ? prev.filter((id) => id !== m.id) : [...prev, m.id])}
+                            className={`px-2.5 py-1 rounded-full text-[11px] font-semibold border ${selected ? "bg-primary text-on-primary border-primary" : "bg-surface-container-low text-on-surface border-border"}`}
+                          >
+                            {m.name}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {!editingTaskId && newRequiresReview && (
+                <div className="space-y-1">
+                  <label htmlFor="task-reviewer-select" className="text-xs font-semibold text-on-surface block">
+                    Reviewer <span className="text-error">*</span>
+                  </label>
+                  <select
+                    id="task-reviewer-select"
+                    value={newReviewerId}
+                    onChange={(e) => setNewReviewerId(e.target.value)}
+                    className="w-full h-10 px-2.5 rounded-lg bg-surface-container-low border border-border text-xs sm:text-sm focus:outline-none focus:ring-2 focus:ring-primary"
+                  >
+                    <option value="">Pilih reviewer…</option>
+                    {assignableMembers.map((m) => (
+                      <option key={m.id} value={m.id}>{m.name}</option>
+                    ))}
+                  </select>
+                </div>
+              )}
+
               <div className="flex items-center justify-end gap-2.5 pt-3 border-t border-border">
                 <button
                   type="button"
@@ -1050,13 +1187,11 @@ export default function TugasPage() {
                 </button>
               </div>
             </form>
-          </div>
-        </div>
+        </Modal>
       )}
 
       {isProjectDialogOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-xs">
-          <div className="bg-card rounded-2xl w-full max-w-lg p-5 sm:p-6 shadow-xl border border-border space-y-4">
+        <Modal isOpen onClose={() => setIsProjectDialogOpen(false)} title={editingProjectId ? "Edit Proyek" : "Buat Proyek Baru"} backdropClassName="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-xs" className="bg-card rounded-2xl w-full max-w-lg max-h-[85vh] overflow-y-auto p-5 sm:p-6 shadow-xl border border-border space-y-4">
             <div className="flex items-center justify-between pb-2 border-b border-border">
               <div className="flex items-center gap-2">
                 <span className="material-symbols-outlined text-primary text-[22px]">create_new_folder</span>
@@ -1093,9 +1228,18 @@ export default function TugasPage() {
                 <button type="submit" disabled={isSavingProject} className="h-10 px-5 rounded-xl bg-primary text-on-primary text-xs font-semibold shadow-xs hover:bg-primary-container disabled:opacity-50">{isSavingProject ? "Menyimpan..." : editingProjectId ? "Simpan Perubahan" : "Buat Proyek"}</button>
               </div>
             </form>
-          </div>
-        </div>
+        </Modal>
       )}
+
+      <ConfirmDialog
+        isOpen={confirmDialog.isOpen}
+        onClose={closeConfirm}
+        onConfirm={confirmDialog.onConfirm}
+        title={confirmDialog.title}
+        description={confirmDialog.description}
+        confirmLabel="Ya, Arsipkan"
+        variant="warning"
+      />
     </div>
   );
 }

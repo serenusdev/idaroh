@@ -13,6 +13,9 @@ export function validateProductionEnvironment(env = process.env) {
     'SUPABASE_SERVICE_ROLE_KEY',
     'NEXT_PUBLIC_APP_URL',
     'CRON_SECRET',
+    'TURNSTILE_SECRET_KEY',
+    'RESEND_API_KEY',
+    'EMAIL_FROM',
   ];
   for (const key of required) {
     if (!env[key]?.trim() || placeholder.test(env[key])) {
@@ -42,5 +45,9 @@ export function validateProductionEnvironment(env = process.env) {
     if (['project_id', 'client_email', 'private_key'].some((key) => !credentials?.[key] || placeholder.test(credentials[key]))) {
       throw new Error('Production Firebase credentials are incomplete or contain a placeholder.');
     }
+  } else if (!process.env.VITEST) {
+    // OPS-13: push is optional, but a missing key silently disables FCM. Warn
+    // explicitly at deploy time so operators know push will not fire.
+    console.warn('[env] FIREBASE_SERVICE_ACCOUNT_KEY is not set — native push notifications (FCM) stay disabled. Set it to enable push.');
   }
 }

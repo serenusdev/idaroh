@@ -61,6 +61,66 @@ Review independen mencakup validasi:
 
 ---
 
+---
+
+## Fase 3 — P1 Batch 2
+
+**Dikerjakan:** 2026-11-14 (sesi lanjutan setelah Fase 2)
+**Baseline:** 326 test hijau (32 file) — tidak ada commit baru
+
+### Item yang Selesai
+
+| Item | File yang Diubah | Ringkasan |
+|---|---|---|
+| **SEC-02** | `src/modules/iam/actions.ts` | `resetUserSessionAction` kini memverifikasi hierarki pemanggil vs target sebelum reset sesi (pola `revokeDeviceTokenAction`); pengurus tidak bisa mencabut sesi super_admin/yayasan. |
+| **SEC-04** | `src/modules/operations/actions.ts` | MIME allowlist diterapkan di `uploadTaskAttachmentAction` — hanya PDF, JPEG, PNG, WebP, DOCX, XLSX, MP4, WebM diterima; header `Content-Disposition: attachment` ditambahkan agar file tidak disajikan inline. |
+| **FUNC-05** | `src/modules/iam/actions.ts` | `inviteUserByEmail` memeriksa duplikat email di `profiles` dan `account_requests` sebelum invite; pesan error seragam tanpa bocorkan status keberadaan akun. |
+| **FUNC-06** | `src/modules/attendance/actions.ts` | `getAttendanceHistoryAction` menerima `targetUserId`; query di-scope per user dan hierarki pemanggil divalidasi sebelum mengambil data user lain. |
+
+### Jumlah Test Setelah Sesi Ini
+
+**357 test hijau (33 file)** — penambahan 31 test dari sesi ini (SEC-02, SEC-04, FUNC-05, FUNC-06 masing-masing dilengkapi test unit baru di `src/__tests__/backlog-phase3.test.ts`).
+
+### Item P1/P2 yang Masih Terbuka Setelah Sesi Ini
+
+**P1 yang belum ditangani (dari §3.1 dan AUDIT-FINDINGS §A/§C):**
+
+| Item | Deskripsi |
+|---|---|
+| **SEC-01 / FUNC-04** | `adminUpdateUserAction` non-atomik + tanpa audit (RPC atomik beraudit; server action + guard sudah diterima sementara — RPC tetap terbuka) |
+| **FUNC-03** | PDF font trace Vercel — perlu uji runtime produksi; fix preventif (outputFileTracingIncludes) disarankan sebelum deploy |
+| **TRC-22** | `tasks.reviewer_id` tak pernah di-set → approve tugas requires_review mustahil dari koordinator/pembuat |
+| **TRC-23** | UI tugas tanpa assignee picker + tanpa parser mention → penugasan tugas mustahil dari UI |
+| **UX-01** | Identitas reviewer palsu hardcode di halaman review laporan |
+| **UX-02** | Profil & MFA tak terjangkau di mobile (link hanya di desktop-header) |
+| **UX-03** | Submit koreksi & exception kehadiran tanpa handling error (gagal = diam) |
+| **UX-04** | Dashboard audit: angka palsu hardcode + alasan approve canned tertulis ke audit trail |
+| **UX-05** | Alasan tolak permohonan di-bypass (default string hardcode) |
+| **UX-06** | Modal tugas terpotong di layar kecil (tanpa max-height + overflow-y-auto) |
+| **TRC-04** | Email keputusan (approve/reject akun) belum dikirim ke pemohon |
+| **TRC-05** | Riwayat laporan pribadi santri — sudah diimplementasikan Fase 1, migrasi belum diterapkan operator |
+| **OPS-02** | `account_requests` tanpa partial unique index `WHERE status='pending'` |
+| **OPS-04** | Tanpa error monitoring/alerting (Sentry/log drain) |
+| **OPS-07** | Seed E2E tanpa guard NODE_ENV — risiko kontaminasi produksi |
+| **SEC-05** | Suspend tidak set `session_revoked_at` — sesi tidak dicabut seketika (bundle SEC-01) |
+
+**P2 yang masih terbuka (ringkas, tunda v1.1 kecuali ditandai "sekarang"):**
+
+| Item | Keterangan |
+|---|---|
+| **TRC-20** | Acara cancelled disembunyikan (bukan tampil "Dibatalkan") — perbaiki sekarang |
+| **TRC-21** | Klaim UI "15 menit pengingat acara" palsu — hapus teks sekarang |
+| **TRC-26** | Bio: guard terbalik + tulis ke kolom `notes` — perbaiki sekarang |
+| **TRC-27** | Deep-link resource: query limit 100 + bidang kosong dibuang — perbaiki sekarang |
+| **UX-07–UX-24** (selektif) | Pesan error mentah, empty vs error state, aksesibilitas (batch) — perbaiki sekarang |
+| **SEC-07** | Enumerasi akun sisa (sudah sebagian diperbaiki Fase 2; sisa: registrasi path) |
+| **TRC-24** | Progres proyek termasuk cancelled — tunda v1.1 |
+| **FUNC-07/08/09/10** | Statistik dashboard, race kondisi perpustakaan — tunda v1.1 |
+| **OPS-01** | Backup PITR — tugas operator (P0, segera) |
+| **SEC-11/TRC-01** | Turnstile widget UI belum ada — jangan set secret sebelum widget rilis |
+
+---
+
 ## 3. Yang Masih Terbuka
 
 ### 3.1 Item Backlog Belum Dikerjakan (dari §4 Handover)

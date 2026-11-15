@@ -18,6 +18,7 @@ import type { ScheduleEventItem, AnnouncementItem } from "@/modules/schedules/ty
 import { LoadingSpinner } from "@/components/ui/loading-spinner";
 import { LiveClock } from "@/components/ui/live-clock";
 import { Illustration } from "@/components/ui/illustration";
+import { Modal } from "@/components/ui/modal";
 
 export default function BerandaPage() {
   const { user: currentUser } = useIdentity();
@@ -544,8 +545,13 @@ export default function BerandaPage() {
 
         {/* Modal: Atur Jam Operasional Langsung dari Beranda */}
         {isPolicyModalOpen && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-xs">
-            <div className="bg-card w-full max-w-lg rounded-2xl p-6 shadow-xl border border-border space-y-4 animate-in fade-in zoom-in-95 duration-150">
+          <Modal
+            isOpen
+            onClose={() => setIsPolicyModalOpen(false)}
+            title="Atur Kebijakan Jam Operasional"
+            backdropClassName="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-xs"
+            className="bg-card w-full max-w-lg rounded-2xl p-6 shadow-xl border border-border space-y-4 animate-in fade-in zoom-in-95 duration-150"
+          >
               <div className="flex items-center justify-between pb-3 border-b border-border">
                 <div className="flex items-center gap-2">
                   <span className="material-symbols-outlined text-primary text-[24px]">schedule</span>
@@ -650,8 +656,7 @@ export default function BerandaPage() {
                   </button>
                 </div>
               </form>
-            </div>
-          </div>
+          </Modal>
         )}
       </div>
     );

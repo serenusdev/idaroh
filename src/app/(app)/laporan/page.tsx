@@ -2,11 +2,12 @@
 
 import * as React from "react";
 import { Illustration } from "@/components/ui/illustration";
-import { DailyReport, ReportCategory, ReportItem } from "@/modules/reports/types";
+import { DailyReport, ReportCategory, ReportItem, ReviewStatus } from "@/modules/reports/types";
 import {
   saveReportDraftAction,
   submitReportAction,
   getTodayReportAction,
+  getMyReportHistoryAction,
   getReportCategoriesAction,
 } from "@/modules/reports/actions";
 import { getActivePolicyAction } from "@/modules/analytics/actions";
@@ -65,6 +66,17 @@ export default function LaporanPage() {
   } | null>(null);
   const [isSubmitting, setIsSubmitting] = React.useState(false);
   const [isDrafting, setIsDrafting] = React.useState(false);
+  const [historyVersion, setHistoryVersion] = React.useState(0);
+  // Filter/sort state for history (UX-08)
+  const [historyFilter, setHistoryFilter] = React.useState<"all" | "submitted" | "draft" | "late">("all");
+  const [historySort, setHistorySort] = React.useState<"desc" | "asc">("desc");
+
+  const refreshHistory = () => {
+    invalidateCache(`reports:history:${user.id}:`);
+    // Reset pagination and use a new request key so a pre-save in-flight read
+    // cannot overwrite the refreshed history after a successful write.
+    setHistoryVersion((version) => version + 1);
+  };
 
   React.useEffect(() => {
     if (todayQuery.data) setReport(todayQuery.data);
@@ -160,6 +172,7 @@ export default function LaporanPage() {
       if (res.success) {
         setFeedback({ type: "info", message: res.message });
         todayQuery.refresh();
+        refreshHistory();
       } else {
         setFeedback({ type: "error", message: res.message });
       }
@@ -195,6 +208,7 @@ export default function LaporanPage() {
         }));
         setFeedback({ type: "success", message: res.message });
         todayQuery.refresh();
+        refreshHistory();
         invalidateCache("review:queue");
       } else {
         setFeedback({ type: "error", message: res.message });
@@ -215,8 +229,41 @@ export default function LaporanPage() {
   );
   const totalHours = (totalMinutes / 60).toFixed(1);
 
+  // Keyboard shortcut: Ctrl/Cmd+Enter to submit the form
+  React.useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key === "Enter") {
+        if (report.submissionStatus !== "submitted" && !isSubmitting) {
+          const form = document.querySelector<HTMLFormElement>("form[data-laporan-form]");
+          if (form) form.requestSubmit();
+        }
+      }
+    };
+    document.addEventListener("keydown", handleKeyDown);
+    return () => document.removeEventListener("keydown", handleKeyDown);
+  }, [report.submissionStatus, isSubmitting]);
+
   return (
     <div className="w-full max-w-7xl mx-auto space-y-6 pb-24">
+      {/* Load Error — bedakan gagal muat vs formulir kosong (UX-08) */}
+      {(todayQuery.error || categoriesQuery.error || policyQuery.error) && (
+        <div
+          role="alert"
+          className="p-4 rounded-xl flex items-center justify-between gap-3 text-sm font-medium bg-error/15 text-error border border-error/30"
+        >
+          <div className="flex items-center gap-2">
+            <span className="material-symbols-outlined text-[20px]">error</span>
+            <span>Data laporan/kategori/kebijakan gagal dimuat. Formulir mungkin tidak lengkap.</span>
+          </div>
+          <button
+            type="button"
+            onClick={() => { todayQuery.refresh(); categoriesQuery.refresh(); policyQuery.refresh(); }}
+            className="underline shrink-0"
+          >
+            Coba lagi
+          </button>
+        </div>
+      )}
       {/* Toast Alert Feedback */}
       {feedback && (
         <div
@@ -422,7 +469,7 @@ export default function LaporanPage() {
 
         {/* Right Column: Multi-Item Activity Form Container (BR-REP-08 / OD-017) */}
         <div className="lg:col-span-8 space-y-4">
-          <form onSubmit={handleSubmitReport} className="space-y-4">
+          <form onSubmit={handleSubmitReport} data-laporan-form className="space-y-4">
             {report.items.map((item, index) => {
               const isFilled =
                 item.title.trim().length > 0 && item.description.trim().length > 0;
@@ -476,10 +523,10 @@ export default function LaporanPage() {
 
                   {/* Category Pills (Touch Scrollable) */}
                   <div className="space-y-1.5">
-                    <label className="font-label-sm text-label-sm text-muted-foreground">
+                    <span id={`category-label-${item.id}`} className="font-label-sm text-label-sm text-muted-foreground">
                       Kategori Aktivitas
-                    </label>
-                    <div className="flex gap-2 overflow-x-auto pb-1 -mx-1 px-1 no-scrollbar">
+                    </span>
+                    <div role="group" aria-labelledby={`category-label-${item.id}`} className="flex gap-2 overflow-x-auto pb-1 -mx-1 px-1 no-scrollbar">
                       {reportCategories.map((cat) => {
                         const isSelected = item.categoryId === cat.id;
                         return (
@@ -509,44 +556,87 @@ export default function LaporanPage() {
 
                   {/* Field: Judul Aktivitas */}
                   <div className="space-y-1.5">
-                    <label className="font-label-md text-label-md text-on-surface block">
-                      Judul Aktivitas <span className="text-error">*</span>
+                    <label
+                      htmlFor={`title-${item.id}`}
+                      className="font-label-md text-label-md text-on-surface block"
+                    >
+                      Judul Aktivitas <span className="text-error" aria-hidden="true">*</span>
                     </label>
                     <input
+                      id={`title-${item.id}`}
                       type="text"
                       value={item.title}
                       onChange={(e) =>
                         handleUpdateItem(item.id, "title", e.target.value)
                       }
+                      onBlur={(e) => {
+                        if (!e.target.value.trim()) {
+                          e.target.setAttribute("aria-invalid", "true");
+                        } else {
+                          e.target.removeAttribute("aria-invalid");
+                        }
+                      }}
                       placeholder="Contoh: Mengikuti kajian kitab kuning atau implementasi modul"
-                      className="w-full h-12 px-3.5 rounded-lg bg-surface-container-low text-on-surface font-body-md text-body-md focus:bg-card focus:outline-none focus:ring-2 focus:ring-primary shadow-xs transition-all border border-transparent focus:border-primary"
+                      className="w-full h-12 px-3.5 rounded-lg bg-surface-container-low text-on-surface font-body-md text-body-md focus:bg-card focus:outline-none focus:ring-2 focus:ring-primary shadow-xs transition-all border border-transparent focus:border-primary aria-[invalid=true]:border-error aria-[invalid=true]:ring-error/30"
                       required
+                      aria-required="true"
+                      aria-describedby={`title-err-${item.id}`}
                     />
+                    <p
+                      id={`title-err-${item.id}`}
+                      role="alert"
+                      className="text-xs text-error hidden [input[aria-invalid]+&]:block"
+                      aria-live="polite"
+                    >
+                      Judul aktivitas wajib diisi.
+                    </p>
                   </div>
 
                   {/* Field: Deskripsi Kegiatan */}
                   <div className="space-y-1.5">
-                    <label className="font-label-md text-label-md text-on-surface block">
-                      Deskripsi Kegiatan <span className="text-error">*</span>
+                    <label
+                      htmlFor={`desc-${item.id}`}
+                      className="font-label-md text-label-md text-on-surface block"
+                    >
+                      Deskripsi Kegiatan <span className="text-error" aria-hidden="true">*</span>
                     </label>
                     <textarea
+                      id={`desc-${item.id}`}
                       value={item.description}
                       onChange={(e) =>
                         handleUpdateItem(item.id, "description", e.target.value)
                       }
+                      onBlur={(e) => {
+                        if (!e.target.value.trim()) {
+                          e.target.setAttribute("aria-invalid", "true");
+                        } else {
+                          e.target.removeAttribute("aria-invalid");
+                        }
+                      }}
                       rows={3}
                       placeholder="Jelaskan alur, materi, atau proses kegiatan yang Anda laksanakan..."
-                      className="w-full p-3 rounded-lg bg-surface-container-low text-on-surface font-body-md text-body-md focus:bg-card focus:outline-none focus:ring-2 focus:ring-primary shadow-xs transition-all border border-transparent focus:border-primary"
+                      className="w-full p-3 rounded-lg bg-surface-container-low text-on-surface font-body-md text-body-md focus:bg-card focus:outline-none focus:ring-2 focus:ring-primary shadow-xs transition-all border border-transparent focus:border-primary aria-[invalid=true]:border-error aria-[invalid=true]:ring-error/30"
                       required
+                      aria-required="true"
+                      aria-describedby={`desc-err-${item.id}`}
                     />
+                    <p
+                      id={`desc-err-${item.id}`}
+                      role="alert"
+                      className="text-xs text-error hidden [textarea[aria-invalid]+&]:block"
+                      aria-live="polite"
+                    >
+                      Deskripsi kegiatan wajib diisi.
+                    </p>
                   </div>
 
                   {/* Field: Hasil & Progres */}
                   <div className="space-y-1.5">
-                    <label className="font-label-md text-label-md text-on-surface block">
+                    <label htmlFor={`result-${item.id}`} className="font-label-md text-label-md text-on-surface block">
                       Hasil & Progres (Output)
                     </label>
                     <textarea
+                      id={`result-${item.id}`}
                       value={item.resultProgress || ""}
                       onChange={(e) =>
                         handleUpdateItem(item.id, "resultProgress", e.target.value)
@@ -560,10 +650,11 @@ export default function LaporanPage() {
                   {/* Field: Kendala / Hambatan & Durasi */}
                   <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                     <div className="sm:col-span-2 space-y-1.5">
-                      <label className="font-label-md text-label-md text-on-surface block">
+                      <label htmlFor={`obstacles-${item.id}`} className="font-label-md text-label-md text-on-surface block">
                         Kendala / Hambatan (Bila Ada)
                       </label>
                       <input
+                        id={`obstacles-${item.id}`}
                         type="text"
                         value={item.obstacles || ""}
                         onChange={(e) =>
@@ -575,10 +666,11 @@ export default function LaporanPage() {
                     </div>
 
                     <div className="space-y-1.5">
-                      <label className="font-label-md text-label-md text-on-surface block">
+                      <label htmlFor={`duration-${item.id}`} className="font-label-md text-label-md text-on-surface block">
                         Durasi (Menit)
                       </label>
                       <input
+                        id={`duration-${item.id}`}
                         type="number"
                         min="15"
                         step="15"
@@ -636,6 +728,7 @@ export default function LaporanPage() {
                   type="submit"
                   disabled={isSubmitting}
                   className="flex-1 sm:flex-initial h-11 px-6 rounded-xl bg-primary text-on-primary hover:bg-primary-container font-label-md text-label-md flex items-center justify-center gap-2 shadow-sm transition-all disabled:opacity-50"
+                  title="Kirim laporan (Ctrl+Enter)"
                 >
                   <span className="material-symbols-outlined text-[18px]">
                     send
@@ -645,12 +738,217 @@ export default function LaporanPage() {
                       ? "Mengirim..."
                       : `Kirim Laporan (${report.items.length})`}
                   </span>
+                  <span className="hidden sm:inline text-[10px] opacity-60 ml-0.5">⌘↵</span>
                 </button>
               </div>
             </div>
           </form>
         </div>
       </div>
+
+      <section aria-labelledby="report-history-heading" className="bg-card rounded-xl p-4 sm:p-5 border border-border space-y-4">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+          <div>
+            <h2 id="report-history-heading" className="font-headline-sm text-headline-sm text-on-surface">
+              Riwayat Laporan Saya
+            </h2>
+            <p className="text-sm text-muted-foreground mt-1">
+              Laporan terbaru ditampilkan lebih dulu. Riwayat hanya dapat dibaca; pengisian tetap untuk hari ini.
+            </p>
+          </div>
+          {/* Filter & Sort controls (UX-08) */}
+          <div className="flex items-center gap-2 flex-wrap">
+            <div className="flex items-center gap-1 overflow-x-auto no-scrollbar">
+              {(["all", "submitted", "draft", "late"] as const).map((f) => (
+                <button
+                  key={f}
+                  type="button"
+                  onClick={() => setHistoryFilter(f)}
+                  className={`px-3 py-1.5 rounded-full text-xs font-medium whitespace-nowrap transition-all ${
+                    historyFilter === f
+                      ? "bg-primary text-on-primary"
+                      : "bg-surface-container text-on-surface hover:bg-accent"
+                  }`}
+                >
+                  {f === "all" ? "Semua" : f === "submitted" ? "Terkirim" : f === "draft" ? "Draft" : "Terlambat"}
+                </button>
+              ))}
+            </div>
+            <button
+              type="button"
+              onClick={() => setHistorySort((s) => s === "desc" ? "asc" : "desc")}
+              aria-label={historySort === "desc" ? "Urutkan terlama dulu" : "Urutkan terbaru dulu"}
+              className="flex items-center gap-1 px-3 py-1.5 rounded-full bg-surface-container text-on-surface hover:bg-accent text-xs font-medium transition-all"
+            >
+              <span className="material-symbols-outlined text-[15px]">
+                {historySort === "desc" ? "arrow_downward" : "arrow_upward"}
+              </span>
+              {historySort === "desc" ? "Terbaru" : "Terlama"}
+            </button>
+          </div>
+        </div>
+        <ReportHistoryPage
+          key={`${user.id}:${historyVersion}:${historyFilter}:${historySort}`}
+          scope={`${user.id}:${historyVersion}`}
+          statusFilter={historyFilter}
+          sortOrder={historySort}
+        />
+      </section>
+    </div>
+  );
+}
+
+const HISTORY_REVIEW_LABELS: Record<ReviewStatus, string> = {
+  not_reviewed: "Belum Ditinjau",
+  under_review: "Sedang Ditinjau",
+  revision_required: "Perlu Revisi",
+  approved: "Disetujui",
+};
+
+function historyDate(value: string, withTime = false) {
+  return new Date(value).toLocaleString("id-ID", {
+    day: "numeric", month: "short", year: "numeric", timeZone: "Asia/Jakarta",
+    ...(withTime ? { hour: "2-digit", minute: "2-digit" } as const : {}),
+  }) + (withTime ? " WIB" : "");
+}
+
+function ReportHistoryPage({
+  scope,
+  before = null,
+  statusFilter = "all",
+  sortOrder = "desc",
+}: {
+  scope: string;
+  before?: string | null;
+  statusFilter?: "all" | "submitted" | "draft" | "late";
+  sortOrder?: "desc" | "asc";
+}) {
+  const query = useCachedData(
+    `reports:history:${scope}:${before ?? "latest"}`,
+    () => getMyReportHistoryAction({ before, limit: 20 })
+  );
+  const [showOlder, setShowOlder] = React.useState(false);
+
+  const filteredReports = React.useMemo(() => {
+    const reports = query.data?.reports ?? [];
+    const filtered = reports.filter((entry) => {
+      if (statusFilter === "submitted") return entry.submissionStatus === "submitted";
+      if (statusFilter === "draft") return entry.submissionStatus === "draft";
+      if (statusFilter === "late") return entry.isLate;
+      return true;
+    });
+    return sortOrder === "asc" ? [...filtered].reverse() : filtered;
+  }, [query.data, statusFilter, sortOrder]);
+
+  return (
+    <div className="space-y-3">
+      {query.isLoading && <p role="status" className="text-sm text-muted-foreground">Memuat riwayat laporan...</p>}
+      {query.error && (
+        <div role="alert" className="rounded-lg border border-error/30 bg-error/10 p-3 text-sm text-error">
+          <p>Riwayat laporan gagal dimuat. Silakan coba lagi.</p>
+          <button type="button" onClick={() => void query.refresh()} disabled={query.isLoading}
+            className="mt-2 px-3 py-2 rounded-lg border border-current font-medium focus-visible:outline focus-visible:outline-2 disabled:opacity-50">
+            Coba lagi memuat riwayat
+          </button>
+        </div>
+      )}
+      {!query.isLoading && !query.error && query.data?.reports.length === 0 && (
+        <div className="p-8 text-center bg-surface-container-low rounded-xl border border-dashed border-border space-y-2">
+          <span className="material-symbols-outlined text-[32px] text-muted-foreground">description</span>
+          <p className="font-label-md text-on-surface text-[13px]">
+            {before ? "Tidak ada laporan lebih lama." : "Belum ada riwayat laporan."}
+          </p>
+          <p className="text-[11px] text-muted-foreground">
+            {before ? "" : "Laporan yang dikirim akan muncul di sini. Buat dan kirim laporan harian pertama Anda."}
+          </p>
+        </div>
+      )}
+      {filteredReports.length === 0 && (query.data?.reports.length ?? 0) > 0 && (
+        <p className="text-sm text-muted-foreground text-center py-4">
+          Tidak ada laporan yang cocok dengan filter ini.
+        </p>
+      )}
+      {filteredReports.length > 0 && (
+        <ul className="space-y-3">
+          {filteredReports.map((entry) => (
+            <li key={entry.id}>
+              <details className="rounded-lg border border-border">
+                <summary className="cursor-pointer p-4 text-sm text-on-surface rounded-lg focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary">
+                  <time dateTime={entry.reportDate} className="font-semibold">{historyDate(entry.reportDate)}</time>
+                  <span className="inline-flex flex-wrap gap-2 mx-2 align-middle">
+                    <span className={`inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-xs font-semibold ${
+                      entry.submissionStatus === "draft"
+                        ? "bg-warning/15 text-tertiary"
+                        : entry.isLate
+                        ? "bg-error/15 text-error"
+                        : "bg-success/15 text-success"
+                    }`}>
+                      <span className="material-symbols-outlined text-[13px]">
+                        {entry.submissionStatus === "draft" ? "edit_note" : entry.isLate ? "alarm" : "check_circle"}
+                      </span>
+                      {entry.submissionStatus === "draft" ? "Draft" : entry.isLate ? "Terlambat" : "Tepat Waktu"}
+                    </span>
+                    <span className={`inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-xs font-semibold ${
+                      entry.reviewStatus === "approved"
+                        ? "bg-success/15 text-success"
+                        : entry.reviewStatus === "revision_required"
+                        ? "bg-error/15 text-error"
+                        : entry.reviewStatus === "under_review"
+                        ? "bg-primary/10 text-primary"
+                        : "bg-secondary-container text-on-secondary-container"
+                    }`}>
+                      <span className="material-symbols-outlined text-[13px]">
+                        {entry.reviewStatus === "approved" ? "verified" : entry.reviewStatus === "revision_required" ? "rule" : entry.reviewStatus === "under_review" ? "rate_review" : "hourglass_empty"}
+                      </span>
+                      {HISTORY_REVIEW_LABELS[entry.reviewStatus]}
+                    </span>
+                  </span>
+                  <span className="text-muted-foreground">Detail laporan</span>
+                </summary>
+                <div className="border-t border-border p-4 space-y-4 text-sm break-words">
+                  {entry.firstSubmittedAt && (
+                    <p className="text-muted-foreground">
+                      Dikirim pertama: <time dateTime={entry.firstSubmittedAt}>{historyDate(entry.firstSubmittedAt, true)}</time>
+                      {entry.submissionStatus === "submitted" && (entry.isLate ? " · Terlambat" : " · Tepat Waktu")}
+                    </p>
+                  )}
+                  {entry.items.length === 0 ? <p>Belum ada aktivitas tersimpan.</p> : (
+                    <ol className="space-y-4">
+                      {entry.items.map((item, index) => (
+                        <li key={item.id} className="space-y-1">
+                          <h3 className="font-semibold">{index + 1}. {item.title || "Aktivitas tanpa judul"}</h3>
+                          <p className="text-muted-foreground">{item.categoryName} · {item.durationMinutes} menit</p>
+                          <p className="whitespace-pre-wrap">{item.description || "Belum ada deskripsi."}</p>
+                          <p className="whitespace-pre-wrap"><span className="font-medium">Hasil &amp; Progres: </span>{item.resultProgress || "—"}</p>
+                          <p className="whitespace-pre-wrap"><span className="font-medium">Kendala: </span>{item.obstacles || "—"}</p>
+                        </li>
+                      ))}
+                    </ol>
+                  )}
+                  {entry.latestReview && (
+                    <div className="rounded-lg bg-surface-container p-3 space-y-1">
+                      <h3 className="font-semibold">Catatan tinjauan terakhir</h3>
+                      <p className="text-muted-foreground">
+                        {HISTORY_REVIEW_LABELS[entry.latestReview.decision]} · <time dateTime={entry.latestReview.decidedAt}>{historyDate(entry.latestReview.decidedAt, true)}</time>
+                      </p>
+                      <p className="whitespace-pre-wrap">{entry.latestReview.notes || "Tidak ada catatan."}</p>
+                    </div>
+                  )}
+                </div>
+              </details>
+            </li>
+          ))}
+        </ul>
+      )}
+      {query.data?.nextCursor && (showOlder ? (
+        <ReportHistoryPage key={query.data.nextCursor} scope={scope} before={query.data.nextCursor} statusFilter={statusFilter} sortOrder={sortOrder} />
+      ) : (
+        <button type="button" onClick={() => setShowOlder(true)}
+          className="px-4 py-2 rounded-lg bg-surface-container text-on-surface font-medium hover:bg-accent focus-visible:outline focus-visible:outline-2"
+          aria-label="Muat laporan lebih lama">
+          Muat laporan lebih lama
+        </button>
+      ))}
     </div>
   );
 }

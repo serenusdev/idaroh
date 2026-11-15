@@ -15,6 +15,12 @@ const cspHeader = `default-src 'self'; img-src 'self' data: blob: https://lh3.go
 const nextConfig = {
   reactStrictMode: true,
   poweredByHeader: false,
+  // pdf.ts reads this WOFF2 at runtime via readFile (not a static import), so
+  // Next's output tracing never sees it. Include it explicitly or PDF export
+  // fails on Vercel serverless where node_modules is not deployed by default.
+  outputFileTracingIncludes: {
+    '/*': ['./node_modules/@fontsource/noto-sans/files/noto-sans-latin-ext-400-normal.woff2'],
+  },
   experimental: {
     staleTimes: {
       dynamic: 60,

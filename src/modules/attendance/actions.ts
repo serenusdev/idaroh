@@ -7,7 +7,9 @@ import { requireAuthUser, getHighestRole, ROLE_PRIORITY, getJakartaTime } from "
 import { UserRole } from "@/lib/auth/types";
 import { ATTENDANCE_HISTORY } from "./data";
 import { AttendanceClassification, AttendanceRecordItem, CorrectionRequestPayload } from "./types";
+import { resolveCorrectionClassification } from "./classification";
 import { throwQueryError } from "@/lib/query-error";
+import { friendlyActionError } from "@/lib/action-error";
 
 export interface CheckinResult {
   success: boolean;
@@ -102,7 +104,7 @@ export async function checkInAttendanceAction(): Promise<CheckinResult> {
       console.error("Gagal mencatat presensi di Supabase:", error);
       return {
         success: false,
-        message: "Gagal menyimpan presensi ke database: " + error.message,
+        message: friendlyActionError(error, "Gagal menyimpan presensi. Silakan coba lagi."),
         classification: "on_time",
         timeStr: jakarta.timeFormatted,
       };
@@ -134,7 +136,7 @@ export async function checkInAttendanceAction(): Promise<CheckinResult> {
     console.error("Supabase attendance checkin error:", err);
     return {
       success: false,
-      message: err.message || "Gagal mencatat presensi.",
+      message: friendlyActionError(err, "Gagal mencatat presensi."),
       classification: "on_time",
       timeStr: jakarta.timeFormatted,
     };
@@ -328,6 +330,20 @@ export async function submitCorrectionAction(
     }
     const notes = (payload.notes || "").trim();
     if (notes.length > 2000) return { success: false, message: "Catatan koreksi maksimal 2.000 karakter." };
+    const { data: activePolicy } = await supabase
+      .from("policy_settings")
+      .select("attendance_cutoff_time, attendance_grace_cutoff_time")
+      .eq("status", "active")
+      .order("effective_from", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    const resolved = resolveCorrectionClassification(
+      payload.reasonCategory,
+      payload.recordedTime,
+      activePolicy?.attendance_cutoff_time || "08:00",
+      activePolicy?.attendance_grace_cutoff_time || "08:15"
+    );
+    if ("error" in resolved) return { success: false, message: resolved.error };
     const { data: existing, error: existingError } = await supabase
       .from("attendance_corrections")
       .select("id, status")
@@ -340,13 +356,16 @@ export async function submitCorrectionAction(
     const { error } = await supabase.from("attendance_corrections").insert({
       user_id: user.id,
       attendance_date: payload.attendanceDate,
-      requested_classification: "on_time",
+      requested_classification: resolved.classification,
       reason: `${payload.reasonCategory}: ${notes || "Tanpa catatan tambahan"}`,
       evidence_url: payload.evidenceUrl || null,
       status: "pending",
     });
 
-    if (error) throw error;
+    if (error) {
+      if (error.code === "23505") return { success: false, message: "Koreksi untuk tanggal tersebut sudah pernah diajukan." };
+      throw error;
+    }
     await supabase.from("audit_logs").insert({
       event_name: "attendance.correction_requested",
       actor_id: user.id,
@@ -486,17 +505,23 @@ async function requireRoleForAttendanceReview() {
 export async function reviewAttendanceCorrectionAction(
   correctionId: string,
   decision: "approved" | "rejected",
-  note = ""
+  note = "",
+  effectiveClassification?: string
 ): Promise<{ success: boolean; message: string }> {
   const reviewer = await requireRoleForAttendanceReview();
+  const allowedClassifications = ["on_time", "grace", "late", "excused", "sick", "duty"];
+  if (effectiveClassification && !allowedClassifications.includes(effectiveClassification)) {
+    return { success: false, message: "Klasifikasi efektif koreksi tidak valid." };
+  }
   if (process.env.VITEST) return { success: true, message: "Koreksi presensi berhasil diproses." };
   const supabase = await createClient();
   const { data, error } = await supabase.rpc("review_attendance_correction", {
     p_correction_id: correctionId,
     p_decision: decision,
     p_note: note.trim() || null,
+    p_effective_classification: decision === "approved" ? effectiveClassification || null : null,
   });
-  if (error) return { success: false, message: error.message };
+  if (error) return { success: false, message: friendlyActionError(error, "Koreksi presensi gagal diproses.") };
   if (!data?.success) return { success: false, message: data?.message || "Koreksi presensi gagal diproses." };
   const admin = createAdminClient();
   await admin.from("audit_logs").insert({ event_name: `attendance.correction_${decision}`, actor_id: reviewer.id, actor_name: reviewer.full_name, target_id: correctionId, target_label: "Koreksi presensi", action_detail: note.trim() || "-" });
@@ -516,7 +541,7 @@ export async function reviewAttendanceExceptionAction(
     p_decision: decision,
     p_note: note.trim() || null,
   });
-  if (error) return { success: false, message: error.message };
+  if (error) return { success: false, message: friendlyActionError(error, "Pengajuan izin gagal diproses.") };
   if (!data?.success) return { success: false, message: data?.message || "Pengajuan izin gagal diproses." };
   const admin = createAdminClient();
   await admin.from("audit_logs").insert({ event_name: `attendance.exception_${decision}`, actor_id: reviewer.id, actor_name: reviewer.full_name, target_id: exceptionId, target_label: "Pengajuan izin presensi", action_detail: note.trim() || "-" });

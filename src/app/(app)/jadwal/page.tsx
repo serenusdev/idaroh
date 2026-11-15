@@ -2,6 +2,7 @@
 
 import * as React from "react";
 import { Illustration } from "@/components/ui/illustration";
+import { Modal } from "@/components/ui/modal";
 import {
   AnnouncementItem,
   ScheduleEventItem,
@@ -147,6 +148,25 @@ export default function JadwalPage() {
 
   return (
     <div className="w-full max-w-7xl mx-auto space-y-5 pb-24">
+      {/* Load Error — bedakan gagal muat vs jadwal kosong (UX-08) */}
+      {(eventsQuery.error || announcementsQuery.error) && (
+        <div
+          role="alert"
+          className="p-4 rounded-xl flex items-center justify-between gap-3 text-sm font-medium bg-error/15 text-error border border-error/30"
+        >
+          <div className="flex items-center gap-2">
+            <span className="material-symbols-outlined text-[20px]">error</span>
+            <span>Jadwal/pengumuman gagal dimuat. Ini bukan berarti tidak ada agenda.</span>
+          </div>
+          <button
+            type="button"
+            onClick={() => { eventsQuery.refresh(); announcementsQuery.refresh(); }}
+            className="underline shrink-0"
+          >
+            Coba lagi
+          </button>
+        </div>
+      )}
       {/* Sub-header & Quick Context */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pt-1">
         <div className="min-w-0">
@@ -389,7 +409,7 @@ export default function JadwalPage() {
                 Notifikasi Otomatis Aktif
               </p>
               <p className="font-body-sm text-[11px] text-muted-foreground leading-tight">
-                Pengingat dikirim 15 menit sebelum setiap agenda dimulai.
+                Perubahan lokasi dan pembatalan acara dikirim sebagai notifikasi push.
               </p>
             </div>
           </div>
@@ -435,7 +455,7 @@ export default function JadwalPage() {
 
               {/* Agenda Items Timeline List (SCH-002) */}
               <div className="space-y-3">
-                {filteredEvents.length === 0 ? (
+                {filteredEvents.length === 0 && !eventsQuery.error ? (
                   <div className="p-8 sm:p-10 text-center bg-card rounded-2xl border border-dashed border-border flex flex-col items-center justify-center space-y-3">
                     <Illustration
                       src="/illustrations/undraw_done_erdp.svg"
@@ -456,7 +476,9 @@ export default function JadwalPage() {
                   filteredEvents.map((evt) => (
                     <div
                       key={evt.id}
-                      className="rounded-xl bg-card p-4 sm:p-5 shadow-xs border border-border flex flex-col gap-3 transition-all hover:border-primary/40"
+                      className={`rounded-xl bg-card p-4 sm:p-5 shadow-xs border border-border flex flex-col gap-3 transition-all hover:border-primary/40 ${
+                        evt.statusBadge === "cancelled" ? "opacity-70" : ""
+                      }`}
                     >
                     {/* Time & Status Badge */}
                     <div className="flex items-center justify-between gap-2">
@@ -475,6 +497,8 @@ export default function JadwalPage() {
                             ? "bg-accent text-accent-foreground"
                             : evt.statusBadge === "location_changed"
                             ? "bg-warning/20 text-tertiary font-semibold"
+                            : evt.statusBadge === "cancelled"
+                            ? "bg-error/10 text-error font-semibold"
                             : "bg-secondary-container text-on-secondary-container"
                         }`}
                       >
@@ -486,6 +510,8 @@ export default function JadwalPage() {
                             ? "check_circle"
                             : evt.statusBadge === "location_changed"
                             ? "warning"
+                            : evt.statusBadge === "cancelled"
+                            ? "event_busy"
                             : "alarm"}
                         </span>
                         <span>{evt.statusLabel}</span>
@@ -565,14 +591,16 @@ export default function JadwalPage() {
                   Semua Pengumuman ({announcements.length})
                 </span>
 
-                <button
-                  type="button"
-                  onClick={() => setIsCreatingAnn(true)}
-                  className="h-8 px-3 rounded-lg bg-primary text-on-primary font-label-sm text-xs flex items-center gap-1 hover:bg-primary-container transition-all"
-                >
-                  <span className="material-symbols-outlined text-[16px]">add</span>
-                  <span>Buat Pengumuman</span>
-                </button>
+                {["super_admin", "yayasan", "pengurus"].includes(user.role) && (
+                  <button
+                    type="button"
+                    onClick={() => setIsCreatingAnn(true)}
+                    className="h-8 px-3 rounded-lg bg-primary text-on-primary font-label-sm text-xs flex items-center gap-1 hover:bg-primary-container transition-all"
+                  >
+                    <span className="material-symbols-outlined text-[16px]">add</span>
+                    <span>Buat Pengumuman</span>
+                  </button>
+                )}
               </div>
 
               <div className="space-y-3">
@@ -659,8 +687,7 @@ export default function JadwalPage() {
 
       {/* Modal Dialog: Event Detail */}
       {selectedEvent && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-xs">
-          <div className="bg-card rounded-2xl w-full max-w-md p-5 shadow-xl border border-border space-y-4">
+        <Modal isOpen onClose={() => setSelectedEvent(null)} title={selectedEvent.title} backdropClassName="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-xs" className="bg-card rounded-2xl w-full max-w-md p-5 shadow-xl border border-border space-y-4">
             <div className="flex items-center justify-between pb-2 border-b border-border">
               <span className="px-2 py-0.5 rounded bg-surface-container text-primary font-label-sm text-[10px] uppercase">
                 {selectedEvent.categoryLabel}
@@ -709,14 +736,12 @@ export default function JadwalPage() {
                 Tutup
               </button>
             </div>
-          </div>
-        </div>
+        </Modal>
       )}
 
       {/* Modal Dialog: Read Full Announcement */}
       {activeAnnouncement && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-xs">
-          <div className="bg-card rounded-2xl w-full max-w-lg p-5 sm:p-6 shadow-xl border border-border space-y-4">
+        <Modal isOpen onClose={() => setActiveAnnouncement(null)} title={activeAnnouncement.title} backdropClassName="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-xs" className="bg-card rounded-2xl w-full max-w-lg p-5 sm:p-6 shadow-xl border border-border space-y-4">
             <div className="flex items-center justify-between pb-2 border-b border-border">
               <span className="px-2 py-0.5 rounded-full bg-tertiary-fixed text-on-tertiary-fixed-variant text-xs font-semibold">
                 Pengumuman Resmi Pondok OS
@@ -756,14 +781,12 @@ export default function JadwalPage() {
                 Tandai Sudah Paham &amp; Tutup
               </button>
             </div>
-          </div>
-        </div>
+        </Modal>
       )}
 
       {/* Modal Dialog: Buat Pengumuman Baru */}
       {isCreatingAnn && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-xs">
-          <div className="bg-card rounded-2xl w-full max-w-lg p-5 sm:p-6 shadow-xl border border-border space-y-4">
+        <Modal isOpen onClose={() => setIsCreatingAnn(false)} title="Buat Pengumuman Resmi" backdropClassName="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-xs" className="bg-card rounded-2xl w-full max-w-lg p-5 sm:p-6 shadow-xl border border-border space-y-4">
             <div className="flex items-center justify-between pb-2 border-b border-border">
               <h3 className="font-headline-sm text-base text-on-surface font-semibold">
                 Buat Pengumuman Resmi
@@ -852,8 +875,7 @@ export default function JadwalPage() {
                 </button>
               </div>
             </form>
-          </div>
-        </div>
+        </Modal>
       )}
     </div>
   );

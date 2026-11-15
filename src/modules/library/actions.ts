@@ -11,6 +11,59 @@ import { isNonEmptyString } from "@/lib/input-validation";
 
 const RESOURCE_ADMIN_ROLES = ["super_admin", "yayasan", "pengurus"] as const;
 
+function mapResourceRow(r: any, authorName: string): ResourceItem {
+  const cat = r.resource_categories;
+  const filledCount = [
+    r.access_setup,
+    r.how_to_use,
+    r.workflow_examples,
+    r.limitations_cautions,
+    r.official_sources,
+    r.documentation_status,
+  ].filter(Boolean).length;
+
+  return {
+    id: r.id,
+    name: r.name,
+    slug: r.slug,
+    description: r.description || "",
+    category: cat?.name || "Umum",
+    categorySlug: cat?.slug || "general",
+    officialUrl: r.official_url,
+    tags: (r.resource_tags || []).map((item: any) => item.tags?.name).filter(Boolean),
+    filledFieldsCount: filledCount,
+    totalFieldsCount: 6,
+    lastUpdated: new Date(r.updated_at || r.created_at).toLocaleDateString("id-ID", {
+      day: "numeric",
+      month: "short",
+      year: "numeric",
+    }),
+    author: authorName,
+    visibility: r.visibility || "internal",
+    status: r.status || "published",
+    accessSetup: r.access_setup,
+    howToUse: r.how_to_use,
+    workflowExamples: r.workflow_examples,
+    limitationsCautions: r.limitations_cautions,
+    officialSources: r.official_sources,
+    documentationStatus: r.documentation_status,
+  };
+}
+
+const RESOURCE_SELECT = `
+  *,
+  resource_categories (
+    id, name, slug
+  ),
+  resource_tags (tags (name, slug))
+`;
+
+function visibilityFilter(role: string) {
+  return role === "super_admin" || role === "yayasan" || role === "pengurus"
+    ? "visibility.eq.internal,visibility.eq.restricted"
+    : "visibility.eq.internal";
+}
+
 export async function getCategoriesAction(): Promise<CategorySummary[]> {
   await requireAuthUser();
   try {
@@ -116,17 +169,9 @@ export async function getResourcesAction(
     const supabase = createAdminClient();
     let dbQuery = supabase
       .from("resources")
-      .select(`
-        *,
-        resource_categories (
-          id, name, slug
-        ),
-        resource_tags (tags (name, slug))
-      `)
+      .select(RESOURCE_SELECT)
       .eq("status", "published")
-      .or(user.role === "super_admin" || user.role === "yayasan" || user.role === "pengurus"
-        ? "visibility.eq.internal,visibility.eq.restricted"
-        : "visibility.eq.internal")
+      .or(visibilityFilter(user.role))
       .order("created_at", { ascending: false })
       .limit(100);
 
@@ -153,46 +198,9 @@ export async function getResourcesAction(
         ? await supabase.from("profiles").select("id, full_name").in("id", authorIds)
         : { data: [], error: null };
       if (authorError) throw authorError;
-      const authorMap = new Map((authors || []).map((author: any) => [author.id, author.full_name]));
+      const authorMap = new Map<string, string>((authors || []).map((author: any) => [author.id, author.full_name]));
 
-      const mapped: ResourceItem[] = data.map((r: any) => {
-        const cat = r.resource_categories;
-        const filledCount = [
-          r.access_setup,
-          r.how_to_use,
-          r.workflow_examples,
-          r.limitations_cautions,
-          r.official_sources,
-          r.documentation_status,
-        ].filter(Boolean).length;
-
-        return {
-          id: r.id,
-          name: r.name,
-          slug: r.slug,
-          description: r.description || "",
-          category: cat?.name || "Umum",
-          categorySlug: cat?.slug || "general",
-          officialUrl: r.official_url,
-          tags: (r.resource_tags || []).map((item: any) => item.tags?.name).filter(Boolean),
-          filledFieldsCount: filledCount,
-          totalFieldsCount: 6,
-          lastUpdated: new Date(r.updated_at || r.created_at).toLocaleDateString("id-ID", {
-            day: "numeric",
-            month: "short",
-            year: "numeric",
-          }),
-          author: authorMap.get(r.created_by) || "Tidak diketahui",
-          visibility: r.visibility || "internal",
-          status: r.status || "published",
-          accessSetup: r.access_setup,
-          howToUse: r.how_to_use,
-          workflowExamples: r.workflow_examples,
-          limitationsCautions: r.limitations_cautions,
-          officialSources: r.official_sources,
-          documentationStatus: r.documentation_status,
-        };
-      });
+      const mapped: ResourceItem[] = data.map((r: any) => mapResourceRow(r, authorMap.get(r.created_by) || "Tidak diketahui"));
 
       return mapped;
     }
@@ -220,6 +228,36 @@ export async function getResourcesAction(
   }
 
   return [];
+}
+
+/**
+ * TRC-27: deep-link slug langsung ke DB (tanpa limit 100 getResourcesAction).
+ */
+export async function getResourceBySlugAction(slug: string): Promise<ResourceItem | null> {
+  const user = await requireAuthUser();
+  if (!isNonEmptyString(slug, 200)) return null;
+  if (process.env.VITEST) {
+    return INITIAL_RESOURCES.find((resource) => resource.slug === slug) || null;
+  }
+  try {
+    const supabase = createAdminClient();
+    const { data, error } = await supabase
+      .from("resources")
+      .select(RESOURCE_SELECT)
+      .eq("status", "published")
+      .eq("slug", slug)
+      .or(visibilityFilter(user.role))
+      .maybeSingle();
+    if (error) throw error;
+    if (!data) return null;
+    const { data: author } = data.created_by
+      ? await supabase.from("profiles").select("full_name").eq("id", data.created_by).maybeSingle()
+      : { data: null };
+    return mapResourceRow(data, author?.full_name || "Tidak diketahui");
+  } catch (err) {
+    if (!process.env.VITEST) throwQueryError("library.resourceBySlug", err);
+    return null;
+  }
 }
 
 export async function toggleFavoriteAction(

@@ -8,6 +8,7 @@ import { createClient } from "@/lib/supabase/server";
 import { requireAuthUser, requireRole } from "@/lib/auth/guards";
 import { sendPushToUsers } from "@/lib/fcm";
 import { isNonEmptyString } from "@/lib/input-validation";
+import { parseMentionUsernames } from "./mentions";
 
 async function canAccessTask(
   supabase: ReturnType<typeof createAdminClient>,
@@ -404,15 +405,6 @@ export async function getTaskDiscussionAction(taskId: string): Promise<{ comment
     })),
     attachments: signed,
   };
-}
-
-/**
- * Extract @username handles from comment body text (TRC-23).
- * Returns an array of usernames (without the @ prefix).
- */
-export function parseMentionUsernames(body: string): string[] {
-  const matches = body.match(/@([A-Za-z0-9_.\-]{2,50})/g) || [];
-  return Array.from(new Set(matches.map((m) => m.slice(1).toLowerCase())));
 }
 
 export async function addTaskCommentAction(taskId: string, body: string, mentionedUserIds: string[] = []): Promise<{ success: boolean; message: string }> {

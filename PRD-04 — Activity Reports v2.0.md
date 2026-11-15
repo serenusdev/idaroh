@@ -1,6 +1,6 @@
 # PRD-04 — Daily Activity Reports (Laporan Aktivitas Harian)
 
-**Versi:** 2.0 · **Prefix:** REP · **Rilis:** R2 · **Dibaca bersama:** Master PRD v2.0, PRD-01, PRD-03, PRD-07 **Label:** \[TERKONFIRMASI\] · \[REKOMENDASI\] · \[TERBUKA\]
+**Versi:** 2.1 · **Keputusan audit:** 2026-11-13 (§16; NOW/v1.1 mengikat cakupan rilis, bukan klaim implementasi) · **Prefix:** REP · **Rilis:** R2 · **Dibaca bersama:** Master PRD v2.0, PRD-01, PRD-03, PRD-07 **Label:** \[TERKONFIRMASI\] · \[REKOMENDASI\] · \[TERBUKA\]
 
 ---
 
@@ -39,7 +39,7 @@ Santri mendokumentasikan **apa yang mereka kerjakan** setiap hari. Laporan terpi
 | --- | --- | --- |
 | BR-REP-08 | Satu laporan per pengguna per tanggal (`UNIQUE (user_id, report_date)`) berisi **1–N item aktivitas** | OD-017 |
 | BR-REP-09 | Laporan boleh diedit selama belum berstatus `approved`; setiap pengiriman ulang menjadi revisi baru yang tersimpan | OD-003 |
-| BR-REP-10 | Laporan untuk tanggal lampau dapat dikirim hingga 7 hari ke belakang (configurable); lebih dari itu perlu persetujuan pengurus | OD-016 |
+| BR-REP-10 | **[v1.1 — kontrak asal; NOW backfill diblokir, §16]** Laporan untuk tanggal lampau dapat dikirim hingga 7 hari ke belakang (configurable); lebih dari itu perlu persetujuan pengurus | OD-016 |
 | BR-REP-11 | Status `is_late` ditentukan **sekali** pada pengiriman pertama dan **tidak berubah** pada revisi berikutnya | — |
 | BR-REP-12 | Hari dengan keterangan izin/sakit disetujui (PRD-03) tidak menimbulkan kewajiban laporan | OD-007 |
 | BR-REP-13 | Kewajiban lapor ditentukan flag `report_required` pada profil (default santri); pengurus/yayasan default tidak wajib | OD-001 |
@@ -81,7 +81,7 @@ not_reviewed ──claim──→ under_review ──approve──→ approved
                                                   not_reviewed (revisi baru)
 ```
 
-- `approved` bersifat akhir kecuali dibuka kembali oleh pereview dengan alasan (audit) **\[REKOMENDASI\]**.
+- `approved` bersifat akhir; **[v1.1 — REP-019, kontrak asal]** dapat dibuka kembali oleh pereview dengan alasan (audit) **\[REKOMENDASI\]**.
 - Kirim ulang setelah revisi tidak mengubah `is_late` dan `first_submitted_at`; mencatat `last_submitted_at` dan `revision_no`.
 
 ### 3.3 Status Kepatuhan (dihitung, bukan disimpan sebagai keputusan)
@@ -129,7 +129,9 @@ report_submit(report_id):
         deadline = (report_date + 21:00) AT TIME ZONE 'Asia/Jakarta'
         is_late  = (now() > deadline)
         reviewer_id = penugasan aktif | NULL
-        tolak bila report_date lebih tua dari batas mundur (OD-016) -> REP_BACKFILL_LIMIT
+        NOW: tolak pengiriman pertama untuk tanggal lampau (backfill diblokir)
+        v1.1 (kontrak asal): tolak bila report_date lebih tua dari batas mundur
+                            (OD-016) -> REP_BACKFILL_LIMIT
   5. revision_no += 1; simpan snapshot ke report_revisions
   6. review_status = not_reviewed (jika sebelumnya revision_required)
   7. last_submitted_at = now(); submission_status = submitted
@@ -139,7 +141,7 @@ report_submit(report_id):
 
 - Tenggat dihitung dari tanggal laporan, bukan tanggal kirim: laporan tanggal 3 yang dikirim tanggal 4 pukul 08.00 tetap `is_late = true`.
 - Pengiriman ganda cepat (double-click) aman: pemeriksaan versi (`revision_no` yang diharapkan) mencegah revisi ganda.
-- Draft otomatis tersimpan (autosave) agar laporan panjang tidak hilang di jaringan buruk.
+- **[v1.1 — REP-015]** Draft otomatis tersimpan (autosave) agar laporan panjang tidak hilang di jaringan buruk.
 
 ---
 
@@ -152,23 +154,23 @@ report_submit(report_id):
 | REP-003 | Klasifikasi tepat waktu/terlambat berdasarkan tenggat 21.00 WIB tanggal laporan | M |
 | REP-004 | Laporan terlambat tetap bisa dikirim; `first_submitted_at` asli tidak berubah | M |
 | REP-005 | Kategori configurable oleh admin | S |
-| REP-006 | Lampiran pendukung (gambar/dokumen) dengan batas tipe & ukuran | S |
+| REP-006 | **[v1.1 — disetujui 2026-11-13]** Lampiran pendukung (gambar/dokumen) dengan batas tipe & ukuran | S |
 | REP-007 | Routing laporan ke pereview sesuai penugasan | M |
 | REP-008 | Keputusan review: setujui / minta revisi + catatan (wajib saat minta revisi) | M |
 | REP-009 | Santri menanggapi revisi dengan mengedit dan mengirim ulang; riwayat revisi & review tetap | M |
 | REP-010 | Antrean pereview: menunggu, perlu revisi, dikirim ulang, disetujui; filter tanggal/santri/status | M |
 | REP-011 | Monitoring kepatuhan harian: santri belum melapor setelah 21.00 | M |
-| REP-012 | Riwayat laporan pribadi; pereview melihat laporan dalam cakupannya | M |
+| REP-012 | **[NOW — TRC-05, 2026-11-13]** Riwayat laporan pribadi berupa daftar sederhana per tanggal dengan dua status dan tautan detail; pereview melihat laporan dalam cakupannya | M |
 | REP-013 | Snapshot penugasan pereview pada laporan; perubahan penugasan tidak mengubah laporan lama; admin dapat menugaskan ulang laporan menunggu | M |
 | REP-014 | Pengingat in-app sebelum 21.00 (mis. 19.30, 20.30) bagi yang belum mengirim; dapat dikonfigurasi | S |
-| REP-015 | Autosave draft | S |
-| REP-016 | Salin dari laporan kemarin sebagai template (tanpa mengirim otomatis) | C |
-| REP-017 | Komentar berulang pereview ↔ santri pada satu laporan (thread ringkas) | C |
-| REP-018 | Pereview massal: setujui banyak laporan sekaligus (hanya yang dipilih eksplisit) | C |
-| REP-019 | Buka kembali laporan `approved` oleh pereview dengan alasan | S |
-| REP-020 | Rekap per santri: periode, jumlah lapor, terlambat, belum lapor, rata-rata waktu review | S |
+| REP-015 | **[v1.1 — disetujui 2026-11-13]** Autosave draft | S |
+| REP-016 | **[v1.1 — disetujui 2026-11-13]** Salin dari laporan kemarin sebagai template (tanpa mengirim otomatis) | C |
+| REP-017 | **[v1.1 — disetujui 2026-11-13]** Komentar berulang pereview ↔ santri pada satu laporan (thread ringkas) | C |
+| REP-018 | **[v1.1 — disetujui 2026-11-13]** Pereview massal: setujui banyak laporan sekaligus (hanya yang dipilih eksplisit) | C |
+| REP-019 | **[v1.1 — disetujui 2026-11-13]** Buka kembali laporan `approved` oleh pereview dengan alasan | S |
+| REP-020 | **[v1.1 — disetujui 2026-11-13]** Rekap per santri: periode, jumlah lapor, terlambat, belum lapor, rata-rata waktu review | S |
 | REP-021 | Ekspor rekap & isi laporan (CSV/PDF) oleh yang berwenang, beraudit | S |
-| REP-022 | Pembatasan lampau: pengiriman melewati batas mundur butuh persetujuan pengurus (REP\_BACKFILL\_LIMIT → permintaan izin) | C |
+| REP-022 | **[v1.1 — kontrak asal; NOW backfill diblokir, 2026-11-13]** Pembatasan lampau: pengiriman melewati batas mundur butuh persetujuan pengurus (REP\_BACKFILL\_LIMIT → permintaan izin) | C |
 
 ---
 
@@ -272,7 +274,7 @@ UX: indikator status ditulis dengan teks + ikon; santri selalu melihat apakah la
 | Jenis | Skenario |
 | --- | --- |
 | pgTAP | Batas 21.00; `is_late` tidak berubah pada revisi; snapshot pereview; larangan baca silang; transisi review ilegal |
-| Unit | Validasi Zod item; batas karakter; util status |
+| Unit | Validasi server item (manual atau Zod; asal Zod); batas karakter; util status; guard kepemilikan/scope |
 | E2E | Tulis → kirim tepat waktu; kirim terlambat; minta revisi → kirim ulang → setujui; antrean belum ditugaskan |
 | Konkurensi | Dua pengiriman bersamaan; edit saat review |
 | Zona waktu | Server UTC vs WIB di sekitar 21.00 dan pergantian hari |
@@ -290,7 +292,7 @@ UX: indikator status ditulis dengan teks + ikon; santri selalu melihat apakah la
 | OD-005 | Delegasi review | Tidak; penugasan ulang oleh admin |
 | OD-007 | Pengecualian saat izin | Hari izin/sakit disetujui dikecualikan |
 | OD-011 | Kategori tetap/configurable | Configurable |
-| OD-016 | Batas mundur | 7 hari |
+| OD-016 | Batas mundur | **NOW (2026-11-13): backfill diblokir. v1.1 (asal): 7 hari**, izin pengurus di luar batas |
 | OD-017 | Satu laporan banyak item | Ya, 1–10 item |
 | OD-026 | Apakah hari tanpa kegiatan khusus tetap wajib entri rutin | Ya, wajib minimal 1 item (bisa "Kegiatan rutin") |
 
@@ -299,3 +301,16 @@ UX: indikator status ditulis dengan teks + ikon; santri selalu melihat apakah la
 ## 15. Metrik Modul
 
 Tingkat kepatuhan lapor harian; tingkat laporan terlambat; jumlah backlog review (dan usia terlama); waktu median dari kirim sampai review; jumlah revisi per laporan; persentase laporan disetujui pada kiriman pertama. Definisi rumus di PRD-08 §4.
+
+---
+
+## 16. Keputusan Audit — 2026-11-13 [TERKONFIRMASI]
+
+Change log 2.1; keputusan berikut mengikat NOW/v1.1 sesuai Master §0.4, bukan laporan bahwa fitur telah selesai.
+
+- **TRC-05 / REP-012 — M NOW:** riwayat laporan pribadi harus tersedia sebagai **daftar sederhana** berurut tanggal (terbaru dahulu), menampilkan tanggal, status pengumpulan dan review secara terpisah, serta akses detail laporan milik sendiri. Mencakup laporan lama, bukan hanya hari ini; sediakan pagination bila perlu dan keadaan kosong/gagal yang jelas. Rekap analitik REP-020 tidak diperlukan untuk daftar ini. Pereview tetap hanya melihat laporan dalam scope-nya; server tidak menerima `user_id` klien sebagai bukti kepemilikan.
+- **B / TRC-09 / OD-016 — NOW:** backfill diblokir: pengguna tidak dapat membuat atau melakukan pengiriman pertama laporan untuk tanggal lampau; tidak ada jalur izin pengurus untuk membuka backfill pada rilis awal. Pengiriman setelah 21.00 pada tanggal yang sama tetap diterima sebagai terlambat (REP-004). Revisi laporan yang sudah terkirim tetap mengikuti REP-009 dan mempertahankan `first_submitted_at`/`is_late`. Baseline BR-REP-10 dan REP-022 (7 hari + izin pengurus) dipertahankan sebagai **v1.1**, bukan dihapus atau dianggap aktif sekarang.
+- **Deferral C — v1.1:** REP-006 (lampiran), REP-015 (autosave), REP-016 (salin kemarin), REP-017 (thread), REP-018 (review massal), REP-019 (reopen approved), REP-020 (rekap per santri). Deskripsi, prioritas asal, layar, model data, dan acceptance turunannya tetap merupakan kontrak v1.1. Editor NOW tidak boleh menjanjikan autosave/lampiran yang belum tersedia; menyimpan draft biasa tidak sama dengan autosave.
+- **Lintas modul:** validasi server manual diterima tanpa kewajiban Zod; guard app-layer + RLS defense-in-depth tetap wajib. Scheduler eksternal cron-job.org dan FCM diakui; lihat [ADR](docs/ADR-2026-11-13-cron-job-org.md). Pengingat laporan tetap mengikuti requirement sebelum 21.00; seed 21.00 yang tercatat di ADR adalah selisih konfigurasi, bukan perubahan tenggat atau klaim sudah diperbaiki.
+
+Acceptance NOW tambahan: pemilik dapat membuka laporan lama dari daftar, dua status tidak tercampur, akun lain tidak dapat membaca detail di luar scope, dan pengiriman awal tanggal lampau ditolak server. Ini kriteria untuk verifikasi berikutnya, bukan hasil tes.

@@ -245,7 +245,12 @@ test.beforeAll(async () => {
     absWorkingDir: root,
     stdin: { contents: fixtureSource, resolveDir: root, sourcefile: "audit-ui-browser-fixture.tsx", loader: "tsx" },
     bundle: true, write: false, platform: "browser", format: "iife",
-    jsx: "automatic", define: { "process.env.NODE_ENV": '"development"' },
+    jsx: "automatic",
+    define: {
+      "process.env.NODE_ENV": '"development"',
+      "process.env.NEXT_PUBLIC_ADMIN_CONTACT_EMAIL": '""',
+      "process.env.NEXT_PUBLIC_ADMIN_WHATSAPP": '""',
+    },
     plugins: [boundaries], metafile: true,
   });
   const inputs = Object.keys(result.metafile!.inputs);

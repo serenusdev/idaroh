@@ -101,7 +101,7 @@ export async function getEventsAction(): Promise<ScheduleEventItem[]> {
     const { data: events, error } = await supabase
       .from("events")
       .select("*")
-      .eq("status", "scheduled")
+      .in("status", ["scheduled", "cancelled"])
       .is("deleted_at", null)
       .order("starts_at", { ascending: true });
 
@@ -130,8 +130,8 @@ export async function getEventsAction(): Promise<ScheduleEventItem[]> {
           endsAt: e.ends_at,
           dateStr: new Date(e.starts_at).toLocaleDateString("en-CA", { timeZone: "Asia/Jakarta" }),
           timeRangeStr,
-          statusBadge: e.location_changed ? "location_changed" : "on_schedule",
-          statusLabel: e.location_changed ? "Perubahan Lokasi" : "Sesuai Jadwal",
+          statusBadge: e.status === "cancelled" ? "cancelled" : e.location_changed ? "location_changed" : "on_schedule",
+          statusLabel: e.status === "cancelled" ? "Dibatalkan" : e.location_changed ? "Perubahan Lokasi" : "Sesuai Jadwal",
           category: (e.category || "teknologi") as any,
           categoryLabel:
             e.category === "keagamaan"

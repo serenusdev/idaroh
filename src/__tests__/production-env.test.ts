@@ -13,6 +13,9 @@ const valid = {
   SUPABASE_SERVICE_ROLE_KEY: "sb_secret_valid",
   NEXT_PUBLIC_APP_URL: "https://app.supabase.co",
   CRON_SECRET: "a".repeat(32),
+  TURNSTILE_SECRET_KEY: "0x4AAAAAAA_valid_turnstile_secret",
+  RESEND_API_KEY: "re_valid_resend_key",
+  EMAIL_FROM: "IDAROH <no-reply@idaroh.sch.id>",
 };
 
 describe("production environment", () => {
@@ -28,6 +31,11 @@ describe("production environment", () => {
   it("requires cron authentication and disallows test bypass", () => {
     expect(() => validateProductionEnvironment({ ...valid, CRON_SECRET: "" })).toThrow("CRON_SECRET");
     expect(() => validateProductionEnvironment({ ...valid, VITEST: "true" })).toThrow("VITEST");
+  });
+  it("requires fail-closed Turnstile and the transactional email provider", () => {
+    expect(() => validateProductionEnvironment({ ...valid, TURNSTILE_SECRET_KEY: "" })).toThrow("TURNSTILE_SECRET_KEY");
+    expect(() => validateProductionEnvironment({ ...valid, RESEND_API_KEY: "" })).toThrow("RESEND_API_KEY");
+    expect(() => validateProductionEnvironment({ ...valid, EMAIL_FROM: "" })).toThrow("EMAIL_FROM");
   });
   it("does not require production services in local development", () => {
     expect(() => validateProductionEnvironment({ NODE_ENV: "development" })).not.toThrow();

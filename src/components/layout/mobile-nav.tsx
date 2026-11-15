@@ -27,6 +27,8 @@ export function MobileNav({ user }: MobileNavProps) {
     user.role === "yayasan" ||
     user.role === "pengurus";
 
+  const isKoordinator = user.role === "koordinator";
+
   const navItems = isAdminOrPengurus
     ? [
         {
@@ -52,6 +54,33 @@ export function MobileNav({ user }: MobileNavProps) {
           href: "/admin/audit",
           icon: "monitoring",
           active: isActive("/admin/audit") && !isMoreOpen,
+        },
+      ]
+    : isKoordinator
+    ? [
+        {
+          label: "Beranda",
+          href: "/",
+          icon: "dashboard",
+          active: isActive("/") && !isMoreOpen,
+        },
+        {
+          label: "Review",
+          href: "/review",
+          icon: "fact_check",
+          active: isActive("/review") && !isMoreOpen,
+        },
+        {
+          label: "Laporan",
+          href: "/laporan",
+          icon: "edit_document",
+          active: isActive("/laporan") && !isMoreOpen,
+        },
+        {
+          label: "Jadwal",
+          href: "/jadwal",
+          icon: "calendar_month",
+          active: isActive("/jadwal") && !isMoreOpen,
         },
       ]
     : [

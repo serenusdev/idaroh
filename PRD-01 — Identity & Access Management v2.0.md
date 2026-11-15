@@ -1,6 +1,6 @@
 # PRD-01 — Identity & Access Management (IAM)
 
-**Versi:** 2.0 · **Prefix:** IAM · **Rilis:** R1 · **Dibaca bersama:** Master PRD v2.0 **Label:** \[TERKONFIRMASI\] · \[REKOMENDASI\] · \[TERBUKA\] (lihat Master §0.2)
+**Versi:** 2.1 · **Keputusan audit:** 2026-11-13 (§16; NOW/v1.1 mengikat cakupan rilis, bukan klaim implementasi) · **Prefix:** IAM · **Rilis:** R1 · **Dibaca bersama:** Master PRD v2.0 **Label:** \[TERKONFIRMASI\] · \[REKOMENDASI\] · \[TERBUKA\] (lihat Master §0.2)
 
 ---
 
@@ -59,7 +59,7 @@ Ustadz muncul sebagai pereview di dokumen awal tetapi bukan peran. **\[REKOMENDA
 | `app.led_team_ids()` | Tim yang dipimpin (koordinator) |
 | `app.is_reviewer_of(target_user uuid)` | True jika ada penugasan pereview aktif |
 
-Semua policy RLS di seluruh modul **wajib** memanggil `app.is_active_member()` lalu permission. Fungsi bertipe `SECURITY DEFINER` dengan `search_path` terkunci dan hanya membaca tabel otorisasi.
+**[v1.1 — kontrak konsolidasi helper asal]** Semua policy RLS di seluruh modul memanggil `app.is_active_member()` lalu permission. Fungsi bertipe `SECURITY DEFINER` dengan `search_path` terkunci dan hanya membaca tabel otorisasi. **[NOW, 2026-11-13]** Otorisasi request di app-layer + guard tests; RLS tetap aktif sebagai defense-in-depth dan tidak boleh dilonggarkan (§16). Ini bukan klaim seluruh policy/action kini memakai helper tersebut.
 
 ### 2.5 Permission Katalog Dasar
 
@@ -78,7 +78,7 @@ Semua policy RLS di seluruh modul **wajib** memanggil `app.is_active_member()` l
 **Aturan keras:**
 
 - **BR-IAM-01** Pemohon tidak pernah bisa menetapkan peran sendiri; tidak ada policy tulis pengguna pada `user_roles`.
-- **BR-IAM-02** Perubahan peran hanya lewat RPC `iam_assign_role` / `iam_revoke_role` yang memeriksa permission, mencatat audit, dan menolak jika menghapus **Super Admin terakhir**.
+- **BR-IAM-02 [v1.1 — target atomik, kontrak asal]** Perubahan peran hanya lewat RPC `iam_assign_role` / `iam_revoke_role` yang memeriksa permission, mencatat audit, dan menolak jika menghapus **Super Admin terakhir**. **[NOW, 2026-11-13]** Server action + guard diterima sebagai jalur saat ini; audit tetap wajib, tetapi atomicity dan kelengkapan guard tidak dianggap sudah terpenuhi (§16).
 - **BR-IAM-03** Peran **tidak disimpan** di `user_metadata`/klaim yang dapat diubah pengguna.
 - **BR-IAM-04** Admin tidak dapat mengubah peran dirinya sendiri tanpa persetujuan Super Admin lain **\[REKOMENDASI\]** (prinsip empat mata; berlaku jika ≥ 2 Super Admin).
 - **BR-IAM-05** Perubahan peran berlaku pada permintaan berikutnya tanpa login ulang (peran dibaca dari DB, bukan hanya JWT).
@@ -165,8 +165,8 @@ Transisi tidak valid ditolak di DB (trigger/constraint). **Tidak ada penghapusan
 | Nama lengkap | Ya | Dipakai di seluruh sistem |
 | Email | Ya\* | \*Jalur A |
 | Password | Ya\* | Kebijakan: min. 10 karakter, cek kata sandi umum/bocor bila tersedia |
-| Kategori keanggotaan | Ya | Santri / Ustadz / Pengurus / Yayasan / Lainnya (OD-014) |
-| Nomor HP | Opsional | Untuk kontak; dilindungi |
+| Kategori keanggotaan | Ya (NOW, REG-01) | Lima klaim: Santri / Ustadz / Pengurus / Yayasan / Lainnya (OD-014); bukan role otorisasi |
+| Nomor HP | Ya (NOW, 2026-11-13; asal Opsional) | Untuk kontak; dilindungi, tidak otomatis terlihat di direktori |
 | Tim/unit yang dituju | Opsional | Saran saja; admin yang memutuskan |
 | Catatan untuk admin | Opsional | Maks. 500 karakter |
 | Persetujuan kebijakan privasi | Ya | Versi & waktu disimpan |
@@ -185,7 +185,7 @@ Konstrain: satu permohonan `pending` aktif per email; email dinormalisasi huruf 
 
 | ID | Persyaratan | Prioritas |
 | --- | --- | --- |
-| IAM-001 | Form pengajuan akun dengan Turnstile, rate limit (mis. 5/jam/IP & per email), validasi Zod server-side, pesan bahwa akun belum aktif | M |
+| IAM-001 | Form pengajuan akun dengan Turnstile, rate limit (mis. 5/jam/IP & per email), validasi server-side (manual diterima, Zod opsional; asal Zod wajib, keputusan 2026-11-13), pesan bahwa akun belum aktif | M |
 | IAM-002 | Antrean permohonan untuk admin: filter status, pencarian, detail pemohon | M |
 | IAM-003 | Setujui (peran awal + tim opsional) dan tolak (alasan wajib) dalam satu transaksi beraudit | M |
 | IAM-004 | Login/logout aman; gerbang status akun di middleware **dan** di RLS | M |
@@ -196,13 +196,13 @@ Konstrain: satu permohonan `pending` aktif per email; email dinormalisasi huruf 
 | IAM-009 | Manajemen sesi: daftar sesi aktif, logout semua perangkat, pencabutan admin saat suspend | S |
 | IAM-010 | Audit untuk persetujuan, penolakan, perubahan peran, tim, suspend, nonaktif, reset paksa | M |
 | IAM-011 | Verifikasi email pemohon sebelum masuk antrean prioritas | M |
-| IAM-012 | MFA TOTP untuk Super Admin, Yayasan, Pengurus (wajib untuk Super Admin) | S |
+| IAM-012 | MFA TOTP untuk Super Admin, Yayasan, Pengurus (wajib untuk Super Admin): **[v1.1] enforcement login**; **[NOW] semua Super Admin existing wajib mengaktifkan dan memverifikasi TOTP manual sebagai release gate**, bukan klaim enforcement tersedia (§16) | S |
 | IAM-013 | Pembuatan akun oleh admin atas nama pengguna (jalur B), status langsung aktif, beraudit | S |
 | IAM-014 | Perubahan peran massal / impor pengguna CSV dengan pratinjau & laporan kesalahan | C |
 | IAM-015 | Guard "Super Admin terakhir" dan prinsip empat mata untuk perubahan peran admin | M |
 | IAM-016 | Halaman status akun (pending/rejected/suspended) dengan pesan jelas dan kontak admin | M |
-| IAM-017 | Pencatatan persetujuan kebijakan privasi (versi, waktu) dan persetujuan ulang saat versi berubah | S |
-| IAM-018 | Peringatan keamanan ke pengguna (email) saat password diganti atau login perangkat baru | C |
+| IAM-017 | **[NOW — REG-03, disetujui 2026-11-13]** Pencatatan persetujuan kebijakan privasi (versi, waktu) dan persetujuan ulang saat versi berubah | S (NOW; bukan v1.1) |
+| IAM-018 | **[v1.1 — disetujui 2026-11-13]** Peringatan keamanan ke pengguna (email) saat password diganti atau login perangkat baru | C |
 | IAM-019 | Konfigurasi masa berlaku sesi dan batas percobaan login | S |
 
 ---
@@ -297,7 +297,7 @@ Aksi: `iam.account.requested`, `.approved`, `.rejected`, `.suspended`, `.reactiv
 | Jenis | Skenario kunci |
 | --- | --- |
 | pgTAP | Matriks peran × tabel × operasi; fungsi `has_permission` untuk semua scope; transisi status ilegal ditolak; guard Super Admin terakhir |
-| Unit | Skema Zod pengajuan; normalisasi email; kebijakan password |
+| Unit | Validasi server pengajuan (manual atau Zod; asal skema Zod); normalisasi email; kebijakan password; guard app-layer |
 | E2E | Pengajuan → verifikasi email → persetujuan → login pertama; penolakan; suspend saat sesi aktif; reset password |
 | Keamanan | Percobaan eskalasi peran lewat klien Supabase langsung; IDOR pada detail pengguna; rate limit; enumerasi akun |
 
@@ -320,3 +320,19 @@ Aksi: `iam.account.requested`, `.approved`, `.rejected`, `.suspended`, `.reactiv
 ## 15. Metrik Modul
 
 Waktu rata-rata persetujuan akun; jumlah permohonan pending > 48 jam; persentase pengguna aktif ber-MFA (peran tinggi); jumlah percobaan login gagal/hari; jumlah perubahan peran/bulan.
+
+---
+
+## 16. Keputusan Audit — 2026-11-13 [TERKONFIRMASI]
+
+Change log 2.1: keputusan pengguna berikut mengikat cakupan NOW/v1.1 (Master §0.4); tidak menyatakan perbaikan sudah diimplementasi atau diuji.
+
+- **REG-01 + REG-03 / IAM-017 — NOW:** form menawarkan tepat lima **klaim kategori keanggotaan**: Santri, Ustadz, Pengurus, Yayasan, Lainnya. Bukan pilihan `roles`/`user_roles`, tidak memberi hak akses, tidak otomatis mengaktifkan akun; admin tetap memverifikasi dan menetapkan role secara terpisah. `staf` pada model profil PRD-07 bukan opsi keenam pada form klaim ini. Checkbox persetujuan privasi wajib; versi kebijakan dan waktu persetujuan dari server disimpan terkait pemohon, dapat ditelusuri setelah approval. IAM-017 termasuk persetujuan ulang saat versi berubah tetap NOW, bukan bagian deferral C.
+- **REG-05 — NOW:** HP wajib di pengajuan (mengganti baseline opsional), tetap data kontak privat; kewajiban mengisi bukan izin mempublikasikan kontak.
+- **REG-07 / IAM-001 — NOW:** validasi manual di server diterima; Zod boleh dipakai tetapi bukan syarat rilis. Semua batas input, normalisasi, anti-bot, rate limit, dan validasi kategori/consent tetap wajib; validasi klien saja tidak cukup.
+- **TRC-10 / IAM-012 — v1.1:** enforcement MFA pada login/session untuk Super Admin ditunda eksplisit. **Release gate NOW: semua Super Admin yang SUDAH ADA harus mengaktifkan TOTP secara manual dan menyelesaikan verifikasi faktor.** Operator mencatat identitas akun, waktu, pemeriksa, dan hasil verifikasi tanpa secret/QR/recovery code. Belum boleh menyatakan gate terpenuhi sebelum bukti tersebut ada. Pendaftaran faktor tidak membuktikan setiap login meminta TOTP atau akses AAL1 ditolak; residual risk login tanpa challenge diterima sementara sampai v1.1.
+- **TRC-28 — NOW:** app-layer adalah gerbang otorisasi request pengguna: identitas berasal dari sesi server, akun aktif, role terbaru, serta scope `own/assigned/team/all` diperiksa sebelum query/mutasi, terutama jalur service-role. Wajib bukti **guard tests** (anonim, nonaktif, role salah, IDOR/lintas tim, self-escalation) dan tes RLS secara terpisah. RLS tetap aktif, default-deny, defense-in-depth; **jangan menambah policy permisif, menonaktifkan RLS, atau menganggap service-role dilindungi RLS**. Kontrak helper database §2.4 tetap target konsolidasi **v1.1**, bukan deskripsi semua action saat ini.
+- **FUNC-16 / BR-IAM-02 — NOW:** server action + guard diterima sebagai mekanisme penugasan/pencabutan role. Identitas aktor tidak boleh dari payload, cek kewenangan dan target tetap wajib, audit tetap diwajibkan. **Target v1.1:** `iam_assign_role` / `iam_revoke_role` menyatukan mutasi dan audit secara atomik. Requirement guard Super Admin terakhir (termasuk race) dan prinsip empat mata IAM-015 tetap dipertahankan; penundaan mekanisme RPC bukan penghapusan kewajiban guard. Mekanisme server action saat ini **tidak dinyatakan setara transaksi RPC atau sudah memenuhi seluruh guard tersebut**; bukti guard/audit harus dilaporkan, bukan diasumsikan dari nama action.
+- **IAM-018 — v1.1:** email peringatan keamanan ditunda; tidak mengubah kebutuhan email keputusan pengajuan atau reset password yang terpisah.
+
+Acceptance NOW tambahan: lima klaim tidak dapat mengeskalasi role; pengajuan tanpa HP/consent ditolak di server; versi/waktu consent tersimpan; bukti aktivasi manual TOTP semua Super Admin existing tersedia; guard dan RLS diuji sebagai lapisan berbeda. Ini rencana penerimaan, bukan hasil tes pembaruan dokumentasi.

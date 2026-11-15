@@ -66,6 +66,20 @@ export default function AdminAnalyticsPage() {
         </div>
       </header>
 
+      {analyticsQuery.error && (
+        <div role="alert" className="rounded-2xl border border-error/30 bg-error-container/30 p-5 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+          <div className="flex items-start gap-2">
+            <span className="material-symbols-outlined text-error text-[20px]">error</span>
+            <div>
+              <p className="text-sm font-semibold text-on-surface">Analitik gagal dimuat</p>
+              <p className="text-xs text-muted-foreground mt-0.5">Angka tidak ditampilkan karena data gagal diambil dari server. Ini bukan berarti nol.</p>
+            </div>
+          </div>
+          <button type="button" onClick={() => analyticsQuery.refresh()} className="h-9 px-3 rounded-lg bg-primary text-on-primary text-xs font-semibold shrink-0">Coba lagi</button>
+        </div>
+      )}
+
+      {!analyticsQuery.error && (
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
         <section className="rounded-2xl border border-border bg-card p-5 space-y-4">
           <div className="flex justify-between items-start"><div><p className="text-xs uppercase tracking-wider text-muted-foreground">Presensi</p><p className="text-3xl font-mono font-bold text-primary mt-1">{rate(data.attendance.checkedIn, data.attendance.population)}</p><p className="text-xs text-muted-foreground">{data.attendance.checkedIn} dari {data.attendance.population} wajib check-in</p></div><span className="material-symbols-outlined text-primary">how_to_reg</span></div>
@@ -88,6 +102,7 @@ export default function AdminAnalyticsPage() {
           <button type="button" onClick={() => openDrilldown("tasks_overdue")} className="text-xs font-semibold text-primary hover:underline">Lihat {data.tasks.overdue} tugas terlambat →</button>
         </section>
       </div>
+      )}
 
       <section className="rounded-2xl border border-border bg-card p-5">
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2"><div><h2 className="font-semibold text-on-surface">Definisi &amp; batas akses</h2><p className="text-xs text-muted-foreground mt-1">Periode: {data.period.from || "minggu berjalan"} s.d. {data.period.to || "hari ini"}. Koordinator hanya menerima scope timnya.</p></div><span className="text-xs text-muted-foreground">Data tidak dipakai untuk ranking individu</span></div>

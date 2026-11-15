@@ -365,11 +365,14 @@ describe("SEC-11 + TRC-01 — submitAccountApplicationAction Turnstile fail-clos
     vi.stubEnv("VITEST", "");
     vi.stubEnv("TURNSTILE_SECRET_KEY", "test-secret-key");
 
-    // Stub global fetch: HIBP check returns "not pwned", Turnstile returns failure
+    // Stub global fetch by URL: Turnstile returns failure, HIBP returns "not pwned"
     const originalFetch = global.fetch;
-    global.fetch = vi.fn()
-      .mockResolvedValueOnce({ ok: true, text: async () => "" } as unknown as Response) // HIBP
-      .mockResolvedValueOnce({ ok: true, json: async () => ({ success: false }) } as unknown as Response); // Turnstile
+    global.fetch = vi.fn().mockImplementation(async (url: string) => {
+      if (typeof url === "string" && url.includes("turnstile")) {
+        return { ok: true, json: async () => ({ success: false }) } as unknown as Response;
+      }
+      return { ok: true, text: async () => "" } as unknown as Response;
+    });
 
     const result = await submitAccountApplicationAction({
       ...basePayload,
