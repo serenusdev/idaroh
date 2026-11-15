@@ -1,15 +1,15 @@
 name: Pondok OS Weekly DB Backup
 
 # Backup logis mingguan untuk Supabase Free plan (tanpa PITR/daily backup berbayar).
-# Alur: supabase db dump (session pooler) -> enkripsi age -> upload Cloudflare R2.
+# Alur: supabase db dump (session pooler) -> enkripsi age -> upload Backblaze B2 (S3-compatible).
 #
 # Secret wajib (Settings -> Secrets and variables -> Actions):
 #   SUPABASE_DB_URL        connection string SESSION POOLER (bukan direct; runner GH IPv4, direct Supabase IPv6-only)
 #   AGE_RECIPIENT          public key age (age1...); private key disimpan operator offline, tidak di CI
-#   R2_ACCOUNT_ID          Cloudflare account ID
-#   R2_ACCESS_KEY_ID       R2 API token Access Key ID (Object Read & Write)
-#   R2_SECRET_ACCESS_KEY   R2 API token Secret Access Key
-#   R2_BUCKET              nama bucket R2 tujuan
+#   B2_APPLICATION_KEY_ID  Backblaze B2 application keyID (keyID)
+#   B2_APPLICATION_KEY     Backblaze B2 applicationKey (secret, hanya tampil sekali)
+#   B2_BUCKET              nama bucket B2 tujuan
+#   B2_REGION              region bucket B2 (mis. us-west-004); menentukan endpoint S3
 #
 # Cakupan: skema public (tabel aplikasi + policy RLS). auth.users dan Storage TIDAK ikut;
 # lihat docs/backup-restore.md untuk batasan dan drill restore.
@@ -64,17 +64,23 @@ jobs:
           # Hapus plaintext PII segera setelah enkripsi; runner ephemeral, tetapi jangan tinggalkan salinan mentah.
           shred -u backup.sql
 
-      - name: Upload to Cloudflare R2
+      - name: Upload to Backblaze B2
         env:
-          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
-          AWS_DEFAULT_REGION: auto
-          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
-          R2_BUCKET: ${{ secrets.R2_BUCKET }}
+          AWS_ACCESS_KEY_ID: ${{ secrets.B2_APPLICATION_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.B2_APPLICATION_KEY }}
+          AWS_DEFAULT_REGION: ${{ secrets.B2_REGION }}
+          B2_BUCKET: ${{ secrets.B2_BUCKET }}
+          B2_REGION: ${{ secrets.B2_REGION }}
         run: |
-          ENDPOINT="https://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com"
+          if [ -z "$B2_REGION" ] || [ -z "$B2_BUCKET" ]; then
+            echo "::error::Secret B2_REGION / B2_BUCKET belum diset."
+            exit 1
+          fi
+          ENDPOINT="https://s3.${B2_REGION}.backblazeb2.com"
           KEY="backups/$(date -u +%F)-$(date -u +%H%M%S).sql.age"
-          aws s3 cp backup.sql.age "s3://${R2_BUCKET}/${KEY}" --endpoint-url "$ENDPOINT"
+          # B2 S3-compatible: pakai path-style agar tidak bergantung DNS virtual-host bucket.
+          aws configure set default.s3.addressing_style path
+          aws s3 cp backup.sql.age "s3://${B2_BUCKET}/${KEY}" --endpoint-url "$ENDPOINT"
           # Verifikasi objek benar-benar landed (bukti, bukan hanya exit code cp).
-          aws s3api head-object --bucket "$R2_BUCKET" --key "$KEY" --endpoint-url "$ENDPOINT"
-          echo "Backup tersimpan: s3://${R2_BUCKET}/${KEY}"
+          aws s3api head-object --bucket "$B2_BUCKET" --key "$KEY" --endpoint-url "$ENDPOINT"
+          echo "Backup tersimpan: s3://${B2_BUCKET}/${KEY}"

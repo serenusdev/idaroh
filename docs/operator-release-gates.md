@@ -6,7 +6,7 @@ Aturan tetap: jangan taruh secret di repo, log, screenshot, atau chat. `.env.exa
 
 ## Urutan aman
 
-1. Backup dulu (R2 + GitHub Actions) — jaring pengaman sebelum ubah skema.
+1. Backup dulu (B2 + GitHub Actions) — jaring pengaman sebelum ubah skema.
 2. Apply migrasi.
 3. Environment variables di Vercel + redeploy.
 4. Cron eksternal (cron-job.org).
@@ -18,19 +18,19 @@ Selesaikan berurutan; tiap gate ada bukti yang harus dicatat. Checklist akhir di
 
 ## 0. Prasyarat akses & alat
 
-Akun yang dibutuhkan: Supabase (project production), Vercel (project terhubung repo), Cloudflare (Turnstile + R2), Resend, cron-job.org, GitHub (repo `serenusdev/idaroh`).
+Akun yang dibutuhkan: Supabase (project production), Vercel (project terhubung repo), Cloudflare (Turnstile), Backblaze B2 (backup, tanpa kartu kredit), Resend, cron-job.org, GitHub (repo `serenusdev/idaroh`).
 
 Alat di mesin operator: `supabase` CLI, `age` (`age-keygen`), `aws` CLI (atau `rclone`), `openssl`, `psql` (untuk drill restore). Di macOS: `brew install supabase/tap/supabase age awscli libpq openssl`.
 
-## 1. Backup mingguan ke Cloudflare R2 (Free plan)
+## 1. Backup mingguan ke Backblaze B2 (Free plan)
 
 Workflow sudah ada di `.github/workflows/backup.yml`; prosedur lengkap + batasan di `docs/backup-restore.md`. Ringkasan setup:
 
-### 1a. Bucket + token R2
-1. Cloudflare dashboard → **R2** → **Create bucket** → nama mis. `idaroh-backups` → Create.
-2. Buka bucket → **Settings** → **Object lifecycle rules** → Add rule: prefix `backups/`, expire setelah mis. **60 hari** (retensi ikuti kebijakan privasi).
-3. R2 → **Manage R2 API Tokens** → **Create API Token** → permission **Object Read & Write** → scope bucket `idaroh-backups` → Create. Catat **Access Key ID** + **Secret Access Key** (secret hanya tampil sekali).
-4. Catat **Account ID** Cloudflare (sidebar kanan overview / Workers & Pages).
+### 1a. Bucket + application key B2
+1. Daftar Backblaze B2 (tanpa kartu kredit) → **Buckets** → **Create a Bucket** → nama mis. `idaroh-backups` (Files in Bucket: **Private**) → Create.
+2. Catat **region** bucket (mis. `us-west-004`) — terlihat di **Endpoint** bucket; ini jadi secret `B2_REGION`.
+3. Buka bucket → **Lifecycle Settings** → atur objek prefix `backups/` kedaluwarsa setelah mis. **60 hari** (retensi ikuti kebijakan privasi).
+4. **Application Keys** → **Add a New Application Key** → nama mis. `idaroh-backup` → allow access to bucket `idaroh-backups` → type of access **Read and Write** → Create. Catat **keyID** + **applicationKey** (applicationKey hanya tampil sekali).
 
 ### 1b. Kunci enkripsi age
 1. Jalankan `age-keygen -o key.txt`. Public key (`age1...`) dicetak ke layar.
@@ -49,14 +49,14 @@ GitHub → repo → **Settings → Secrets and variables → Actions → New rep
 | --- | --- |
 | `SUPABASE_DB_URL` | Session pooler URL (1c) |
 | `AGE_RECIPIENT` | Public key age (1b) |
-| `R2_ACCOUNT_ID` | Account ID Cloudflare (1a) |
-| `R2_ACCESS_KEY_ID` | Access Key ID token R2 (1a) |
-| `R2_SECRET_ACCESS_KEY` | Secret Access Key token R2 (1a) |
-| `R2_BUCKET` | `idaroh-backups` |
+| `B2_APPLICATION_KEY_ID` | keyID application key B2 (1a) |
+| `B2_APPLICATION_KEY` | applicationKey B2 (1a) |
+| `B2_BUCKET` | `idaroh-backups` |
+| `B2_REGION` | Region bucket B2, mis. `us-west-004` (1a) |
 
-Lalu: push workflow ke repo → tab **Actions** → **Pondok OS Weekly DB Backup** → **Run workflow** (pemicu manual) untuk bukti pertama. Setelah hijau, cek bucket R2: objek `backups/<tanggal>.sql.age` harus ada. Jadwal otomatis: Senin 00:00 WIB.
+Lalu: push workflow ke repo → tab **Actions** → **Pondok OS Weekly DB Backup** → **Run workflow** (pemicu manual) untuk bukti pertama. Setelah hijau, cek bucket B2: objek `backups/<tanggal>.sql.age` harus ada. Jadwal otomatis: Senin 00:00 WIB.
 
-Bukti: screenshot run hijau + objek di R2 (tanpa secret). Catatan: dump = skema `public`; `auth.users` (akun) dan Storage (file) tidak ikut — lihat `docs/backup-restore.md`.
+Bukti: screenshot run hijau + objek di B2 (tanpa secret). Catatan: dump = skema `public`; `auth.users` (akun) dan Storage (file) tidak ikut — lihat `docs/backup-restore.md`.
 
 ## 2. Apply migrasi (10 file pending)
 
@@ -159,7 +159,7 @@ Catat bukti (siapa, kapan, status verified) **tanpa** secret/QR/kode. Enrollment
 ## 6. Drill restore (wajib; ADM-009)
 
 Backup tanpa uji restore tidak memenuhi ADM-009. Prosedur lengkap di `docs/backup-restore.md` (§Drill restore). Ringkas:
-1. Ambil objek terbaru dari R2 (`aws s3 cp s3://idaroh-backups/backups/<file>.sql.age . --endpoint-url https://<account>.r2.cloudflarestorage.com`).
+1. Ambil objek terbaru dari B2 (`aws s3 cp s3://idaroh-backups/backups/<file>.sql.age . --endpoint-url https://s3.<region>.backblazeb2.com`).
 2. Dekripsi offline: `age -d -i key.txt -o backup.sql <file>.sql.age`.
 3. Restore ke **Supabase lokal** (`supabase start` → `psql "$LOCAL_DB_URL" -f backup.sql`) atau project staging Free ke-2. Jangan langsung produksi.
 4. Validasi row count tabel inti, constraint, policy RLS; uji akses lintas dua akun uji.
@@ -183,7 +183,7 @@ Bukti: file PDF hasil ekspor produksi yang terbuka normal.
 
 Centang hanya bila ada bukti:
 
-- [ ] Backup R2: workflow hijau + objek `.sql.age` ada di bucket; `key.txt` tersimpan offline.
+- [ ] Backup B2: workflow hijau + objek `.sql.age` ada di bucket; `key.txt` tersimpan offline.
 - [ ] 10 migrasi applied berurutan; duplikat pending `000008` sudah bersih; smoke test lulus.
 - [ ] Env Vercel lengkap (9 wajib) + build produksi hijau + redeploy.
 - [ ] Turnstile site+secret terpasang; widget muncul di register/login.
@@ -200,5 +200,5 @@ Centang hanya bila ada bukti:
 - **Kode fitur = real, teruji** (431 unit test, 95 e2e hijau, build produksi hijau). Bukan dummy.
 - **`.env.example` = placeholder by design.** Secret asli tidak boleh masuk repo; mengisinya adalah aksi dashboard (§3), bukan perubahan kode.
 - **Fixture e2e mem-mock provider** = harness test yang sah, bukan aplikasi produksi. Produksi memakai Supabase/FCM/Resend asli setelah env diisi.
-- **`/admin/backup` = manifest jumlah baris, BUKAN backup.** Backup nyata sekarang via workflow R2 (§1). Status `manifest_only` tidak memenuhi ADM-009.
+- **`/admin/backup` = manifest jumlah baris, BUKAN backup.** Backup nyata sekarang via workflow B2 (§1). Status `manifest_only` tidak memenuhi ADM-009.
 - **"Lokal" (uncommitted)** menjadi aktif hanya setelah commit + push + deploy + langkah dashboard di atas. Push saja tidak membuat "aktif" bila secret/migrasi/provider belum dikonfigurasi operator.
