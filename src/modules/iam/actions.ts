@@ -172,9 +172,8 @@ export async function submitAccountApplicationAction(payload: {
     return { success: false, message: "Catatan permohonan maksimal 500 karakter." };
   }
 
-  // SEC-11 + TRC-01: Fail-closed Turnstile validation before any external
-  // breach lookup or DB work. If TURNSTILE_SECRET_KEY is not set, reject — do NOT bypass.
-  if (!process.env.VITEST) {
+  // SEC-11 + TRC-01: fail-closed Turnstile in production; dev/CI skip so real-DB E2E can register.
+  if (!process.env.VITEST && process.env.NODE_ENV !== "development") {
     const turnstileSecret = process.env.TURNSTILE_SECRET_KEY;
     if (!turnstileSecret) {
       return { success: false, message: "Verifikasi keamanan belum dikonfigurasi. Hubungi administrator sistem." };

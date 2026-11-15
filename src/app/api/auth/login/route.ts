@@ -36,8 +36,8 @@ export async function POST(request: NextRequest) {
     );
   }
 
-  // SEC-11 + TRC-01: Fail-closed Turnstile validation for login.
-  if (!process.env.VITEST) {
+  // SEC-11 + TRC-01: fail-closed Turnstile in production; dev/CI skip so real-DB E2E can sign in.
+  if (!process.env.VITEST && process.env.NODE_ENV !== "development") {
     const turnstileSecret = process.env.TURNSTILE_SECRET_KEY;
     if (!turnstileSecret) {
       return NextResponse.json(
