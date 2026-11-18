@@ -11,7 +11,11 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "e2e:seed": "node scripts/seed-e2e-user.mjs",
-    "test:e2e": "playwright test"
+    "test:e2e": "playwright test",
+    "spike:mfa:t01": "node scripts/spike/mfa-t01-recovery-codes.mjs",
+    "spike:mfa:t02": "node scripts/spike/mfa-t02-aal2-refresh.mjs",
+    "spike:mfa:t03": "node scripts/spike/mfa-t03-challenge-verify.mjs",
+    "drill:restore": "node scripts/drill/restore-drill.mjs"
   },
   "dependencies": {
     "@capacitor/android": "7.6.10",

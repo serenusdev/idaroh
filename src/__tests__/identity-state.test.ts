@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 
 type Result = { data: unknown; error: unknown };
 
-const state: { profile: Result; roles: Result; authError: unknown; accessToken?: string } = {
+const state: { profile: Result; roles: Result; authError: unknown; accessToken?: string; factors?: unknown[] } = {
   profile: { data: null, error: null },
   roles: { data: [], error: null },
   authError: null,
@@ -14,7 +14,7 @@ vi.mock("@/lib/supabase/server", () => ({
       getUser: async () =>
         state.authError
           ? { data: { user: null }, error: state.authError }
-          : { data: { user: { id: "u-1", email: "u1@pondok.id", created_at: "2026-01-01T00:00:00Z" } }, error: null },
+          : { data: { user: { id: "u-1", email: "u1@pondok.id", created_at: "2026-01-01T00:00:00Z", factors: state.factors ?? [] } }, error: null },
       getSession: async () => ({ data: { session: state.accessToken ? { access_token: state.accessToken } : null } }),
     },
   }),
@@ -61,6 +61,7 @@ describe("resolveIdentity", () => {
     state.roles = { data: [], error: null };
     state.authError = null;
     state.accessToken = undefined;
+    state.factors = undefined;
     vi.unstubAllEnvs();
     vi.restoreAllMocks();
   });
@@ -133,5 +134,77 @@ describe("resolveIdentity", () => {
       expect(identity.profile.role).toBe("pengurus");
       expect(identity.profile.roles).toEqual(["pengurus", "santri"]);
     }
+  });
+});
+
+describe("resolveIdentity MFA enforcement (TRC-10 / IAM-012, owner decision B + Q3)", () => {
+  const aalToken = (aal: string) => `header.${Buffer.from(JSON.stringify({ aal })).toString("base64url")}.sig`;
+  const verifiedTotp = { status: "verified", factor_type: "totp" };
+
+  beforeEach(() => {
+    state.profile = { data: activeProfile, error: null };
+    state.roles = { data: [{ roles: { key: "super_admin" } }], error: null };
+    state.authError = null;
+    state.accessToken = aalToken("aal1");
+    state.factors = [];
+    vi.unstubAllEnvs();
+    vi.restoreAllMocks();
+  });
+
+  it("requires super_admin without a factor to enroll", async () => {
+    const identity = await loadResolver();
+    expect(identity.state).toBe("mfa_required");
+    if (identity.state === "mfa_required") {
+      expect(identity.mfa.requirement).toBe("needs_enroll");
+      expect(identity.profile.role).toBe("super_admin");
+    }
+  });
+
+  it("requires super_admin with a verified factor below AAL2 to challenge", async () => {
+    state.factors = [verifiedTotp];
+    const identity = await loadResolver();
+    expect(identity.state).toBe("mfa_required");
+    if (identity.state === "mfa_required") expect(identity.mfa.requirement).toBe("needs_challenge");
+  });
+
+  it("admits super_admin with a verified factor at AAL2", async () => {
+    state.factors = [verifiedTotp];
+    state.accessToken = aalToken("aal2");
+    expect((await loadResolver()).state).toBe("active");
+  });
+
+  it("treats an unverified factor as not enrolled for super_admin", async () => {
+    state.factors = [{ status: "unverified", factor_type: "totp" }];
+    const identity = await loadResolver();
+    expect(identity.state).toBe("mfa_required");
+    if (identity.state === "mfa_required") expect(identity.mfa.requirement).toBe("needs_enroll");
+  });
+
+  it("forces challenge when a verified factor exists but the token carries no aal claim", async () => {
+    state.factors = [verifiedTotp];
+    state.accessToken = `header.${Buffer.from(JSON.stringify({})).toString("base64url")}.sig`;
+    const identity = await loadResolver();
+    expect(identity.state).toBe("mfa_required");
+    if (identity.state === "mfa_required") expect(identity.mfa.requirement).toBe("needs_challenge");
+  });
+
+  it("does not force enrollment on non-super_admin without a factor", async () => {
+    state.roles = { data: [{ roles: { key: "santri" } }], error: null };
+    expect((await loadResolver()).state).toBe("active");
+  });
+
+  it("challenges non-super_admin who has a verified factor below AAL2", async () => {
+    state.roles = { data: [{ roles: { key: "pengurus" } }], error: null };
+    state.factors = [verifiedTotp];
+    const identity = await loadResolver();
+    expect(identity.state).toBe("mfa_required");
+    if (identity.state === "mfa_required") expect(identity.mfa.requirement).toBe("needs_challenge");
+  });
+
+  it("admits non-super_admin with a verified factor at AAL2", async () => {
+    state.roles = { data: [{ roles: { key: "pengurus" } }], error: null };
+    state.factors = [verifiedTotp];
+    state.accessToken = aalToken("aal2");
+    expect((await loadResolver()).state).toBe("active");
   });
 });

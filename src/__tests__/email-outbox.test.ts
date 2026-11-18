@@ -1,9 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 
 const adminMock = { from: vi.fn() };
 vi.mock("@/lib/supabase/admin", () => ({ createAdminClient: () => adminMock }));
 
-import { drainEmailOutbox } from "@/lib/email-outbox";
+import { drainEmailOutbox, emailIdempotencyKey } from "@/lib/email-outbox";
 
 interface OutboxRow {
   id: string;
@@ -11,6 +13,8 @@ interface OutboxRow {
   subject: string;
   body_text: string;
   attempt_count: number;
+  reference_id?: string | null;
+  reference_type?: string | null;
 }
 
 function makeChain(opts: { rows?: OutboxRow[]; claim?: { id: string } | null; onUpdate?: (payload: Record<string, unknown>) => void }) {
@@ -39,6 +43,8 @@ const row = (overrides: Partial<OutboxRow> = {}): OutboxRow => ({
   subject: "Keputusan akun",
   body_text: "Akun Anda disetujui.",
   attempt_count: 0,
+  reference_id: "account-1",
+  reference_type: "account_request_approved",
   ...overrides,
 });
 
@@ -76,6 +82,7 @@ describe("drainEmailOutbox (TRC-04)", () => {
     const [url, init] = fetchMock.mock.calls[0];
     expect(url).toBe("https://api.resend.com/emails");
     expect((init.headers as Record<string, string>).Authorization).toBe("Bearer re_test_key");
+    expect((init.headers as Record<string, string>)["Idempotency-Key"]).toMatch(/^idaroh-email\/[a-f0-9]{64}$/);
     const body = JSON.parse(init.body as string);
     expect(body.to).toEqual(["santri@test.com"]);
     expect(body.subject).toBe("Keputusan akun");
@@ -130,5 +137,37 @@ describe("drainEmailOutbox (TRC-04)", () => {
 
     expect(result.sent).toBe(0);
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("ships a fail-closed business-reference idempotency migration", () => {
+    const migration = readFileSync(
+      resolve(process.cwd(), "supabase/migrations/20261117000001_email_outbox_idempotency.sql"),
+      "utf8",
+    );
+    expect(migration).toContain("GROUP BY reference_type, reference_id");
+    expect(migration).toContain("HAVING count(*) > 1");
+    expect(migration).toContain("uq_email_outbox_business_reference");
+    expect(migration).toContain("ON public.email_outbox(reference_type, reference_id)");
+  });
+
+  it("derives stable provider keys from the canonical review event identity", () => {
+    const first = emailIdempotencyKey({
+      id: "mail-1",
+      reference_type: "report_review_email",
+      reference_id: "review-1",
+    });
+    const retry = emailIdempotencyKey({
+      id: "mail-2",
+      reference_type: "report_review_email",
+      reference_id: "review-1",
+    });
+    const distinctDecision = emailIdempotencyKey({
+      id: "mail-3",
+      reference_type: "report_review_email",
+      reference_id: "review-2",
+    });
+
+    expect(retry).toBe(first);
+    expect(distinctDecision).not.toBe(first);
   });
 });

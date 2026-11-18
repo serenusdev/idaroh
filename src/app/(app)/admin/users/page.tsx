@@ -26,6 +26,19 @@ import { exportAuditedDataAction } from "@/modules/analytics/actions";
 import { useCachedData } from "@/hooks/use-cached-data";
 import { writeCache } from "@/lib/data-cache";
 
+const MFA_EVIDENCE_LABEL: Record<ActiveUserItem["mfaEvidence"], string> = {
+  none: "MFA: belum enroll",
+  unverified: "MFA: belum diverifikasi",
+  verified: "MFA: verified",
+  unknown: "MFA: tidak diketahui",
+};
+const MFA_EVIDENCE_CLASS: Record<ActiveUserItem["mfaEvidence"], string> = {
+  none: "bg-surface-container text-on-surface-variant",
+  unverified: "bg-warning/15 text-tertiary",
+  verified: "bg-success/15 text-success",
+  unknown: "bg-surface-container text-muted-foreground",
+};
+
 export default function AdminUsersPage() {
   const { user: currentUser } = useIdentity();
   const [activeTab, setActiveTab] = React.useState<"queue" | "active" | "archived">("queue");
@@ -803,6 +816,12 @@ export default function AdminUsersPage() {
                       <span className="material-symbols-outlined text-[15px]">edit</span>
                       Edit
                     </button>
+                  </div>
+                  <div className="flex items-center gap-1.5">
+                    <span className="material-symbols-outlined text-[15px] text-muted-foreground">shield</span>
+                    <span className={`px-2 py-0.5 rounded-md font-mono text-[11px] font-semibold ${MFA_EVIDENCE_CLASS[user.mfaEvidence]}`}>
+                      {MFA_EVIDENCE_LABEL[user.mfaEvidence]}
+                    </span>
                   </div>
                   <div className="pt-2 flex items-center justify-between bg-surface-container-low px-3 py-2 rounded-lg border border-border/40">
                     <div className="flex items-center gap-2">

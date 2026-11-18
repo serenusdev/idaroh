@@ -1,6 +1,7 @@
 import { createServerClient, type CookieOptions } from '@supabase/ssr';
 import { NextResponse, type NextRequest } from 'next/server';
 import { toSafeInternalPath } from '@/lib/safe-url';
+import { decodeAalClaim } from '@/lib/auth/mfa-assurance';
 
 export const PUBLIC_PATHS = [
   '/login',
@@ -8,6 +9,7 @@ export const PUBLIC_PATHS = [
   '/forgot-password',
   '/reset-password',
   '/offline',
+  '/mfa',
   '/api/auth/login',
   '/api/calendar/feed',
   '/sw.js',
@@ -81,6 +83,17 @@ export async function updateSession(request: NextRequest) {
     activeProfile = profile?.status === 'active';
   }
 
+  // L3 challenge-only: a verified factor below AAL2 must complete MFA. super_admin
+  // enrollment is enforced by the app layout, which knows roles; middleware does not.
+  let needsMfaChallenge = false;
+  if (user && activeProfile) {
+    const {
+      data: { session },
+    } = await supabase.auth.getSession();
+    const hasVerifiedFactor = (user.factors ?? []).some((factor) => factor.status === 'verified');
+    needsMfaChallenge = hasVerifiedFactor && decodeAalClaim(session?.access_token) !== 'aal2';
+  }
+
   if (!isPublic) {
     const isApi = pathname.startsWith('/api/');
 
@@ -117,12 +130,34 @@ export async function updateSession(request: NextRequest) {
         { status: 403 }
       );
     }
+
+    if (needsMfaChallenge) {
+      if (isApi) {
+        return NextResponse.json(
+          { error: 'MFA_REQUIRED: Selesaikan verifikasi dua langkah (MFA) terlebih dahulu.' },
+          { status: 403 }
+        );
+      }
+      const url = request.nextUrl.clone();
+      const destination = `${url.pathname}${url.search}`;
+      url.pathname = '/mfa';
+      url.search = '';
+      url.searchParams.set('mode', 'challenge');
+      if (destination !== '/') url.searchParams.set('next', destination);
+      return NextResponse.redirect(url);
+    }
   }
 
   // If already authenticated and accessing login or register
   if (user && activeProfile && (pathname === '/login' || pathname === '/register')) {
-    const destination = toSafeInternalPath(request.nextUrl.searchParams.get('next'));
-    return NextResponse.redirect(new URL(destination || '/', request.nextUrl.origin));
+    const next = toSafeInternalPath(request.nextUrl.searchParams.get('next'));
+    if (needsMfaChallenge) {
+      const url = new URL('/mfa', request.nextUrl.origin);
+      url.searchParams.set('mode', 'challenge');
+      if (next) url.searchParams.set('next', next);
+      return NextResponse.redirect(url);
+    }
+    return NextResponse.redirect(new URL(next || '/', request.nextUrl.origin));
   }
 
   return supabaseResponse;

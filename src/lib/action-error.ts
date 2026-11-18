@@ -12,6 +12,10 @@ const FRIENDLY_PATTERNS: Array<[RegExp, string]> = [
 const TECHNICAL_MARKER =
   /constraint|relation|column|schema|supabase|postgres|\bsql\b|jwt|row-level|permission denied|duplicate key|foreign key|null value|invalid input syntax|fetch failed|ECONNRESET|ENOTFOUND|timeout|TypeError|ReferenceError|SyntaxError|stack trace/i;
 
+// App-authored guard failures are already actionable Indonesian; preserve them verbatim
+// so MFA_REQUIRED is not mistaken for an invalid TOTP code by the patterns below.
+const GUARD_PREFIX = /^(UNAUTHORIZED|FORBIDDEN|UNAVAILABLE|MFA_REQUIRED):/;
+
 export function friendlyActionError(error: unknown, fallback: string): string {
   if (error === null || error === undefined) {
     console.error("[action-error]", fallback);
@@ -20,6 +24,7 @@ export function friendlyActionError(error: unknown, fallback: string): string {
   const raw = (error instanceof Error ? error.message : String(error)).trim();
   console.error("[action-error]", raw);
   if (!raw) return fallback;
+  if (GUARD_PREFIX.test(raw)) return raw;
   for (const [pattern, message] of FRIENDLY_PATTERNS) {
     if (pattern.test(raw)) return message;
   }

@@ -10,7 +10,7 @@ export type AttendanceReminderPreferenceResult =
 
 function preferenceErrorMessage(error: unknown, fallback: string): string {
   // Preserve actionable auth failures without exposing database/configuration errors.
-  return error instanceof Error && /^(UNAUTHORIZED|FORBIDDEN|UNAVAILABLE):/.test(error.message)
+  return error instanceof Error && /^(UNAUTHORIZED|FORBIDDEN|UNAVAILABLE|MFA_REQUIRED):/.test(error.message)
     ? error.message
     : fallback;
 }
@@ -124,6 +124,29 @@ export async function getNotificationDeliverySummaryAction(): Promise<Notificati
   ));
   for (const result of results) if (result.error) throw result.error;
   return { pending: results[0].count || 0, processing: results[1].count || 0, deadLetter: results[2].count || 0 };
+}
+
+export interface EmailDeliverySummary {
+  pending: number;
+  processing: number;
+  failed: number;
+  providerConfigured: boolean;
+}
+
+// Admin-facing health of the transactional email queue. Counts + a provider-configured
+// boolean only; recipient/subject/body/last_error are never exposed. providerConfigured
+// false means drainEmailOutbox is skipping (email_provider_not_configured) until the
+// operator sets RESEND_API_KEY + EMAIL_FROM.
+export async function getEmailDeliverySummaryAction(): Promise<EmailDeliverySummary> {
+  await requireRole(['super_admin']);
+  const providerConfigured = Boolean(process.env.RESEND_API_KEY && process.env.EMAIL_FROM);
+  if (process.env.VITEST) return { pending: 0, processing: 0, failed: 0, providerConfigured };
+  const admin = createAdminClient();
+  const results = await Promise.all(['pending', 'processing', 'failed'].map((status) =>
+    admin.from('email_outbox').select('id', { count: 'exact', head: true }).eq('status', status)
+  ));
+  for (const result of results) if (result.error) throw result.error;
+  return { pending: results[0].count || 0, processing: results[1].count || 0, failed: results[2].count || 0, providerConfigured };
 }
 
 export async function getUnreadNotificationCountAction(): Promise<number> {

@@ -19,7 +19,10 @@ jobs:
       - run: npm run typecheck
       - run: npm test
       - run: npm audit --audit-level=high
-      - run: npm run build
+      - name: Compile production build without deployment credentials
+        run: npm run build
+        env:
+          IDAROH_BUILD_CONTEXT: ci-compile
 
   migration-check:
     runs-on: ubuntu-latest
@@ -57,6 +60,15 @@ jobs:
         run: supabase db reset --local --yes
       - name: Run RLS matrix
         run: supabase test db --local
+      - name: Run review concurrency drill
+        timeout-minutes: 5
+        run: |
+          command -v psql >/dev/null 2>&1 || {
+            sudo apt-get update
+            sudo apt-get install -y --no-install-recommends postgresql-client
+          }
+          DB_URL="postgresql://postgres:postgres@127.0.0.1:54322/postgres" \
+            bash scripts/drill/review-concurrency.sh
       - name: Install application dependencies
         run: npm ci
       - name: Install Chromium for E2E

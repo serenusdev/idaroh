@@ -72,11 +72,16 @@ Wajib di produksi (divalidasi `scripts/validate-production-env.mjs`, fail-closed
 
 `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY`,
 `SUPABASE_SERVICE_ROLE_KEY`, `NEXT_PUBLIC_APP_URL`, `CRON_SECRET` (≥32 karakter),
-`TURNSTILE_SECRET_KEY`, `RESEND_API_KEY`, `EMAIL_FROM`.
+`NEXT_PUBLIC_TURNSTILE_SITE_KEY`, `TURNSTILE_SECRET_KEY`, `RESEND_API_KEY`,
+`EMAIL_FROM`.
+
+`NEXT_PUBLIC_TURNSTILE_SITE_KEY` and `TURNSTILE_SECRET_KEY` adalah pasangan
+wajib di production: site key merender widget dan secret key memverifikasi token.
+GitHub Actions dapat menjalankan context compile-only eksplisit tanpa credential
+deployment; build tersebut bukan bukti environment deployment sudah lengkap.
 
 Opsional:
 
-- `NEXT_PUBLIC_TURNSTILE_SITE_KEY` — widget Turnstile di klien (pasangan secret).
 - `FIREBASE_SERVICE_ACCOUNT_KEY` — push FCM. Bila kosong, push **disabled** dan
   guard mencetak warning eksplisit saat build produksi (OPS-13).
 - `OPS_ERROR_WEBHOOK_URL` — drain alerting error produksi (OPS-04).

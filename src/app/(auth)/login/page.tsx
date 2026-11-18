@@ -32,7 +32,12 @@ export default function LoginPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ email: email.trim(), password, turnstileToken }),
       });
-      const result = (await response.json()) as { success?: boolean; message?: string };
+      const result = (await response.json()) as {
+        success?: boolean;
+        message?: string;
+        mfaRequired?: boolean;
+        mode?: string;
+      };
 
       if (!response.ok || !result.success) {
         setErrorMessage(result.message || "Terjadi kesalahan saat masuk ke sistem.");
@@ -43,8 +48,14 @@ export default function LoginPage() {
       }
 
       // The server route writes the SSR session cookies on this response.
-      const destination = toSafeInternalPath(new URLSearchParams(window.location.search).get("next"));
-      window.location.assign(destination || "/");
+      const next = toSafeInternalPath(new URLSearchParams(window.location.search).get("next"));
+      if (result.mfaRequired) {
+        const params = new URLSearchParams({ mode: result.mode === "enroll" ? "enroll" : "challenge" });
+        if (next) params.set("next", next);
+        window.location.assign(`/mfa?${params.toString()}`);
+        return;
+      }
+      window.location.assign(next || "/");
     } catch {
       setErrorMessage("Tidak dapat terhubung ke server autentikasi. Silakan periksa koneksi Anda dan coba lagi.");
       setIsLoading(false);

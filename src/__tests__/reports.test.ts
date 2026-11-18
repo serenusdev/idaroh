@@ -63,16 +63,20 @@ describe("Stage 5 — Daily Activity Reports & Review Queue (PRD-04)", () => {
   it("requires constructive feedback when requesting revision per BR-REP-06", async () => {
     const emptyNotesReview = await reviewReportAction({
       reportId: "rep-salman-01",
+      revisionNo: 1,
       decision: "revision_required",
       notes: "   ",
+      idempotencyKey: "reports-empty-notes",
     });
     expect(emptyNotesReview.success).toBe(false);
     expect(emptyNotesReview.message).toContain("Catatan evaluasi / alasan revisi wajib diisi");
 
     const validRevisionReview = await reviewReportAction({
       reportId: "rep-salman-01",
+      revisionNo: 1,
       decision: "revision_required",
       notes: "Mohon uraikan progres endpoint RPC secara lebih spesifik.",
+      idempotencyKey: "reports-revision",
     });
     expect(validRevisionReview.success).toBe(true);
     expect(validRevisionReview.message).toContain("Permintaan revisi berhasil dikirim");
@@ -81,8 +85,10 @@ describe("Stage 5 — Daily Activity Reports & Review Queue (PRD-04)", () => {
   it("approves report with positive confirmation feedback", async () => {
     const approveRes = await reviewReportAction({
       reportId: "rep-salman-01",
+      revisionNo: 1,
       decision: "approved",
       notes: "Mumtaz! Target hari ini tercapai sangat baik.",
+      idempotencyKey: "reports-approval",
       reviewerName: "Ustadz Ahmad Fauzi",
     });
     expect(approveRes.success).toBe(true);

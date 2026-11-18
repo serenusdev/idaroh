@@ -2,6 +2,8 @@ import { cache } from 'react';
 import { randomUUID } from 'node:crypto';
 import { createClient } from '@/lib/supabase/server';
 import { createAdminClient } from '@/lib/supabase/admin';
+import { mfaStateFromUser } from '@/lib/supabase/assurance';
+import type { MfaState } from '@/lib/auth/mfa-assurance';
 import { AccountStatus, UserProfile, UserRole } from './types';
 
 if (process.env.NODE_ENV === 'production' && process.env.VITEST) {
@@ -45,7 +47,9 @@ export type IdentityState =
   | { state: 'profile_missing'; email: string }
   | { state: 'inactive'; status: AccountStatus; email: string; fullName: string }
   | { state: 'role_missing'; email: string; fullName: string }
-  | { state: 'identity_error'; traceId: string };
+  | { state: 'identity_error'; traceId: string }
+  | { state: 'mfa_required'; profile: UserProfile; mfa: MfaState }
+  | { state: 'mfa_error'; profile: UserProfile; traceId: string };
 
 function identityError(stage: string, cause: unknown): IdentityState {
   const traceId = randomUUID();
@@ -151,23 +155,32 @@ export const resolveIdentity = cache(async (): Promise<IdentityState> => {
     }
     rolesList.sort((a, b) => ROLE_PRIORITY[b] - ROLE_PRIORITY[a]);
 
-    return {
-      state: 'active',
-      profile: {
-        id: user.id,
-        email,
-        full_name: profile.full_name,
-        role: rolesList[0],
-        roles: rolesList,
-        status: 'active',
-        team_name: profile.team_name,
-        member_type: profile.member_type,
-        avatar_url: profile.avatar_url || null,
-        phone_number: profile.phone_number || null,
-        created_at: profile.created_at || user.created_at,
-        updated_at: profile.updated_at || profile.created_at || user.created_at,
-      },
+    const userProfile: UserProfile = {
+      id: user.id,
+      email,
+      full_name: profile.full_name,
+      role: rolesList[0],
+      roles: rolesList,
+      status: 'active',
+      team_name: profile.team_name,
+      member_type: profile.member_type,
+      avatar_url: profile.avatar_url || null,
+      phone_number: profile.phone_number || null,
+      created_at: profile.created_at || user.created_at,
+      updated_at: profile.updated_at || profile.created_at || user.created_at,
     };
+
+    const {
+      data: { session },
+    } = await supabase.auth.getSession();
+    const mfa = mfaStateFromUser(user, session?.access_token, rolesList);
+    if (mfa.requirement === 'mfa_error') {
+      return { state: 'mfa_error', profile: userProfile, traceId: randomUUID() };
+    }
+    if (mfa.requirement !== 'ok') {
+      return { state: 'mfa_required', profile: userProfile, mfa };
+    }
+    return { state: 'active', profile: userProfile };
   } catch (err) {
     if (process.env.VITEST) return { state: 'active', profile: TEST_ACTION_USER };
     return identityError('resolveIdentity', err);

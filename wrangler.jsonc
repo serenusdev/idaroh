@@ -1,3 +1,9 @@
+// DEAD CONFIG — JANGAN DEPLOY / JANGAN AKTIFKAN WORKER INI.
+// Sisa jalur Cloudflare Worker (OpenNext) "abba-os" yang TIDAK dipakai. Deployment aktif
+// IDAROH = Vercel (docs/operator-release-gates.md). Dependency @opennextjs/cloudflare tidak
+// ada di package.json; CF Builds sengaja disabled; tidak ada build/CI yang mereferensikan file ini.
+// Ditahan sebagai referensi historis; hapus di v1.1 (OPS-14, docs/audit/AUDIT-FINDINGS-2026-11-12.md).
+// Keberadaan file ini BUKAN alasan mengaktifkan Cloudflare Worker (Master Prompt §2).
 {
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "abba-os",

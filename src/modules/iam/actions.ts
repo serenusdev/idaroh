@@ -8,11 +8,13 @@ import { createClient } from "@/lib/supabase/server";
 import { getCurrentUserProfile } from "@/lib/auth/session";
 import { getHighestRole, requireAuthUser, requireRole, ROLE_PRIORITY } from "@/lib/auth/guards";
 import { UserProfile } from "@/lib/auth/types";
+import { mfaEvidenceFromFactors, type MfaEvidence } from "@/lib/auth/mfa-assurance";
 import { ManualAccountPayload } from "./types";
 import { sendPushToUsers } from "@/lib/fcm";
 import { enforceRateLimit } from "@/lib/rate-limit";
 import { throwQueryError } from "@/lib/query-error";
 import { friendlyActionError } from "@/lib/action-error";
+import { withMfaAuditRetry } from "@/lib/auth/mfa-audit";
 import { MEMBER_CATEGORIES, REGISTRATION_PRIVACY_VERSION, type ClaimedMemberType } from "./registration";
 
 const VALID_ROLES = ["super_admin", "yayasan", "pengurus", "koordinator", "santri"] as const;
@@ -95,6 +97,12 @@ async function grantActiveRole(
   if (error) throw error;
 }
 
+function outboxFailureMessage(kind: "approved" | "rejected") {
+  return kind === "approved"
+    ? "Akun berhasil disetujui, tetapi notifikasi email belum masuk antrean. Silakan ulangi pengiriman email."
+    : "Pengajuan berhasil ditolak, tetapi notifikasi email belum masuk antrean. Silakan ulangi pengiriman email.";
+}
+
 export interface ActionResult<T = unknown> {
   success: boolean;
   message: string;
@@ -126,7 +134,7 @@ export interface ActiveUserItem {
   initials: string;
   devicesCount: number;
   deviceInfo: string;
-  mfaEnabled: boolean;
+  mfaEvidence: MfaEvidence | "unknown";
   isVerified?: boolean;
   devices: Array<{ id: string; platform: string; label: string; updatedAt: string }>;
 }
@@ -419,15 +427,15 @@ export async function getActiveUsersAction(): Promise<ActiveUserItem[]> {
         devices.push(device);
         devicesByUser.set(device.user_id, devices);
       }
-      const mfaByUser = new Map<string, boolean>();
+      const mfaByUser = new Map<string, MfaEvidence | "unknown">();
       await Promise.all(userIds.map(async (userId: string) => {
         try {
-          const { data: factors, error: factorError } = await supabase.auth.admin.mfa.listFactors({ userId });
+          const { data: factorData, error: factorError } = await supabase.auth.admin.mfa.listFactors({ userId });
           if (factorError) throw factorError;
-          mfaByUser.set(userId, Boolean(factors?.factors?.some((factor: { status?: string }) => factor.status === "verified")));
+          mfaByUser.set(userId, mfaEvidenceFromFactors(factorData?.factors));
         } catch (error) {
           console.error(`Failed to query MFA factors for ${userId}:`, error);
-          mfaByUser.set(userId, false);
+          mfaByUser.set(userId, "unknown");
         }
       }));
       return data.map((d: any) => {
@@ -453,7 +461,7 @@ export async function getActiveUsersAction(): Promise<ActiveUserItem[]> {
           deviceInfo: devices.length
             ? `${devices.length} Perangkat Aktif${deviceLabels.length ? ` · ${deviceLabels.slice(0, 2).join(", ")}` : ""}`
             : "Belum ada perangkat terhubung",
-          mfaEnabled: mfaByUser.get(d.id) || false,
+          mfaEvidence: mfaByUser.get(d.id) || "unknown",
           isVerified: d.status === "active",
           devices: devices.map((device: any) => ({
             id: device.id,
@@ -484,6 +492,7 @@ export async function approveAccountApplicationAction(
     return { success: false, message: "ID Pemohon tidak valid." };
   }
 
+  let outboxFailed = false;
   try {
     const approver = await requireRole(["super_admin", "yayasan", "pengurus"]);
     const approverRole = getHighestRole(approver);
@@ -552,17 +561,25 @@ export async function approveAccountApplicationAction(
       }
     }
 
-    // TRC-04: Insert email decision notification into outbox (fire-and-forget).
+    // TRC-04: Insert the account decision notification into the outbox.
     try {
-      await supabase.from("email_outbox").insert({
+      const { error: outboxError } = await supabase.from("email_outbox").upsert({
         recipient: request.email,
         subject: "Permohonan Akun Pondok OS Anda Telah Disetujui",
         body_text: `Yth. ${request.full_name},\n\nPermohonan akun Pondok OS Anda telah disetujui dengan peran '${normalizeRole(assignedRole) || assignedRole}'.\n\nSilakan login ke aplikasi untuk mulai menggunakan layanan.\n\nTerima kasih.`,
         reference_id: applicantId,
         reference_type: "account_request_approved",
         status: "pending",
-      });
+      }, { onConflict: "reference_type,reference_id", ignoreDuplicates: true });
+      if (outboxError) {
+        outboxFailed = true;
+        console.error("Account approved but email outbox insert failed:", {
+          code: outboxError.code,
+          message: outboxError.message,
+        });
+      }
     } catch (outboxError) {
+      outboxFailed = true;
       console.error("Account approved but email outbox insert failed:", outboxError);
     }
   } catch (err: any) {
@@ -574,8 +591,10 @@ export async function approveAccountApplicationAction(
   }
 
   return {
-    success: true,
-    message: `Permohonan akun ${applicantId} berhasil disetujui dengan peran '${normalizeRole(assignedRole) || assignedRole}'. Hak akses telah aktif.`,
+    success: !outboxFailed,
+    message: outboxFailed
+      ? outboxFailureMessage("approved")
+      : `Permohonan akun ${applicantId} berhasil disetujui dengan peran '${normalizeRole(assignedRole) || assignedRole}'. Hak akses telah aktif.`,
   };
 }
 
@@ -590,6 +609,7 @@ export async function rejectAccountApplicationAction(
     return { success: false, message: "Alasan penolakan wajib diisi (BR-IAM-02)." };
   }
 
+  let outboxFailed = false;
   try {
     const approver = await requireRole(["super_admin", "yayasan", "pengurus"]);
     if (process.env.VITEST) {
@@ -621,18 +641,26 @@ export async function rejectAccountApplicationAction(
       action_detail: `Penolakan akun. Alasan: ${reason}`,
     });
 
-    // TRC-04: Insert email decision notification into outbox (fire-and-forget).
+    // TRC-04: Insert the account decision notification into the outbox.
     try {
       const rejectedRecord = rejected[0];
-      await supabase.from("email_outbox").insert({
+      const { error: outboxError } = await supabase.from("email_outbox").upsert({
         recipient: rejectedRecord.email,
         subject: "Permohonan Akun Pondok OS Anda Belum Dapat Disetujui",
         body_text: `Yth. ${rejectedRecord.full_name},\n\nMohon maaf, permohonan akun Pondok OS Anda belum dapat disetujui saat ini.\n\nAlasan: ${reason}\n\nJika ada pertanyaan, silakan hubungi administrator pondok.\n\nTerima kasih.`,
         reference_id: applicantId,
         reference_type: "account_request_rejected",
         status: "pending",
-      });
+      }, { onConflict: "reference_type,reference_id", ignoreDuplicates: true });
+      if (outboxError) {
+        outboxFailed = true;
+        console.error("Account rejected but email outbox insert failed:", {
+          code: outboxError.code,
+          message: outboxError.message,
+        });
+      }
     } catch (outboxError) {
+      outboxFailed = true;
       console.error("Account rejected but email outbox insert failed:", outboxError);
     }
   } catch (err: any) {
@@ -644,8 +672,10 @@ export async function rejectAccountApplicationAction(
   }
 
   return {
-    success: true,
-    message: `Permohonan akun ${applicantId} telah ditolak dan dicatat ke log penolakan.`,
+    success: !outboxFailed,
+    message: outboxFailed
+      ? outboxFailureMessage("rejected")
+      : `Permohonan akun ${applicantId} telah ditolak dan dicatat ke log penolakan.`,
   };
 }
 
@@ -869,8 +899,33 @@ export interface MfaFactorItem {
   createdAt?: string;
 }
 
+// The Auth provider mutation and audit_logs insert cannot share one transaction.
+// Retry transient audit failures, but do not report a successful provider mutation
+// as failed after the fact; the caller would retry and create a second state change.
+// A final failure remains an observable audit gap in server logs.
+async function recordMfaAudit(user: UserProfile, eventName: string, actionDetail: string): Promise<void> {
+  if (process.env.VITEST) return;
+  try {
+    const admin = createAdminClient();
+    await withMfaAuditRetry(async () => {
+      const { error } = await admin.from("audit_logs").insert({
+        event_name: eventName,
+        actor_id: user.id,
+        actor_name: user.full_name,
+        target_id: user.id,
+        target_label: user.email,
+        action_detail: actionDetail,
+      });
+      if (error) throw error;
+    });
+  } catch (error) {
+    const safeMessage = error instanceof Error ? error.message : "unknown audit failure";
+    console.error(`Failed to record MFA audit ${eventName} after retry:`, safeMessage);
+  }
+}
+
 export async function listMfaFactorsAction(): Promise<MfaFactorItem[]> {
-  await requireAuthUser();
+  await requireAuthUser({ allowAal1: true });
   if (process.env.VITEST) return [];
   const supabase = await createClient();
   const { data, error } = await supabase.auth.mfa.listFactors();
@@ -884,12 +939,13 @@ export async function listMfaFactorsAction(): Promise<MfaFactorItem[]> {
 }
 
 export async function enrollMfaAction(): Promise<ActionResult<{ factorId: string; qrCode: string; secret: string }>> {
-  await requireAuthUser();
+  const user = await requireAuthUser({ allowAal1: true });
   if (process.env.VITEST) return { success: true, message: "Enrollment MFA dimulai.", data: { factorId: "mfa-test", qrCode: "", secret: "TESTSECRET" } };
   try {
     const supabase = await createClient();
     const { data, error } = await supabase.auth.mfa.enroll({ factorType: "totp", friendlyName: "IDAROH Authenticator" });
     if (error || !data || !("totp" in data) || !data.totp) throw error || new Error("Data enrollment MFA tidak tersedia.");
+    await recordMfaAudit(user, "iam.mfa_enroll_started", "Enrollment faktor TOTP dimulai; QR dibuat.");
     return { success: true, message: "QR MFA berhasil dibuat. Pindai dengan aplikasi authenticator.", data: { factorId: data.id, qrCode: data.totp.qr_code, secret: data.totp.secret } };
   } catch (err: any) {
     return { success: false, message: friendlyActionError(err, "Gagal memulai enrollment MFA.") };
@@ -897,7 +953,7 @@ export async function enrollMfaAction(): Promise<ActionResult<{ factorId: string
 }
 
 export async function verifyMfaAction(factorId: string, code: string): Promise<ActionResult> {
-  await requireAuthUser();
+  const user = await requireAuthUser({ allowAal1: true });
   if (!factorId || !/^\d{6}$/.test(code.trim())) return { success: false, message: "Kode MFA harus terdiri dari 6 angka." };
   if (process.env.VITEST) return { success: true, message: "MFA berhasil diverifikasi." };
   try {
@@ -906,20 +962,23 @@ export async function verifyMfaAction(factorId: string, code: string): Promise<A
     if (challengeError) throw challengeError;
     const { error } = await supabase.auth.mfa.verify({ factorId, challengeId: challenge.id, code: code.trim() });
     if (error) throw error;
+    await recordMfaAudit(user, "iam.mfa_verified", "Verifikasi kode MFA berhasil; sesi dinaikkan ke aal2.");
     return { success: true, message: "MFA berhasil diaktifkan pada akun ini." };
   } catch (err: any) {
+    await recordMfaAudit(user, "iam.mfa_verify_failed", "Verifikasi kode MFA gagal.");
     return { success: false, message: friendlyActionError(err, "Kode MFA tidak valid.") };
   }
 }
 
 export async function unenrollMfaAction(factorId: string): Promise<ActionResult> {
-  await requireAuthUser();
+  const user = await requireAuthUser();
   if (!factorId) return { success: false, message: "Faktor MFA tidak valid." };
   if (process.env.VITEST) return { success: true, message: "MFA dicabut." };
   try {
     const supabase = await createClient();
     const { error } = await supabase.auth.mfa.unenroll({ factorId });
     if (error) throw error;
+    await recordMfaAudit(user, "iam.mfa_unenrolled", "Faktor MFA dicabut oleh pengguna.");
     return { success: true, message: "Faktor MFA berhasil dicabut." };
   } catch (err: any) {
     return { success: false, message: friendlyActionError(err, "Gagal mencabut MFA.") };

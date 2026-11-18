@@ -15,6 +15,12 @@ export default async function AppLayout({
       return <AppShell user={identity.profile}>{children}</AppShell>;
     case "unauthenticated":
       redirect("/login");
+    case "mfa_required":
+      redirect(
+        identity.mfa.requirement === "needs_enroll" ? "/mfa?mode=enroll" : "/mfa?mode=challenge"
+      );
+    case "mfa_error":
+      return <AccountStateScreen kind="mfa_error" traceId={identity.traceId} />;
     case "identity_error":
       return <AccountStateScreen kind="identity_error" traceId={identity.traceId} />;
     case "role_missing":

@@ -4,6 +4,8 @@ const mocks = vi.hoisted(() => ({
   result: { data: [] as unknown[], error: null as unknown, count: 0 },
   summaryCounts: null as Record<string, number> | null,
   summaryError: null as Error | null,
+  emailSummaryCounts: null as Record<string, number> | null,
+  emailSummaryError: null as Error | null,
   calls: [] as Array<[string, unknown[]]>,
   requireRole: vi.fn(async () => ({ id: "admin-own", role: "super_admin" })),
 }));
@@ -30,6 +32,11 @@ vi.mock("@/lib/supabase/admin", () => ({
           const status = filters.find(([field]) => field === "status")?.[1];
           return { data: null, error: null, count: mocks.summaryCounts?.[String(status)] ?? 0 };
         }
+        if (table === "email_outbox") {
+          if (mocks.emailSummaryError) return { data: null, error: mocks.emailSummaryError, count: null };
+          const status = filters.find(([field]) => field === "status")?.[1];
+          return { data: null, error: null, count: mocks.emailSummaryCounts?.[String(status)] ?? 0 };
+        }
         return mocks.result;
       }).then(resolve, reject);
       return chain;
@@ -37,13 +44,15 @@ vi.mock("@/lib/supabase/admin", () => ({
   }),
 }));
 
-import { getNotificationsAction, getUnreadNotificationCountAction, markNotificationReadAction, markAllNotificationsReadAction, getNotificationDeliverySummaryAction } from "@/modules/notifications/actions";
+import { getNotificationsAction, getUnreadNotificationCountAction, markNotificationReadAction, markAllNotificationsReadAction, getNotificationDeliverySummaryAction, getEmailDeliverySummaryAction } from "@/modules/notifications/actions";
 
 beforeEach(() => {
   vi.stubEnv("VITEST", "");
   mocks.result = { data: [], error: null, count: 0 };
   mocks.summaryCounts = null;
   mocks.summaryError = null;
+  mocks.emailSummaryCounts = null;
+  mocks.emailSummaryError = null;
   mocks.calls = [];
   mocks.requireRole.mockClear();
 });
@@ -113,6 +122,51 @@ describe("operator delivery summary", () => {
   it("keeps the synthetic VITEST branch free of database access", async () => {
     vi.stubEnv("VITEST", "true");
     expect(await getNotificationDeliverySummaryAction()).toEqual({ pending: 0, processing: 0, deadLetter: 0 });
+    expect(mocks.calls).toEqual([]);
+  });
+});
+
+describe("operator email delivery summary", () => {
+  it("requires super_admin before reading email_outbox counts", async () => {
+    mocks.requireRole.mockRejectedValueOnce(new Error("FORBIDDEN"));
+    await expect(getEmailDeliverySummaryAction()).rejects.toThrow("FORBIDDEN");
+    expect(mocks.calls).toEqual([]);
+  });
+
+  it("returns exact per-status head counts plus providerConfigured, without recipient/content", async () => {
+    vi.stubEnv("RESEND_API_KEY", "re_test_key");
+    vi.stubEnv("EMAIL_FROM", "IDAROH <noreply@mail.example.test>");
+    mocks.emailSummaryCounts = { pending: 3, processing: 1, failed: 2 };
+    expect(await getEmailDeliverySummaryAction()).toEqual({ pending: 3, processing: 1, failed: 2, providerConfigured: true });
+    expect(mocks.requireRole).toHaveBeenCalledWith(["super_admin"]);
+    expect(mocks.calls.filter(([method]) => method === "from")).toEqual([
+      ["from", ["email_outbox"]], ["from", ["email_outbox"]], ["from", ["email_outbox"]],
+    ]);
+    expect(mocks.calls).toContainEqual(["select", ["id", { count: "exact", head: true }]]);
+    for (const status of ["pending", "processing", "failed"]) {
+      expect(mocks.calls).toContainEqual(["eq", ["status", status]]);
+    }
+    // Never selects recipient/subject/body/last_error.
+    expect(mocks.calls.some(([method, args]) => method === "select" && /recipient|subject|body|last_error/.test(JSON.stringify(args)))).toBe(false);
+  });
+
+  it("signals providerConfigured false (skip, not failure) when Resend env is absent", async () => {
+    vi.stubEnv("RESEND_API_KEY", "");
+    vi.stubEnv("EMAIL_FROM", "");
+    mocks.emailSummaryCounts = { pending: 7, processing: 0, failed: 0 };
+    expect(await getEmailDeliverySummaryAction()).toEqual({ pending: 7, processing: 0, failed: 0, providerConfigured: false });
+  });
+
+  it("propagates email_outbox query errors instead of reporting zero backlog", async () => {
+    mocks.emailSummaryError = new Error("relation does not exist");
+    await expect(getEmailDeliverySummaryAction()).rejects.toThrow("relation does not exist");
+  });
+
+  it("keeps the synthetic VITEST branch free of database access", async () => {
+    vi.stubEnv("VITEST", "true");
+    vi.stubEnv("RESEND_API_KEY", "");
+    vi.stubEnv("EMAIL_FROM", "");
+    expect(await getEmailDeliverySummaryAction()).toEqual({ pending: 0, processing: 0, failed: 0, providerConfigured: false });
     expect(mocks.calls).toEqual([]);
   });
 });

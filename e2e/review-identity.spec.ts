@@ -6,7 +6,14 @@ import path from "node:path";
 // evidence for UX-01 (session reviewer identity), NOT production DB E2E.
 type Report = Record<string, unknown>;
 type Config = { reports?: Report[]; failQueue?: boolean };
-type ReviewCall = { reportId: string; decision: string; notes: string; reviewerName?: string };
+type ReviewCall = {
+  reportId: string;
+  revisionNo: number;
+  decision: string;
+  notes: string;
+  idempotencyKey: string;
+  reviewerName?: string;
+};
 declare global {
   interface Window {
     __reviewIdentityConfig: Config;
@@ -117,7 +124,13 @@ test.describe("UX-01 — reviewer identity comes from the session, not a fixture
     await expect(page.getByText(/berhasil disetujui oleh Ustadz Salman Uji/)).toBeVisible();
     const calls = await page.evaluate(() => window.__reviewIdentityCalls);
     expect(calls).toHaveLength(1);
-    expect(calls[0]).toMatchObject({ reportId: "rep-1", decision: "approved", reviewerName: "Ustadz Salman Uji" });
+    expect(calls[0]).toMatchObject({
+      reportId: "rep-1",
+      revisionNo: 1,
+      decision: "approved",
+      reviewerName: "Ustadz Salman Uji",
+    });
+    expect(calls[0].idempotencyKey).toMatch(/[0-9a-f-]{36}/i);
     await expect(page.getByText("Ustadz Salman Uji", { exact: true }).first()).toBeVisible();
     expect(await page.evaluate(() => document.body.innerText.includes("usr-fauzi"))).toBe(false);
   });

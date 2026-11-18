@@ -17,14 +17,24 @@ const mocks = vi.hoisted(() => ({
   callerFullName: "Super Admin Test",
   // Track all rpc() calls so tests can assert the right RPC was invoked
   rpcCalls: [] as Array<{ name: string; args: Record<string, unknown> }>,
-  // Track all from() / insert() calls for email_outbox assertions
-  fromCalls: [] as Array<{ table: string; method: string; data?: unknown }>,
+  serverRpcCalls: [] as Array<{ name: string; args: Record<string, unknown> }>,
+  // Track all from() / insert() / upsert() calls for email_outbox assertions
+  fromCalls: [] as Array<{ table: string; method: string; data?: unknown; options?: unknown }>,
   // Control whether the rpc returns success or failure
   rpcSuccess: true,
   rpcError: null as Error | null,
+  reviewRpcResult: {
+    success: true,
+    created: true,
+    idempotent: false,
+    review_id: "review-1",
+    user_id: "user-1",
+    revision_no: 1,
+  } as Record<string, unknown>,
   // requireRole mock
   requireRole: vi.fn(),
   requireAuthUser: vi.fn(),
+  drainPush: vi.fn(async () => ({ sent: 0, removed: 0, skipped: false })),
   getHighestRole: vi.fn((user: { role: string }) => user.role),
   ROLE_PRIORITY: {
     santri: 1,
@@ -59,7 +69,10 @@ vi.mock("@/lib/auth/guards", () => ({
 }));
 
 vi.mock("@/lib/auth/session", () => ({ getCurrentUserProfile: vi.fn() }));
-vi.mock("@/lib/fcm", () => ({ sendPushToUsers: vi.fn(async () => ({ sent: 0, skipped: false })) }));
+vi.mock("@/lib/fcm", () => ({
+  sendPushToUsers: vi.fn(async () => ({ sent: 0, skipped: false })),
+  drainNotificationOutbox: mocks.drainPush,
+}));
 vi.mock("@/lib/rate-limit", () => ({ enforceRateLimit: vi.fn(async () => true) }));
 
 // Build a reusable Supabase mock that tracks calls
@@ -141,10 +154,13 @@ function makeSupabaseMock() {
               Promise.resolve({ data: null, error: mocks.outboxInsertError }).then(resolve),
           };
         },
-        upsert: (..._a: unknown[]) => ({
-          then: (resolve: (v: unknown) => void) =>
-            Promise.resolve({ data: null, error: null }).then(resolve),
-        }),
+        upsert: (data: unknown, options: unknown) => {
+          mocks.fromCalls.push({ table, method: "upsert", data, options });
+          return {
+            then: (resolve: (v: unknown) => void) =>
+              Promise.resolve({ data: null, error: mocks.outboxInsertError }).then(resolve),
+          };
+        },
         delete: (..._a: unknown[]) => ({
           eq: (..._b: unknown[]) => ({
             then: (resolve: (v: unknown) => void) =>
@@ -199,7 +215,12 @@ vi.mock("@/lib/supabase/server", () => ({
       })),
       signOut: vi.fn(async () => ({})),
     },
-    rpc: vi.fn(async () => ({ data: { success: true }, error: null })),
+    rpc: vi.fn(async (name: string, args: Record<string, unknown> = {}) => {
+      mocks.serverRpcCalls.push({ name, args });
+      return { data: mocks.reviewRpcResult,
+      error: null,
+      };
+    }),
   }),
 }));
 
@@ -222,14 +243,25 @@ function makeAdminUser(role = "super_admin") {
 beforeEach(() => {
   vi.stubEnv("VITEST", "true");
   mocks.rpcCalls = [];
+  mocks.serverRpcCalls = [];
   mocks.fromCalls = [];
   mocks.rpcSuccess = true;
   mocks.rpcError = null;
+  mocks.reviewRpcResult = {
+    success: true,
+    created: true,
+    idempotent: false,
+    review_id: "review-1",
+    user_id: "user-1",
+    revision_no: 1,
+  };
   mocks.outboxInsertError = null;
   mocks.accountRequest = null;
   mocks.profileData = null;
   mocks.requireRole.mockReset();
   mocks.requireAuthUser.mockReset();
+  mocks.drainPush.mockClear();
+  mocks.drainPush.mockImplementation(async () => ({ sent: 0, removed: 0, skipped: false }));
   mocks.getHighestRole.mockImplementation((user: { role: string }) => user.role);
   mocks.requireRole.mockResolvedValue(makeAdminUser());
   vi.unstubAllEnvs();
@@ -463,7 +495,7 @@ describe("TRC-04 — email outbox entries on approve/reject account", () => {
       await rejectAccountApplicationAction("req-1", "Kuota penuh");
 
       const outboxInserts = mocks.fromCalls.filter(
-        (c) => c.table === "email_outbox" && c.method === "insert"
+        (c) => c.table === "email_outbox" && c.method === "upsert"
       );
       expect(outboxInserts.length).toBeGreaterThan(0);
 
@@ -474,6 +506,7 @@ describe("TRC-04 — email outbox entries on approve/reject account", () => {
       expect(typeof inserted.body_text).toBe("string");
       expect((inserted.body_text as string)).toContain("Kuota penuh");
       expect(inserted.reference_type).toBe("account_request_rejected");
+      expect(outboxInserts[0].options).toEqual({ onConflict: "reference_type,reference_id", ignoreDuplicates: true });
     });
 
     it("approve: inserts outbox record for approval notification", async () => {
@@ -488,7 +521,7 @@ describe("TRC-04 — email outbox entries on approve/reject account", () => {
       await approveAccountApplicationAction("req-2", "santri");
 
       const outboxInserts = mocks.fromCalls.filter(
-        (c) => c.table === "email_outbox" && c.method === "insert"
+        (c) => c.table === "email_outbox" && c.method === "upsert"
       );
       expect(outboxInserts.length).toBeGreaterThan(0);
 
@@ -508,8 +541,10 @@ describe("TRC-04 — email outbox entries on report review", () => {
     mocks.requireRole.mockResolvedValue(makeAdminUser("koordinator"));
     const result = await reviewReportAction({
       reportId: "rep-1",
+      revisionNo: 1,
       decision: "approved",
       notes: "",
+      idempotencyKey: "test-review-approve",
       reviewerName: "Ustadz Ali",
     });
     expect(result.success).toBe(true);
@@ -521,8 +556,10 @@ describe("TRC-04 — email outbox entries on report review", () => {
     mocks.requireRole.mockResolvedValue(makeAdminUser("koordinator"));
     const result = await reviewReportAction({
       reportId: "rep-1",
+      revisionNo: 1,
       decision: "revision_required",
       notes: "Tambah rincian progres",
+      idempotencyKey: "test-review-revision",
     });
     expect(result.success).toBe(true);
   });
@@ -530,59 +567,127 @@ describe("TRC-04 — email outbox entries on report review", () => {
   it("reviewReportAction: rejects revision_required with empty notes", async () => {
     const result = await reviewReportAction({
       reportId: "rep-1",
+      revisionNo: 1,
       decision: "revision_required",
       notes: "   ",
+      idempotencyKey: "test-review-empty-notes",
     });
     expect(result.success).toBe(false);
     expect(result.message).toContain("Catatan evaluasi / alasan revisi wajib diisi");
   });
 
-  describe("outbox insert for report decisions (mocked Supabase)", () => {
+  describe("atomic review RPC contract (mocked Supabase)", () => {
     beforeEach(() => {
       vi.unstubAllEnvs();
       vi.stubEnv("VITEST", "");
       mocks.requireRole.mockResolvedValue(makeAdminUser("koordinator"));
     });
 
-    it("approved: inserts outbox record for approval notification", async () => {
-      mocks.profileData = { email: "santri@test.com", full_name: "Santri Test", id: "user-1" };
-
-      await reviewReportAction({
+    it("approved: sends the command identity to the atomic review RPC", async () => {
+      const result = await reviewReportAction({
         reportId: "rep-approve-1",
+        revisionNo: 1,
         decision: "approved",
         notes: "",
+        idempotencyKey: "test-review-approve-1",
         reviewerName: "Ustadz Ali",
       });
-
-      const outboxInserts = mocks.fromCalls.filter(
-        (c) => c.table === "email_outbox" && c.method === "insert"
-      );
-      expect(outboxInserts.length).toBeGreaterThan(0);
-
-      const inserted = outboxInserts[0].data as Record<string, unknown>;
-      expect(inserted.status).toBe("pending");
-      expect(inserted.reference_type).toBe("report_approved");
-      expect(typeof inserted.subject).toBe("string");
-      expect(typeof inserted.body_text).toBe("string");
+      expect(result.reviewId).toBe("review-1");
+      expect(mocks.serverRpcCalls[0]).toMatchObject({
+        name: "review_report",
+        args: {
+          p_report_id: "rep-approve-1",
+          p_revision_no: 1,
+          p_decision: "approved",
+          p_idempotency_key: "test-review-approve-1",
+        },
+      });
+      expect(mocks.fromCalls.some((c) => c.table === "email_outbox")).toBe(false);
+      expect(mocks.fromCalls.some((c) => c.table === "audit_logs")).toBe(false);
+      expect(mocks.fromCalls.some((c) => c.table === "notifications")).toBe(false);
+      expect(mocks.drainPush).toHaveBeenCalledWith({
+        notificationType: "REPORT_APPROVED",
+        referenceId: "review-1",
+      });
     });
 
-    it("revision_required: inserts outbox record with reviewer notes", async () => {
-      mocks.profileData = { email: "santri@test.com", full_name: "Santri Test", id: "user-1" };
-
+    it("revision_required: keeps notes in the command payload", async () => {
       await reviewReportAction({
         reportId: "rep-revision-1",
+        revisionNo: 1,
         decision: "revision_required",
         notes: "Mohon tambahkan rincian",
+        idempotencyKey: "test-review-revision-1",
       });
 
-      const outboxInserts = mocks.fromCalls.filter(
-        (c) => c.table === "email_outbox" && c.method === "insert"
-      );
-      expect(outboxInserts.length).toBeGreaterThan(0);
+      expect(mocks.serverRpcCalls[0].args).toMatchObject({
+        p_decision: "revision_required",
+        p_notes: "Mohon tambahkan rincian",
+        p_idempotency_key: "test-review-revision-1",
+      });
+      expect(mocks.fromCalls.some((c) => c.table === "email_outbox")).toBe(false);
+      expect(mocks.drainPush).toHaveBeenCalledWith({
+        notificationType: "REPORT_REVISION_REQUIRED",
+        referenceId: "review-1",
+      });
+    });
 
-      const inserted = outboxInserts[0].data as Record<string, unknown>;
-      expect(inserted.reference_type).toBe("report_revision_required");
-      expect((inserted.body_text as string)).toContain("Mohon tambahkan rincian");
+    it("push dispatch failure does not fail the persisted review", async () => {
+      mocks.drainPush.mockRejectedValueOnce(new Error("fcm unavailable"));
+      const result = await reviewReportAction({
+        reportId: "rep-push-fail-1",
+        revisionNo: 1,
+        decision: "approved",
+        notes: "",
+        idempotencyKey: "test-review-push-fail-1",
+      });
+      expect(result.success).toBe(true);
+      expect(result.reviewId).toBe("review-1");
+    });
+
+    it("idempotent retry returns the original result without repeating audit", async () => {
+      mocks.reviewRpcResult = {
+        success: true,
+        created: false,
+        idempotent: true,
+        review_id: "review-original",
+        user_id: "user-1",
+        revision_no: 1,
+      };
+
+      const result = await reviewReportAction({
+        reportId: "rep-retry-1",
+        revisionNo: 1,
+        decision: "approved",
+        notes: "",
+        idempotencyKey: "test-review-retry-1",
+      });
+
+      expect(result).toMatchObject({ success: true, reviewId: "review-original", idempotent: true });
+      expect(mocks.fromCalls.some((c) => c.table === "audit_logs")).toBe(false);
+      expect(mocks.fromCalls.some((c) => c.table === "email_outbox")).toBe(false);
+      expect(mocks.drainPush).toHaveBeenCalledWith({
+        notificationType: "REPORT_APPROVED",
+        referenceId: "review-original",
+      });
+    });
+
+    it("surfaces an idempotency conflict from the RPC", async () => {
+      mocks.reviewRpcResult = {
+        success: false,
+        code: "IDEMPOTENCY_CONFLICT",
+        message: "Kunci idempotensi sudah digunakan untuk perintah review yang berbeda.",
+      };
+
+      const result = await reviewReportAction({
+        reportId: "rep-conflict-1",
+        revisionNo: 1,
+        decision: "approved",
+        notes: "",
+        idempotencyKey: "test-review-conflict-1",
+      });
+
+      expect(result).toMatchObject({ success: false, code: "IDEMPOTENCY_CONFLICT" });
     });
   });
 });

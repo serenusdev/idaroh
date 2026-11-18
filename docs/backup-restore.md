@@ -19,7 +19,7 @@ Sebelum migration production:
 
 Free plan Supabase tidak menyediakan backup harian maupun PITR. Sebagai gantinya, backup logis mingguan dijalankan oleh GitHub Actions (`.github/workflows/backup.yml`) dan disimpan terenkripsi di Backblaze B2 (S3-compatible, 10 GB gratis, tanpa kartu kredit). Ini memenuhi intent ADM-009 (data dapat dipulihkan) selama drill restore di bawah benar-benar dijalankan dan dicatat; PITR tetap opsi upgrade berbayar.
 
-Alur: `supabase db dump` (session pooler) → enkripsi `age` → upload ke B2. Jadwal: Senin 00:00 WIB (Minggu 17:00 UTC), plus pemicu manual `workflow_dispatch`. Cadence mingguan juga menjaga project Free tidak di-pause karena idle (±7 hari).
+Alur: `supabase db dump` dua tahap via session pooler — dump **skema** (`--schema public,app,audit`) lalu dump **data** (`--data-only --use-copy`) — digabung menjadi `backup.sql` → enkripsi `age` → upload ke B2. Jadwal: Senin 00:00 WIB (Minggu 17:00 UTC), plus pemicu manual `workflow_dispatch`. Cadence mingguan juga menjaga project Free tidak di-pause karena idle (±7 hari). `supabase db dump` menjalankan `pg_dump` **di dalam container CLI**; versi pg_dump mengikuti `[db] major_version` di `supabase/config.toml` (17), bukan binary host. Workflow tetap memasang `postgresql-client-17` di host (dari PGDG bila repo Ubuntu hanya punya versi lebih lama) untuk langkah preflight `psql`, mem-pin PATH ke versi itu, dan menolak jalan bila versi mayor server lebih baru dari client. Runner dipin ke `ubuntu-24.04` karena label `ubuntu-latest` dijadwalkan pindah ke 26.04 pada Nov 2026.
 
 Secret GitHub Actions yang wajib diset (Settings → Secrets and variables → Actions):
 
@@ -38,25 +38,30 @@ Setup sekali:
 2. Buat **Application Key** (B2 → Application Keys → Add a New Application Key) dengan akses read/write ke bucket `idaroh-backups` → dapat **keyID** + **applicationKey** (applicationKey hanya tampil sekali).
 3. Generate keypair age: `age-keygen -o key.txt`. Public key (`age1...`) → secret `AGE_RECIPIENT`. **Simpan `key.txt` offline/terenkripsi** — ini satu-satunya cara mendekripsi backup. Jangan commit ke repo.
 4. Ambil Session pooler URL dari Supabase → Connect, ganti `<password>` dengan password DB, simpan sebagai `SUPABASE_DB_URL`.
-5. Set keenam secret, push workflow, lalu jalankan manual (Actions → Pondok OS Weekly DB Backup → Run workflow) untuk bukti pertama.
+5. Set keenam secret, push workflow, lalu jalankan manual (Actions → IDAROH Weekly DB Backup → Run workflow) untuk bukti pertama.
 
 Cakupan dan batasan (jujur):
 
-- Dump mencakup skema `public` (tabel aplikasi + policy RLS). Roles Supabase (`anon`/`authenticated`/`service_role`) sudah ada di project tujuan, jadi restore antar-project Supabase tidak memerlukan dump roles.
-- **Akun Supabase Auth (`auth.users`) TIDAK ikut** secara default. Untuk recover akun, dump terpisah skema `auth` (`supabase db dump -s auth ...`) dan tangani restore-nya hati-hati (GoTrue mengelola skema ini), atau terima konsekuensi re-invite user. Dump auth berisi hash password → perlakukan sebagai data sensitif.
+- Dump mencakup skema `public` (tabel aplikasi + policy RLS + grants), `app` (helper/RPC), dan `audit`. Roles Supabase (`anon`/`authenticated`/`service_role`) sudah ada di project tujuan, jadi restore antar-project Supabase tidak memerlukan dump roles.
+- **Akun Supabase Auth (`auth.users`) TIDAK ikut** secara default, padahal `profiles.id` dan banyak kolom lain ber-FK ke sana. Untuk recover akun, dump terpisah skema `auth` (`supabase db dump -s auth ...`) dan pulihkan **sebelum** data aplikasi; tanpa itu restore menyisakan profil yatim (lihat drill langkah 3). Tangani restore auth hati-hati (GoTrue mengelola skema ini), atau terima konsekuensi re-invite user. Dump auth berisi hash password → perlakukan sebagai data sensitif.
 - **Storage (file lampiran) TIDAK ikut** dalam dump DB. Export objek Storage terpisah bila ada file nyata.
 - File backup terenkripsi (age). Tanpa private key, backup tidak bisa dibaca — termasuk oleh CI. Plaintext dihapus (`shred`) setelah enkripsi.
 
 ### Drill restore (wajib, berkala mis. bulanan)
 
-Backup tanpa uji restore tidak memenuhi ADM-009. Prosedur:
+Backup tanpa uji restore tidak memenuhi ADM-009. Untuk drill ke Supabase **hosted disposable** dengan script pengumpul bukti (privilege role `postgres`, probe `session_replication_role`, orphan, RLS/grants, row count) guna mengadjudikasi konflik C-3, lihat `docs/restore-drill-runbook.md` (`npm run drill:restore`, operator-run, non-prod). Prosedur manual di bawah tetap berlaku (terutama restore ke Supabase lokal yang role-nya superuser):
 
 1. Ambil objek terbaru dari B2: `aws s3 cp s3://<bucket>/backups/<file>.sql.age . --endpoint-url https://s3.<region>.backblazeb2.com`.
 2. Dekripsi dengan private key offline: `age -d -i key.txt -o backup.sql <file>.sql.age`.
-3. Restore ke **Supabase lokal** (`supabase start`, lalu `psql "$LOCAL_DB_URL" -f backup.sql`) atau project staging Free ke-2. Jangan langsung produksi.
-4. Validasi row count tabel inti, constraint, dan policy RLS; uji akses lintas dua akun uji.
-5. Smoke test login, presensi, laporan, task, dan calendar feed.
-6. Catat tanggal, operator, file backup, hasil validasi, dan keputusan di change log.
+3. **Siapkan target sebelum restore** (dua langkah ini wajib, terbukti lewat drill lokal):
+   - Cabut default privileges agar tabel hasil restore tidak mewarisi hak penuh: `ALTER DEFAULT PRIVILEGES IN SCHEMA public REVOKE ALL ON TABLES FROM anon, authenticated;`. Tanpa ini, target berisiko memberikan privilege berlebihan kepada `anon`/`authenticated` dan melemahkan RLS/grants; hasil aktual wajib dicatat dari drill.
+   - Pulihkan **`auth.users` lebih dulu** (dump terpisah skema `auth`). Dump aplikasi tidak memuatnya, sedangkan `profiles.id` dan banyak kolom lain ber-FK ke `auth.users`. Tanpa baris auth, mode restore tertentu dapat melewati FK dan meninggalkan **profil yatim**; drill harus membuktikan hasil aktual sebelum backup dianggap recoverable.
+4. Restore ke **Supabase lokal** (`supabase start`, lalu `psql "$LOCAL_DB_URL" -v ON_ERROR_STOP=1 -f backup.sql`). Jangan langsung produksi.
+   - Dump data dari CLI dapat diawali `SET session_replication_role = replica;` (mematikan trigger FK agar urutan baris tidak masalah). Statement itu **hanya boleh dijalankan superuser**. Kemampuan role hosted dan hasil probe `session_replication_role` tetap **NOT VERIFIED** sampai disposable restore drill dijalankan; jangan menganggap restore hosted maupun restore production berhasil tanpa bukti.
+   - Skema dari CLI sudah ditulis ulang menjadi `CREATE SCHEMA/TABLE IF NOT EXISTS` dan `CREATE OR REPLACE FUNCTION/VIEW`, jadi tidak bentrok dengan objek yang sudah ada di target.
+5. Validasi: row count tabel inti, constraint, policy RLS (`pg_policies`), nilai sequence (`setval` ikut ter-dump), **jumlah baris yatim = 0** (`profiles` LEFT JOIN `auth.users`), dan uji akses lintas dua akun uji.
+6. Smoke test login, presensi, laporan, task, dan calendar feed.
+7. Catat tanggal, operator, file backup, hasil validasi, dan keputusan di change log.
 
 Job `database-integration` pada `.github/workflows/ci.yml` sudah membuktikan migrasi apply dari nol + uji RLS (`supabase db reset --local` + `supabase test db`); itu basis yang baik untuk drill, tetapi restore dari dump tetap harus diuji terpisah.
 

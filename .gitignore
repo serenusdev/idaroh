@@ -20,6 +20,7 @@ yarn-debug.log*
 
 # local env files
 .env*.local
+/key.txt
 
 # typescript
 *.tsbuildinfo
@@ -38,6 +39,7 @@ android/.idea
 # local build & temp artifacts
 android/app/release/
 supabase/.temp/
+supabase/.branches/
 test-results/
 
 # cloudflare & open-next

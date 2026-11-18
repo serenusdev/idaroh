@@ -13,6 +13,7 @@ const valid = {
   SUPABASE_SERVICE_ROLE_KEY: "sb_secret_valid",
   NEXT_PUBLIC_APP_URL: "https://app.supabase.co",
   CRON_SECRET: "a".repeat(32),
+  NEXT_PUBLIC_TURNSTILE_SITE_KEY: "0x4AAAAAAA_valid_turnstile_site",
   TURNSTILE_SECRET_KEY: "0x4AAAAAAA_valid_turnstile_secret",
   RESEND_API_KEY: "re_valid_resend_key",
   EMAIL_FROM: "IDAROH <no-reply@idaroh.sch.id>",
@@ -37,13 +38,39 @@ describe("production environment", () => {
     expect(() => validateProductionEnvironment({ ...valid, RESEND_API_KEY: "" })).toThrow("RESEND_API_KEY");
     expect(() => validateProductionEnvironment({ ...valid, EMAIL_FROM: "" })).toThrow("EMAIL_FROM");
   });
+  it("requires the Turnstile site key alongside the secret so the widget can render", () => {
+    // Secret without site key would fail-closed every login/registration (no token).
+    expect(() => validateProductionEnvironment({ ...valid, NEXT_PUBLIC_TURNSTILE_SITE_KEY: "" })).toThrow("NEXT_PUBLIC_TURNSTILE_SITE_KEY");
+    expect(() => validateProductionEnvironment({ ...valid, NEXT_PUBLIC_TURNSTILE_SITE_KEY: "placeholder-site-key" })).toThrow("NEXT_PUBLIC_TURNSTILE_SITE_KEY");
+  });
   it("does not require production services in local development", () => {
     expect(() => validateProductionEnvironment({ NODE_ENV: "development" })).not.toThrow();
   });
-  it("skips credential checks for CI compile-only builds but still rejects VITEST", () => {
-    expect(() => validateProductionEnvironment({ NODE_ENV: "production", CI: "true" })).not.toThrow();
-    expect(() => validateProductionEnvironment({ NODE_ENV: "production", CI: "true", VITEST: "true" })).not.toThrow();
-    expect(() => validateProductionEnvironment({ NODE_ENV: "production", CI: "false" })).toThrow("NEXT_PUBLIC_SUPABASE_URL");
-    expect(() => validateProductionEnvironment({ ...valid, CI: "true", CRON_SECRET: "" })).not.toThrow();
+  it("does not treat CI alone as a production validation bypass", () => {
+    expect(() => validateProductionEnvironment({ NODE_ENV: "production", CI: "true" })).toThrow("NEXT_PUBLIC_SUPABASE_URL");
+    expect(() => validateProductionEnvironment({ NODE_ENV: "production", CI: "true", CRON_SECRET: "" })).toThrow("NEXT_PUBLIC_SUPABASE_URL");
+  });
+  it("allows only the explicit GitHub Actions compile-only context", () => {
+    expect(() => validateProductionEnvironment({
+      NODE_ENV: "production",
+      CI: "true",
+      GITHUB_ACTIONS: "true",
+      IDAROH_BUILD_CONTEXT: "ci-compile",
+    })).not.toThrow();
+    expect(() => validateProductionEnvironment({
+      NODE_ENV: "production",
+      CI: "true",
+      IDAROH_BUILD_CONTEXT: "ci-compile",
+    })).toThrow("GitHub Actions");
+    expect(() => validateProductionEnvironment({
+      NODE_ENV: "production",
+      CI: "true",
+      GITHUB_ACTIONS: "true",
+      IDAROH_BUILD_CONTEXT: "ci-compile",
+      VITEST: "true",
+    })).toThrow("VITEST");
+  });
+  it("still validates complete production configuration in CI", () => {
+    expect(() => validateProductionEnvironment({ ...valid, CI: "true" })).not.toThrow();
   });
 });

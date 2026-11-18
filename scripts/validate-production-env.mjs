@@ -2,10 +2,16 @@ const placeholder = /placeholder|dummy|example\.(?:test|com|org)|your[-_]|change
 
 export function validateProductionEnvironment(env = process.env) {
   if (env.NODE_ENV !== 'production') return;
-  // CI builds compile without deployment credentials; Vercel/Cloudflare production
-  // builds do not set CI, so the guard still protects real deployments.
-  if (env.CI === 'true') return;
   if (env.VITEST) throw new Error('VITEST must never be enabled in production.');
+  // GitHub CI performs a compile-only build without deployment credentials. Keep
+  // that exception explicit and narrow: CI alone must never bypass production
+  // validation, and the context must not be accepted outside GitHub Actions.
+  if (env.IDAROH_BUILD_CONTEXT === 'ci-compile') {
+    if (env.CI !== 'true' || env.GITHUB_ACTIONS !== 'true') {
+      throw new Error('IDAROH_BUILD_CONTEXT=ci-compile is only valid for GitHub Actions CI builds.');
+    }
+    return;
+  }
 
   const required = [
     'NEXT_PUBLIC_SUPABASE_URL',
@@ -13,6 +19,10 @@ export function validateProductionEnvironment(env = process.env) {
     'SUPABASE_SERVICE_ROLE_KEY',
     'NEXT_PUBLIC_APP_URL',
     'CRON_SECRET',
+    // Turnstile widget renders only when the site key is present, while login and
+    // registration fail-closed server-side requiring a token in production. Both keys
+    // are mandatory together: a secret without a site key would lock out every sign-in.
+    'NEXT_PUBLIC_TURNSTILE_SITE_KEY',
     'TURNSTILE_SECRET_KEY',
     'RESEND_API_KEY',
     'EMAIL_FROM',
@@ -45,7 +55,7 @@ export function validateProductionEnvironment(env = process.env) {
     if (['project_id', 'client_email', 'private_key'].some((key) => !credentials?.[key] || placeholder.test(credentials[key]))) {
       throw new Error('Production Firebase credentials are incomplete or contain a placeholder.');
     }
-  } else if (!process.env.VITEST) {
+  } else if (!env.VITEST) {
     // OPS-13: push is optional, but a missing key silently disables FCM. Warn
     // explicitly at deploy time so operators know push will not fire.
     console.warn('[env] FIREBASE_SERVICE_ACCOUNT_KEY is not set — native push notifications (FCM) stay disabled. Set it to enable push.');

@@ -8,6 +8,11 @@ import { useCachedData } from "@/hooks/use-cached-data";
 import { invalidateCache, writeCache } from "@/lib/data-cache";
 import { DailyReport, ReviewStatus } from "@/modules/reports/types";
 import { reviewReportAction, getReviewQueueAction } from "@/modules/reports/actions";
+import {
+  clearStoredReviewCommand,
+  resolveReviewCommand,
+  storeReviewCommand,
+} from "@/modules/reports/review-command-storage";
 
 type QueueTab = "pending" | "revision" | "resubmitted" | "approved" | "unassigned";
 
@@ -43,6 +48,10 @@ export default function ReviewPage() {
 
   const [feedbackNotes, setFeedbackNotes] = React.useState("");
   const [isSubmittingReview, setIsSubmittingReview] = React.useState(false);
+  const pendingReviewCommand = React.useRef<{
+    fingerprint: string;
+    idempotencyKey: string;
+  } | null>(null);
   const [alertNotice, setAlertNotice] = React.useState<{
     type: "success" | "error" | "info";
     message: string;
@@ -95,12 +104,27 @@ export default function ReviewPage() {
     if (!selectedReport) return;
     setIsSubmittingReview(true);
     setAlertNotice(null);
+    const notes = feedbackNotes;
+    const { storageKey, fingerprint, idempotencyKey } = resolveReviewCommand(
+      {
+        actorId: currentUser.id,
+        reportId: selectedReport.id,
+        revisionNo: selectedReport.revisionNo,
+        decision,
+        notes,
+      },
+      pendingReviewCommand.current,
+    );
+    pendingReviewCommand.current = { fingerprint, idempotencyKey };
+    storeReviewCommand(storageKey, { fingerprint, idempotencyKey });
 
     try {
       const res = await reviewReportAction({
         reportId: selectedReport.id,
+        revisionNo: selectedReport.revisionNo,
         decision,
-        notes: feedbackNotes,
+        notes,
+        idempotencyKey,
         reviewerName: currentUser.full_name,
       });
 
@@ -118,13 +142,13 @@ export default function ReviewPage() {
                 reviews: [
                   ...(r.reviews || []),
                   {
-                    id: `rev-${Date.now()}`,
+                    id: res.reviewId || `rev-${Date.now()}`,
                     reportId: r.id,
                     revisionNo: r.revisionNo,
                     reviewerId: currentUser.id,
                     reviewerName: currentUser.full_name,
                     decision,
-                    notes: feedbackNotes,
+                    notes,
                     decidedAt: new Date().toISOString(),
                   },
                 ],
@@ -134,6 +158,8 @@ export default function ReviewPage() {
           })
         );
         setFeedbackNotes("");
+        pendingReviewCommand.current = null;
+        clearStoredReviewCommand(storageKey);
         invalidateCache("admin:dashboard-stats");
       } else {
         setAlertNotice({ type: "error", message: res.message });

@@ -1,6 +1,7 @@
 import { createServerClient, type CookieOptions } from "@supabase/ssr";
 import { NextRequest, NextResponse } from "next/server";
 import { enforceRateLimit } from "@/lib/rate-limit";
+import { decodeAalClaim } from "@/lib/auth/mfa-assurance";
 
 function getSafeLoginMessage(message: string) {
   if (
@@ -127,6 +128,15 @@ export async function POST(request: NextRequest) {
       },
       { status: 401 },
     );
+  }
+
+  // L1: a verified factor below AAL2 must complete a challenge. Enrollment for
+  // super_admin without a factor is enforced downstream by the app layout (L2).
+  const hasVerifiedFactor = (data.user.factors ?? []).some((factor) => factor.status === "verified");
+  if (hasVerifiedFactor && decodeAalClaim(data.session?.access_token) !== "aal2") {
+    const mfaResponse = NextResponse.json({ success: true, mfaRequired: true, mode: "challenge" });
+    response.cookies.getAll().forEach(({ name, value, ...options }) => mfaResponse.cookies.set(name, value, options));
+    return mfaResponse;
   }
 
   return response;

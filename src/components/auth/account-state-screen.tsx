@@ -11,6 +11,7 @@ import type { AccountStatus } from "@/lib/auth/types";
 
 export type AccountStateScreenProps =
   | { kind: "identity_error"; traceId: string }
+  | { kind: "mfa_error"; traceId: string }
   | { kind: "role_missing"; email: string }
   | { kind: "profile_missing"; email: string }
   | { kind: "inactive"; email: string; status: AccountStatus };
@@ -44,6 +45,13 @@ function describe(props: AccountStateScreenProps) {
       return {
         title: "Identitas Belum Dapat Diverifikasi",
         description: "Sistem gagal menghubungi layanan akun. Sesi Anda tetap aman; silakan coba lagi beberapa saat lagi.",
+        illustration: "/illustrations/undraw_connection-failed_obln.svg",
+        retryable: true,
+      };
+    case "mfa_error":
+      return {
+        title: "Verifikasi MFA Tidak Dapat Diselesaikan",
+        description: "Sistem gagal memverifikasi status keamanan dua langkah akun Anda. Demi keamanan, akses ditahan sementara; silakan coba lagi beberapa saat lagi.",
         illustration: "/illustrations/undraw_connection-failed_obln.svg",
         retryable: true,
       };
@@ -81,7 +89,7 @@ export function AccountStateScreen(props: AccountStateScreenProps) {
   const [retrying, startRetry] = React.useTransition();
   const { title, description, illustration, retryable } = describe(props);
   const adminContact = getAdminContact();
-  const showContact = props.kind !== "identity_error";
+  const showContact = props.kind !== "identity_error" && props.kind !== "mfa_error";
 
   const [logoutError, setLogoutError] = React.useState<string | null>(null);
   const handleLogout = async () => {
@@ -109,7 +117,7 @@ export function AccountStateScreen(props: AccountStateScreenProps) {
         {"email" in props && props.email && (
           <p className="font-body-sm text-[12px] text-muted-foreground">Masuk sebagai {props.email}</p>
         )}
-        {props.kind === "identity_error" && (
+        {(props.kind === "identity_error" || props.kind === "mfa_error") && (
           <p className="font-mono text-[11px] text-muted-foreground/70">Kode pelacakan: {props.traceId}</p>
         )}
       </div>

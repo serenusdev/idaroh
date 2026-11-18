@@ -3,11 +3,12 @@ import { NextRequest } from "next/server";
 
 const mocks = vi.hoisted(() => ({
   getUser: vi.fn(),
+  getSession: vi.fn(),
   profile: vi.fn(),
 }));
 vi.mock("@supabase/ssr", () => ({
   createServerClient: () => ({
-    auth: { getUser: mocks.getUser },
+    auth: { getUser: mocks.getUser, getSession: mocks.getSession },
     from: () => ({ select: () => ({ eq: () => ({ maybeSingle: mocks.profile }) }) }),
   }),
 }));
@@ -24,8 +25,10 @@ beforeEach(() => {
   vi.stubEnv("NEXT_PUBLIC_SUPABASE_URL", "https://real.supabase.co");
   vi.stubEnv("NEXT_PUBLIC_SUPABASE_ANON_KEY", "real-anon-key");
   mocks.getUser.mockReset();
+  mocks.getSession.mockReset();
   mocks.profile.mockReset();
   mocks.getUser.mockResolvedValue({ data: { user: null }, error: null });
+  mocks.getSession.mockResolvedValue({ data: { session: null }, error: null });
   mocks.profile.mockResolvedValue({ data: { status: "active" }, error: null });
 });
 afterEach(() => vi.unstubAllEnvs());

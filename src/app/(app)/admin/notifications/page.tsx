@@ -2,7 +2,7 @@
 
 import * as React from "react";
 import { sendTestPushAction } from "@/modules/operations/actions";
-import { getNotificationDeliverySummaryAction } from "@/modules/notifications/actions";
+import { getNotificationDeliverySummaryAction, getEmailDeliverySummaryAction } from "@/modules/notifications/actions";
 import { useIdentity } from "@/components/auth/identity-context";
 import { useCachedData } from "@/hooks/use-cached-data";
 import { UnauthorizedState } from "@/components/ui/unauthorized-state";
@@ -14,6 +14,9 @@ export default function AdminNotificationsPage() {
   const summaryQuery = useCachedData(user.role === "super_admin" ? "admin:notifications-summary" : null, getNotificationDeliverySummaryAction);
   const summary = summaryQuery.data ?? null;
   const summaryError = Boolean(summaryQuery.error);
+  const emailQuery = useCachedData(user.role === "super_admin" ? "admin:email-summary" : null, getEmailDeliverySummaryAction);
+  const emailSummary = emailQuery.data ?? null;
+  const emailError = Boolean(emailQuery.error);
   if (!["super_admin", "yayasan", "pengurus"].includes(user.role)) return <UnauthorizedState requiredRole="Pengurus / Yayasan / Super Admin" />;
   const send = async () => {
     setSending(true);
@@ -48,6 +51,22 @@ export default function AdminNotificationsPage() {
             </dl>
           ) : <p className="text-sm text-muted-foreground">Memuat antrean…</p>}
           <p className="text-xs text-muted-foreground">Retry memerlukan scheduler aktif. Kegagalan permanen memerlukan pemeriksaan operator; token dan isi pesan tidak ditampilkan.</p>
+        </section>
+      )}
+      {user.role === "super_admin" && (
+        <section className="rounded-2xl border border-border bg-card p-6 space-y-3">
+          <div className="flex items-center justify-between gap-3"><h2 className="font-semibold">Antrean email</h2><button type="button" onClick={() => void emailQuery.refresh()} className="text-sm text-primary underline">Perbarui</button></div>
+          {emailError ? <p role="alert" className="text-sm text-destructive">Antrean email belum dapat dimuat. Periksa migrasi dan koneksi database.</p> : emailSummary ? (
+            <>
+              {!emailSummary.providerConfigured && <p role="alert" className="text-sm text-tertiary">Provider email belum dikonfigurasi (RESEND_API_KEY / EMAIL_FROM). Antrean dilewati (skip) sampai operator mengisi env — lihat runbook §3b. Ini bukan kegagalan kirim.</p>}
+              <dl className="grid grid-cols-3 gap-3 text-sm">
+                <div><dt className="text-muted-foreground">Menunggu</dt><dd className="font-semibold">{emailSummary.pending}</dd></div>
+                <div><dt className="text-muted-foreground">Diproses</dt><dd className="font-semibold">{emailSummary.processing}</dd></div>
+                <div><dt className="text-muted-foreground">Gagal permanen</dt><dd className="font-semibold">{emailSummary.failed}</dd></div>
+              </dl>
+            </>
+          ) : <p className="text-sm text-muted-foreground">Memuat antrean…</p>}
+          <p className="text-xs text-muted-foreground">Retry memerlukan scheduler aktif. Kegagalan permanen memerlukan pemeriksaan operator; alamat penerima dan isi email tidak ditampilkan.</p>
         </section>
       )}
     </div>

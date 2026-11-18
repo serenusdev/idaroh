@@ -1,15 +1,28 @@
 import { resolveIdentity } from './session';
 import { UserProfile, UserRole } from './types';
 
+export interface AuthGuardOptions {
+  // Permit actions that must run before AAL2: logout, MFA enroll/challenge, recovery.
+  allowAal1?: boolean;
+}
+
 /**
  * Ensures caller is logged in with an active, provisioned account.
  */
-export async function requireAuthUser(): Promise<UserProfile> {
+export async function requireAuthUser(options?: AuthGuardOptions): Promise<UserProfile> {
   const identity = await resolveIdentity();
 
   switch (identity.state) {
     case 'active':
       return identity.profile;
+    case 'mfa_required':
+    case 'mfa_error':
+      if (options?.allowAal1) return identity.profile;
+      throw new Error(
+        identity.state === 'mfa_error'
+          ? `UNAVAILABLE: Verifikasi MFA tidak dapat diselesaikan saat ini (kode ${identity.traceId}). Coba lagi.`
+          : 'MFA_REQUIRED: Selesaikan verifikasi dua langkah (MFA) untuk mengakses fitur ini.'
+      );
     case 'inactive':
       throw new Error(`FORBIDDEN: Status akun Anda adalah "${identity.status}". Silakan hubungi Administrator.`);
     case 'role_missing':
@@ -25,8 +38,8 @@ export async function requireAuthUser(): Promise<UserProfile> {
 /**
  * Ensures caller possesses one of the authorized roles.
  */
-export async function requireRole(allowedRoles: UserRole[]): Promise<UserProfile> {
-  const user = await requireAuthUser();
+export async function requireRole(allowedRoles: UserRole[], options?: AuthGuardOptions): Promise<UserProfile> {
+  const user = await requireAuthUser(options);
 
   const hasRole = allowedRoles.some(
     (role) => user.role === role || user.roles?.includes(role)

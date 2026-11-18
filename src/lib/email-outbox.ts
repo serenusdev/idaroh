@@ -1,8 +1,16 @@
+import { createHash } from "node:crypto";
 import { createAdminClient } from "@/lib/supabase/admin";
 
 const MAX_ATTEMPTS = 5;
 const BATCH_SIZE = 20;
 const STALE_PROCESSING_MS = 10 * 60 * 1000;
+
+export function emailIdempotencyKey(row: { id: string; reference_id?: string | null; reference_type?: string | null }): string {
+  const businessReference = row.reference_type && row.reference_id
+    ? `${row.reference_type}:${row.reference_id}`
+    : `row:${row.id}`;
+  return `idaroh-email/${createHash("sha256").update(businessReference).digest("hex")}`;
+}
 
 export interface EmailDrainResult {
   sent: number;
@@ -22,15 +30,16 @@ export async function drainEmailOutbox(): Promise<EmailDrainResult> {
   const now = new Date().toISOString();
 
   // Requeue rows stuck in processing (e.g. a previous run died mid-send).
-  await admin
+  const { error: staleRequeueError } = await admin
     .from("email_outbox")
     .update({ status: "pending", updated_at: now })
     .eq("status", "processing")
     .lt("updated_at", new Date(Date.now() - STALE_PROCESSING_MS).toISOString());
+  if (staleRequeueError) throw staleRequeueError;
 
   const { data: rows, error } = await admin
     .from("email_outbox")
-    .select("id, recipient, subject, body_text, attempt_count")
+    .select("id, recipient, subject, body_text, attempt_count, reference_id, reference_type")
     .eq("status", "pending")
     .lt("attempt_count", MAX_ATTEMPTS)
     .order("created_at", { ascending: true })
@@ -39,32 +48,46 @@ export async function drainEmailOutbox(): Promise<EmailDrainResult> {
 
   let sent = 0;
   let failed = 0;
-  for (const row of (rows || []) as Array<{ id: string; recipient: string; subject: string; body_text: string; attempt_count: number }>) {
-    const { data: claimed } = await admin
+  for (const row of (rows || []) as Array<{
+    id: string;
+    recipient: string;
+    subject: string;
+    body_text: string;
+    attempt_count: number;
+    reference_id?: string | null;
+    reference_type?: string | null;
+  }>) {
+    const { data: claimed, error: claimError } = await admin
       .from("email_outbox")
       .update({ status: "processing", updated_at: new Date().toISOString() })
       .eq("id", row.id)
       .eq("status", "pending")
       .select("id")
       .maybeSingle();
+    if (claimError) throw claimError;
     if (!claimed) continue;
 
     try {
       const response = await fetch("https://api.resend.com/emails", {
         method: "POST",
         signal: AbortSignal.timeout(10_000),
-        headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
+        headers: {
+          Authorization: `Bearer ${apiKey}`,
+          "Content-Type": "application/json",
+          "Idempotency-Key": emailIdempotencyKey(row),
+        },
         body: JSON.stringify({ from, to: [row.recipient], subject: row.subject, text: row.body_text }),
       });
       if (!response.ok) throw new Error(`Resend HTTP ${response.status}`);
-      await admin
+      const { error: sentError } = await admin
         .from("email_outbox")
         .update({ status: "sent", sent_at: new Date().toISOString(), updated_at: new Date().toISOString() })
         .eq("id", row.id);
+      if (sentError) throw new Error("email_outbox_mark_sent_failed");
       sent += 1;
     } catch (err) {
       const attempts = row.attempt_count + 1;
-      await admin
+      const { error: failureStateError } = await admin
         .from("email_outbox")
         .update({
           status: attempts >= MAX_ATTEMPTS ? "failed" : "pending",
@@ -73,6 +96,7 @@ export async function drainEmailOutbox(): Promise<EmailDrainResult> {
           updated_at: new Date().toISOString(),
         })
         .eq("id", row.id);
+      if (failureStateError) throw new Error("email_outbox_failure_state_update_failed");
       failed += 1;
     }
   }

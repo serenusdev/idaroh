@@ -3,7 +3,7 @@
 
 import { createAdminClient } from "@/lib/supabase/admin";
 import { createClient } from "@/lib/supabase/server";
-import { sendPushToUsers } from "@/lib/fcm";
+import { drainNotificationOutbox } from "@/lib/fcm";
 import { requireAuthUser, requireRole, getJakartaTime } from "@/lib/auth/guards";
 import { isDateOnly, isNonEmptyString, isPlainRecord, isTimeOnly } from "@/lib/input-validation";
 import { throwQueryError } from "@/lib/query-error";
@@ -25,8 +25,10 @@ export interface SubmitReportPayload {
 
 export interface ReviewReportPayload {
   reportId: string;
+  revisionNo: number;
   decision: ReviewDecision;
   notes: string;
+  idempotencyKey: string;
   reviewerName?: string;
 }
 
@@ -591,7 +593,13 @@ export async function submitReportAction(
  */
 export async function reviewReportAction(
   payload: ReviewReportPayload
-): Promise<{ success: boolean; message: string }> {
+): Promise<{ success: boolean; message: string; reviewId?: string; idempotent?: boolean; code?: string }> {
+  if (!Number.isInteger(payload.revisionNo) || payload.revisionNo < 1) {
+    return { success: false, message: "Nomor revisi laporan tidak valid." };
+  }
+  if (!payload.idempotencyKey?.trim() || payload.idempotencyKey.length > 200) {
+    return { success: false, message: "Kunci idempotensi wajib diisi." };
+  }
   if (payload.decision === "revision_required" && !payload.notes.trim()) {
     return {
       success: false,
@@ -600,6 +608,8 @@ export async function reviewReportAction(
   }
 
   const reviewer = await requireRole(["super_admin", "yayasan", "pengurus", "koordinator"]);
+  let reviewId: string | undefined;
+  let isIdempotentRetry = false;
 
   if (process.env.VITEST) {
     const revName = payload.reviewerName || reviewer.full_name;
@@ -613,80 +623,42 @@ export async function reviewReportAction(
   }
 
   try {
-    const admin = createAdminClient();
-    const { data: targetReport, error: fetchErr } = await admin
-      .from("daily_reports")
-      .select("id, user_id, report_date")
-      .eq("id", payload.reportId)
-      .maybeSingle();
-
-    if (fetchErr) throw fetchErr;
-    if (!targetReport) {
-      return { success: false, message: "Laporan santri tidak ditemukan." };
-    }
-
-    // Fetch the reporter's profile for email outbox (TRC-04)
-    const { data: reporterProfile } = await admin
-      .from("profiles")
-      .select("email, full_name")
-      .eq("id", targetReport.user_id)
-      .maybeSingle();
-
     const supabase = await createClient();
     const { data: reviewResult, error: reviewError } = await supabase.rpc("review_report", {
       p_report_id: payload.reportId,
+      p_revision_no: payload.revisionNo,
       p_decision: payload.decision,
       p_notes: payload.notes || "",
+      p_idempotency_key: payload.idempotencyKey,
     });
     if (reviewError) throw reviewError;
     if (!reviewResult?.success) {
-      return { success: false, message: reviewResult?.message || "Review laporan gagal disimpan." };
+      return {
+        success: false,
+        code: typeof reviewResult?.code === "string" ? reviewResult.code : undefined,
+        message: reviewResult?.message || "Review laporan gagal disimpan.",
+      };
     }
+    reviewId = typeof reviewResult.review_id === "string" ? reviewResult.review_id : undefined;
+    if (!reviewId) {
+      return { success: false, message: "Review tersimpan tanpa identitas keputusan yang valid." };
+    }
+    isIdempotentRetry = reviewResult.idempotent === true || reviewResult.created === false;
 
+    // The decision, email outbox event, durable push event, and audit record
+    // are already committed atomically by the RPC. This is only an immediate
+    // best-effort dispatch; on failure the cron worker retries the outbox.
     if (!process.env.VITEST) {
       try {
-        await sendPushToUsers([targetReport.user_id], {
-          type: payload.decision === "approved" ? "REPORT_APPROVED" : "REPORT_REVISION_REQUIRED",
-          title: "Status Laporan Diperbarui",
-          body: payload.decision === "approved" ? "Laporan harian Anda telah disetujui." : "Laporan harian Anda memerlukan revisi.",
-          url: "/laporan",
-          referenceId: payload.reportId,
+        await drainNotificationOutbox({
+          notificationType: payload.decision === "approved" ? "REPORT_APPROVED" : "REPORT_REVISION_REQUIRED",
+          referenceId: reviewId,
         });
       } catch (pushError) {
-        console.error("Report review saved but push delivery failed:", pushError);
+        console.error("Report review saved but push dispatch failed; outbox will retry:", pushError);
       }
     }
 
-    const { error: auditError } = await admin.from("audit_logs").insert({
-      event_name: `report.review_${payload.decision}`,
-      actor_name: reviewer.full_name,
-      target_id: payload.reportId,
-      target_label: `Laporan Santri (${payload.reportId})`,
-      action_detail: `Keputusan: ${payload.decision}. Catatan: ${payload.notes || "-"}`,
-    });
-    if (auditError) throw auditError;
-
-    // TRC-04: Insert email decision notification into outbox (fire-and-forget).
-    if (reporterProfile?.email) {
-      const reportDate = targetReport.report_date || payload.reportId;
-      const isApproved = payload.decision === "approved";
-      try {
-        await admin.from("email_outbox").insert({
-          recipient: reporterProfile.email,
-          subject: isApproved
-            ? `Laporan Harian Anda (${reportDate}) Telah Disetujui`
-            : `Laporan Harian Anda (${reportDate}) Memerlukan Revisi`,
-          body_text: isApproved
-            ? `Yth. ${reporterProfile.full_name},\n\nLaporan harian Anda untuk tanggal ${reportDate} telah disetujui oleh ${reviewer.full_name}.\n\nTerima kasih atas laporan yang Anda kirimkan.`
-            : `Yth. ${reporterProfile.full_name},\n\nLaporan harian Anda untuk tanggal ${reportDate} memerlukan revisi.\n\nCatatan dari ustadz/pembina: ${payload.notes || "-"}\n\nSilakan perbaiki dan kirim ulang laporan Anda.`,
-          reference_id: payload.reportId,
-          reference_type: isApproved ? "report_approved" : "report_revision_required",
-          status: "pending",
-        });
-      } catch (outboxError) {
-        console.error("Report reviewed but email outbox insert failed:", outboxError);
-      }
-    }
   } catch (err: any) {
     console.error("Failed to record review action:", err);
     return {
@@ -698,11 +670,15 @@ export async function reviewReportAction(
   if (payload.decision === "approved") {
     return {
       success: true,
+      reviewId,
+      idempotent: isIdempotentRetry,
       message: `Laporan santri berhasil disetujui oleh ${reviewer.full_name}. Status diperbarui menjadi Disetujui.`,
     };
   } else {
     return {
       success: true,
+      reviewId,
+      idempotent: isIdempotentRetry,
       message: `Permintaan revisi berhasil dikirim ke santri beserta catatan evaluasi.`,
     };
   }
