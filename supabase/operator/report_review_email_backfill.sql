@@ -50,7 +50,7 @@ SELECT
   r.decision,
   r.decided_at,
   dr.report_date,
-  NULLIF(btrim(author.email)) AS recipient,
+  NULLIF(btrim(author.email), '') AS recipient,
   NULLIF(btrim(author.full_name), '') AS recipient_name,
   NULLIF(btrim(reviewer.full_name), '') AS reviewer_name
 FROM public.report_reviews r

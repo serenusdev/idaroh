@@ -240,7 +240,7 @@ BEGIN
     );
   END IF;
 
-  SELECT NULLIF(btrim(p.email)), NULLIF(btrim(p.full_name), '')
+  SELECT NULLIF(btrim(p.email), ''), NULLIF(btrim(p.full_name), '')
     INTO v_recipient, v_recipient_name
   FROM public.profiles p
   WHERE p.id = v_report.user_id;

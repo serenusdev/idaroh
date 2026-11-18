@@ -68,6 +68,12 @@ describe("operator backfill SQL (Task C)", () => {
     expect(backfill).toContain("'7 days'");
   });
 
+  it("resolves backfill recipients with a two-argument NULLIF", () => {
+    expect(backfill).toContain("NULLIF(btrim(author.email), '')");
+    // Heuristic arity guard, not a full SQL parser — see sql-nullif-arity.test.ts.
+    expect(backfill).not.toMatch(/NULLIF\((?:[^(),]|\([^()]*\))*\)/i);
+  });
+
   it("fails closed on unresolvable recipients and keeps preview output PII-free", () => {
     expect(backfill).toContain("recipient_resolvable");
     const preview = backfill.slice(

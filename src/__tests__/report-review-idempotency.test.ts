@@ -72,6 +72,14 @@ describe("report review command idempotency contract", () => {
     expect(actions).toContain("referenceId: reviewId");
   });
 
+  it("resolves the recipient email with a two-argument NULLIF", () => {
+    expect(migration).toContain("NULLIF(btrim(p.email), '')");
+    // PostgreSQL NULLIF requires exactly two arguments; a single-argument
+    // call fails CREATE FUNCTION parsing (SQLSTATE 42601). Heuristic guard,
+    // not a full SQL parser — see sql-nullif-arity.test.ts for limitations.
+    expect(migration).not.toMatch(/NULLIF\((?:[^(),]|\([^()]*\))*\)/i);
+  });
+
   it("ships a reproducible rollback artifact with the historical RPC signatures", () => {
     const rollback = readFileSync(
       resolve(process.cwd(), "supabase/rollback/20261118000001_report_review_command_idempotency_down.sql"),
