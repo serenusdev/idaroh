@@ -80,6 +80,57 @@ describe("report review command idempotency contract", () => {
     expect(migration).not.toMatch(/NULLIF\((?:[^(),]|\([^()]*\))*\)/i);
   });
 
+  it("keeps pgTAP ledger inspection out of the authenticated role", () => {
+    const fixture = readFileSync(
+      resolve(process.cwd(), "supabase/tests/report_review_idempotency.sql"),
+      "utf8",
+    );
+    expect(fixture).toContain("SELECT plan(28);");
+    expect((fixture.match(/^SELECT (?:is|ok|throws_ok)\(/gm) ?? []).length).toBe(28);
+
+    const walk = (text: string, onLine: (line: string, role: string) => void) => {
+      let role = "default";
+      for (const line of text.split("\n")) {
+        const set = line.match(/^SET LOCAL ROLE (\w+);/);
+        if (set) role = set[1];
+        else if (/^RESET ROLE;/.test(line)) role = "default";
+        else onLine(line, role);
+      }
+    };
+
+    // throws_ok bodies intentionally attempt forbidden reads; exclude them.
+    const offenders: string[] = [];
+    walk(fixture.replace(/SELECT throws_ok\([\s\S]*?\n\);/g, ""), (line, role) => {
+      if (role === "authenticated" && line.includes("public.report_review_idempotency")) {
+        offenders.push(line.trim());
+      }
+    });
+    expect(offenders).toEqual([]);
+
+    // The denial assertion itself must stay under authenticated.
+    let ledgerDenialUnderTest = 0;
+    let inThrows = false;
+    let throwsRole = "";
+    let block = "";
+    walk(fixture, (line, role) => {
+      if (/^SELECT throws_ok\(/.test(line)) {
+        inThrows = true;
+        throwsRole = role;
+        block = "";
+      }
+      if (inThrows) {
+        block += line;
+        if (/^\);/.test(line)) {
+          if (throwsRole === "authenticated" && block.includes("public.report_review_idempotency")) {
+            ledgerDenialUnderTest++;
+          }
+          inThrows = false;
+        }
+      }
+    });
+    expect(ledgerDenialUnderTest).toBe(1);
+  });
+
   it("ships a reproducible rollback artifact with the historical RPC signatures", () => {
     const rollback = readFileSync(
       resolve(process.cwd(), "supabase/rollback/20261118000001_report_review_command_idempotency_down.sql"),

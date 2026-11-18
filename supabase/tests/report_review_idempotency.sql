@@ -151,6 +151,11 @@ SELECT is(
   1,
   'audit event semantics match the decision type'
 );
+
+-- Ledger inspection runs as the privileged test role: the ledger is
+-- service_role-only by design (authenticated denial is asserted below).
+RESET ROLE;
+
 SELECT is(
   (SELECT count(*)::int FROM public.notifications
    WHERE user_id = '00000000-0000-0000-0000-000000000501'
@@ -182,8 +187,6 @@ SELECT is(
   2,
   'the push outbox enqueue trigger commits with each decision'
 );
-
-RESET ROLE;
 
 SELECT is(
   (SELECT count(*)::int FROM public.report_reviews
