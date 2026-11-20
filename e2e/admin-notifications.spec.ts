@@ -18,6 +18,11 @@ declare global {
 const root = path.resolve(__dirname, "..");
 let bundle: string;
 const forbidden = new WeakMap<Page, string[]>();
+const pageErrors = new WeakMap<Page, string[]>();
+// Inert same-origin shell: loading the live Next /login page lets its client
+// hydration run after the body wipe below, regenerate the tree, and unmount the
+// injected fixture. Serving a script-free document removes that race entirely.
+const MOUNT_SHELL = "<!doctype html><html><head><title>notifications fixture</title></head><body></body></html>";
 const fixture = String.raw`
 import React from "react";
 import { createRoot } from "react-dom/client";
@@ -83,16 +88,25 @@ test.beforeAll(async () => {
 
 test.afterEach(async ({ page }) => {
   expect(forbidden.get(page) || [], "No provider or server-action requests").toEqual([]);
+  expect(pageErrors.get(page) || [], "No hydration or runtime errors").toEqual([]);
+  await expect(page.locator("nextjs-portal"), "No Next dev overlay").toHaveCount(0);
+  await expect(page.locator("#notifications-root"), "Fixture root survives the test").toBeAttached();
 });
 
 async function mount(page: Page, config: Config) {
   const origin = new URL(test.info().project.use.baseURL!).origin;
   const blocked: string[] = [];
+  const errors: string[] = [];
   forbidden.set(page, blocked);
+  pageErrors.set(page, errors);
+  page.on("pageerror", (error) => errors.push(String(error)));
   await page.route("**/*", async (route) => {
     const request = route.request();
     const url = new URL(request.url());
     if (url.origin === origin && url.pathname === "/__nextjs_original-stack-frames") return route.abort();
+    if (url.origin === origin && url.pathname === "/login" && request.resourceType() === "document") {
+      return route.fulfill({ status: 200, contentType: "text/html; charset=utf-8", body: MOUNT_SHELL });
+    }
     if (url.origin !== origin || !["GET", "HEAD"].includes(request.method())) {
       blocked.push(`${request.method()} ${request.url()}`);
       return route.abort();
