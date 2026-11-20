@@ -55,12 +55,12 @@ VALUES ('$REPORT', '$OWNER', DATE '2026-11-18', 'submitted', 'not_reviewed', 1);
 SQL
 
 call_review() {
-  local key="$1" outfile="$2"
+  local key="$1" outfile="$2" decision="${3:-approved}" notes="${4:-}"
   "${PSQL[@]}" -tA > "$outfile" <<SQL
 SET ROLE authenticated;
 SELECT set_config('request.jwt.claims',
   '{"role":"authenticated","sub":"$REVIEWER"}', false);
-SELECT public.review_report('$REPORT', 1, 'approved', '', '$key');
+SELECT public.review_report('$REPORT', 1, '$decision', '$notes', '$key');
 SQL
 }
 
@@ -105,11 +105,25 @@ echo "Phase 1 OK: one decision, one email/push/audit event; both callers got $RE
 echo "== Phase 2: distinct keys, same payload, in parallel =="
 # Reopen the report (postgres bypasses the authenticated-only guard trigger).
 "${PSQL[@]}" -c "UPDATE public.daily_reports SET review_status = 'not_reviewed', reviewer_id = NULL, reviewed_at = NULL WHERE id = '$REPORT';"
-call_review "drill-concurrent-distinct-1" "$WORK/c.json" &
+# revision_required is non-terminal: the RPC only refuses a report whose
+# review_status is already 'approved', so two distinct-key revision_required
+# commands on the same report/revision each persist an independent decision.
+# revision_required mandates non-empty notes, so both callers send the same
+# payload (decision + notes) and differ only in the idempotency key.
+PHASE2_NOTES='Mohon tambahkan rincian progres.'
+call_review "drill-concurrent-distinct-1" "$WORK/c.json" revision_required "$PHASE2_NOTES" &
 PID_C=$!
-call_review "drill-concurrent-distinct-2" "$WORK/d.json" &
+call_review "drill-concurrent-distinct-2" "$WORK/d.json" revision_required "$PHASE2_NOTES" &
 PID_D=$!
 wait "$PID_C" "$PID_D"
+
+REVIEW_C="$(grep -o '"review_id": "[^"]*"' "$WORK/c.json" | head -1 | cut -d'"' -f4)"
+REVIEW_D="$(grep -o '"review_id": "[^"]*"' "$WORK/d.json" | head -1 | cut -d'"' -f4)"
+CREATED_PHASE2=$(( $(grep -c '"created": true' "$WORK/c.json" || true) + $(grep -c '"created": true' "$WORK/d.json" || true) ))
+test -n "$REVIEW_C" && test -n "$REVIEW_D"
+test "$REVIEW_C" != "$REVIEW_D"
+test "$REVIEW_C" != "$REVIEW_A" && test "$REVIEW_D" != "$REVIEW_A"
+test "$CREATED_PHASE2" -eq 2
 
 "${PSQL[@]}" <<SQL
 DO \$\$
@@ -117,20 +131,60 @@ BEGIN
   IF (SELECT count(*) FROM public.report_reviews WHERE report_id = '$REPORT') <> 3 THEN
     RAISE EXCEPTION 'expected 3 independent decisions, got %', (SELECT count(*) FROM public.report_reviews WHERE report_id = '$REPORT');
   END IF;
+  IF (SELECT count(DISTINCT id) FROM public.report_reviews WHERE report_id = '$REPORT') <> 3 THEN
+    RAISE EXCEPTION 'expected 3 distinct review IDs';
+  END IF;
+  IF (SELECT count(*) FROM public.report_reviews
+      WHERE report_id = '$REPORT' AND id IN ('$REVIEW_A', '$REVIEW_C', '$REVIEW_D')) <> 3 THEN
+    RAISE EXCEPTION 'caller-returned review IDs do not match the persisted decisions';
+  END IF;
   IF (SELECT count(*) FROM public.audit_logs
       WHERE event_name = 'report.review_approved' AND target_id = '$REPORT'
-        AND created_at >= '$DRILL_START') <> 3 THEN
-    RAISE EXCEPTION 'expected 3 audit records';
+        AND created_at >= '$DRILL_START') <> 1 THEN
+    RAISE EXCEPTION 'expected exactly 1 approved audit record';
   END IF;
-  IF (SELECT count(*) FROM public.email_outbox eo
-      WHERE eo.reference_type = 'report_review_email'
-        AND eo.reference_id IN (SELECT id::text FROM public.report_reviews WHERE report_id = '$REPORT')) <> 3 THEN
-    RAISE EXCEPTION 'expected 3 email outbox events';
+  IF (SELECT count(*) FROM public.audit_logs
+      WHERE event_name = 'report.review_revision_required' AND target_id = '$REPORT'
+        AND created_at >= '$DRILL_START') <> 2 THEN
+    RAISE EXCEPTION 'expected exactly 2 revision_required audit records';
+  END IF;
+  IF (SELECT count(*) FROM public.email_outbox
+      WHERE reference_type = 'report_review_email'
+        AND reference_id IN ('$REVIEW_A', '$REVIEW_C', '$REVIEW_D')) <> 3 THEN
+    RAISE EXCEPTION 'expected 3 email outbox events, one per decision';
+  END IF;
+  IF (SELECT count(DISTINCT reference_id) FROM public.email_outbox
+      WHERE reference_type = 'report_review_email'
+        AND reference_id IN ('$REVIEW_A', '$REVIEW_C', '$REVIEW_D')) <> 3 THEN
+    RAISE EXCEPTION 'email outbox events must be keyed by distinct review IDs';
+  END IF;
+  IF (SELECT count(*) FROM public.notifications
+      WHERE user_id = '$OWNER'
+        AND reference_id IN ('$REVIEW_A', '$REVIEW_C', '$REVIEW_D')) <> 3 THEN
+    RAISE EXCEPTION 'expected 3 durable notification events, one per decision';
+  END IF;
+  IF (SELECT count(*) FROM public.notifications
+      WHERE user_id = '$OWNER' AND reference_id = '$REVIEW_A'
+        AND notification_type = 'REPORT_APPROVED') <> 1
+     OR (SELECT count(*) FROM public.notifications
+      WHERE user_id = '$OWNER' AND reference_id IN ('$REVIEW_C', '$REVIEW_D')
+        AND notification_type = 'REPORT_REVISION_REQUIRED') <> 2 THEN
+    RAISE EXCEPTION 'notification types must follow each decision';
+  END IF;
+  IF (SELECT count(*) FROM public.notification_push_outbox o
+      JOIN public.notifications n ON n.id = o.notification_id
+      WHERE n.user_id = '$OWNER'
+        AND n.reference_id IN ('$REVIEW_A', '$REVIEW_C', '$REVIEW_D')) <> 3 THEN
+    RAISE EXCEPTION 'expected 3 push outbox rows, one per decision';
+  END IF;
+  IF (SELECT count(*) FROM public.report_review_idempotency
+      WHERE report_id = '$REPORT' AND status = 'completed' AND review_id IS NOT NULL) <> 3 THEN
+    RAISE EXCEPTION 'expected 3 completed idempotency records';
   END IF;
 END
 \$\$;
 SQL
-echo "Phase 2 OK: distinct keys create independent decisions with their own events"
+echo "Phase 2 OK: distinct keys create independent decisions ($REVIEW_C, $REVIEW_D) with their own audit/email/push events"
 
 echo "== Cleanup fixtures =="
 # Audit rows are append-only and hash-chained: they are intentionally left in
