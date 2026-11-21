@@ -15,21 +15,27 @@ DROP POLICY IF EXISTS "Reviewer assignments are readable by authenticated users"
 DROP POLICY IF EXISTS "Policy settings are readable by authenticated users" ON public.policy_settings;
 
 -- 3. Recreate policies constrained by active member status
+--    (drop-if-exists keeps replay safe on databases where these were already
+--    applied manually out-of-band)
+DROP POLICY IF EXISTS "Teams are readable by active members" ON public.teams;
 CREATE POLICY "Teams are readable by active members"
   ON public.teams FOR SELECT
   TO authenticated
   USING (app.is_active_member());
 
+DROP POLICY IF EXISTS "Team members are viewable by active members" ON public.team_members;
 CREATE POLICY "Team members are viewable by active members"
   ON public.team_members FOR SELECT
   TO authenticated
   USING (app.is_active_member());
 
+DROP POLICY IF EXISTS "Reviewer assignments are readable by active members" ON public.reviewer_assignments;
 CREATE POLICY "Reviewer assignments are readable by active members"
   ON public.reviewer_assignments FOR SELECT
   TO authenticated
   USING (app.is_active_member());
 
+DROP POLICY IF EXISTS "Policy settings are readable by active members" ON public.policy_settings;
 CREATE POLICY "Policy settings are readable by active members"
   ON public.policy_settings FOR SELECT
   TO authenticated

@@ -72,6 +72,26 @@ $$;
 REVOKE ALL ON FUNCTION app.review_attendance_correction(uuid, text, text, text) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION app.review_attendance_correction(uuid, text, text, text) TO authenticated;
 
+-- The public PostgREST wrapper must follow the app signature: drop the legacy
+-- 3-argument overload (created by 20261105000004) and expose the 4-argument one.
+DROP FUNCTION IF EXISTS public.review_attendance_correction(uuid, text, text);
+
+CREATE OR REPLACE FUNCTION public.review_attendance_correction(
+  p_correction_id uuid,
+  p_decision      text,
+  p_note          text DEFAULT NULL,
+  p_effective_classification text DEFAULT NULL
+)
+RETURNS jsonb
+LANGUAGE sql
+SECURITY INVOKER
+SET search_path = public, app, pg_temp
+AS $$
+  SELECT app.review_attendance_correction(p_correction_id, p_decision, p_note, p_effective_classification);
+$$;
+REVOKE ALL ON FUNCTION public.review_attendance_correction(uuid, text, text, text) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.review_attendance_correction(uuid, text, text, text) TO authenticated;
+
 -- Refresh layer efektif: prefer klasifikasi final pereview atas requested.
 CREATE OR REPLACE FUNCTION app.refresh_attendance_effective(p_date date)
 RETURNS jsonb

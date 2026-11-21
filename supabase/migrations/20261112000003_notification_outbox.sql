@@ -1,7 +1,9 @@
 -- Atomic inbox -> push enqueue. Only trusted server dispatchers can inspect or mutate delivery state.
+-- Replay-safe (IF NOT EXISTS / OR REPLACE / DROP ... IF EXISTS): production may
+-- already carry these objects from out-of-band application.
 BEGIN;
 
-CREATE TABLE public.notification_push_outbox (
+CREATE TABLE IF NOT EXISTS public.notification_push_outbox (
   notification_id uuid PRIMARY KEY REFERENCES public.notifications(id) ON DELETE CASCADE,
   status text NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'processing', 'delivered', 'dead_letter')),
   attempt_count integer NOT NULL DEFAULT 0 CHECK (attempt_count BETWEEN 0 AND 8),
@@ -18,15 +20,15 @@ CREATE TABLE public.notification_push_outbox (
   delivered_at timestamptz,
   CHECK ((status = 'processing') = (lease_token IS NOT NULL AND lease_until IS NOT NULL))
 );
-CREATE INDEX idx_notification_push_outbox_due
+CREATE INDEX IF NOT EXISTS idx_notification_push_outbox_due
   ON public.notification_push_outbox(next_attempt_at) WHERE status = 'pending';
-CREATE INDEX idx_notification_push_outbox_leases
+CREATE INDEX IF NOT EXISTS idx_notification_push_outbox_leases
   ON public.notification_push_outbox(lease_until) WHERE status = 'processing';
 ALTER TABLE public.notification_push_outbox ENABLE ROW LEVEL SECURITY;
 REVOKE ALL ON public.notification_push_outbox FROM PUBLIC, anon, authenticated;
 GRANT SELECT, INSERT, UPDATE, DELETE ON public.notification_push_outbox TO service_role;
 
-CREATE FUNCTION public.enqueue_notification_push()
+CREATE OR REPLACE FUNCTION public.enqueue_notification_push()
 RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, public
 AS $$
 BEGIN
@@ -36,12 +38,13 @@ BEGIN
 END;
 $$;
 REVOKE ALL ON FUNCTION public.enqueue_notification_push() FROM PUBLIC, anon, authenticated;
+DROP TRIGGER IF EXISTS trg_enqueue_notification_push ON public.notifications;
 CREATE TRIGGER trg_enqueue_notification_push AFTER INSERT ON public.notifications
   FOR EACH ROW EXECUTE FUNCTION public.enqueue_notification_push();
 
 -- Publication and all recipient inbox/outbox rows commit or roll back together.
 -- Reuse the existing active-profile audience matcher (including team id/name/slug).
-CREATE FUNCTION public.enqueue_published_announcement()
+CREATE OR REPLACE FUNCTION public.enqueue_published_announcement()
 RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, public
 AS $$
 BEGIN
@@ -60,12 +63,13 @@ BEGIN
 END;
 $$;
 REVOKE ALL ON FUNCTION public.enqueue_published_announcement() FROM PUBLIC, anon, authenticated;
+DROP TRIGGER IF EXISTS trg_enqueue_published_announcement ON public.announcements;
 CREATE TRIGGER trg_enqueue_published_announcement AFTER INSERT OR UPDATE ON public.announcements
   FOR EACH ROW EXECUTE FUNCTION public.enqueue_published_announcement();
 
 -- Claim one at a time so a batch does not sit waiting while its leases expire.
 -- An expired eighth attempt is terminal; earlier expired leases are reclaimable.
-CREATE FUNCTION public.claim_notification_push(
+CREATE OR REPLACE FUNCTION public.claim_notification_push(
   p_notification_ids uuid[] DEFAULT NULL,
   p_notification_type text DEFAULT NULL,
   p_reference_id text DEFAULT NULL
@@ -114,7 +118,7 @@ REVOKE ALL ON FUNCTION public.claim_notification_push(uuid[], text, text) FROM P
 GRANT EXECUTE ON FUNCTION public.claim_notification_push(uuid[], text, text) TO service_role;
 
 -- Fenced renewal/checkpoint before each request and immediately after each success.
-CREATE FUNCTION public.checkpoint_notification_push(
+CREATE OR REPLACE FUNCTION public.checkpoint_notification_push(
   p_notification_id uuid, p_lease_token uuid, p_delivered_token_hash text DEFAULT NULL
 )
 RETURNS boolean LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, public
@@ -136,7 +140,7 @@ $$;
 REVOKE ALL ON FUNCTION public.checkpoint_notification_push(uuid, uuid, text) FROM PUBLIC, anon, authenticated;
 GRANT EXECUTE ON FUNCTION public.checkpoint_notification_push(uuid, uuid, text) TO service_role;
 
-CREATE FUNCTION public.finish_notification_push(
+CREATE OR REPLACE FUNCTION public.finish_notification_push(
   p_notification_id uuid, p_lease_token uuid, p_retry boolean, p_error_code text DEFAULT NULL
 )
 RETURNS boolean LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, public
