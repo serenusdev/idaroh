@@ -31,7 +31,7 @@ Jalankan satu per satu; simpan hasilnya sebagai bukti.
 
 ```sql
 -- 2a. Titik berhenti migrasi tercatat (diharapkan s/d 20261105000001)
-SELECT version FROM public.schema_migrations ORDER BY version DESC LIMIT 5;
+SELECT version FROM supabase_migrations.schema_migrations ORDER BY version DESC LIMIT 5;
 
 -- 2b. Overload RPC yang akan direkonsiliasi (diharapkan: approve 4-arg DAN 5-arg;
 --     review_attendance_correction 3-arg; review_report 3-arg)
@@ -69,7 +69,7 @@ supabase test db        # pgTAP: supabase/tests/*.sql — harus sukses
 
 # simulasi replay di atas skema produksi yang sudah drift:
 # 1) buat DB sekali-pakai lain, restore backup produksi terbaru (lihat docs/backup-restore.md)
-# 2) hapus baris 20261105000002.. dari schema_migrations DB restore itu bila perlu,
+# 2) hapus baris 20261105000002.. dari supabase_migrations.schema_migrations DB restore itu bila perlu,
 #    lalu jalankan:
 supabase db push --local   # terhadap DB restore/staging, BUKAN --linked
 ```
@@ -93,7 +93,7 @@ Tanpa replay ini, verifikasi yang tersedia adalah guard statis di `src/__tests__
      to_regprocedure('public.review_attendance_correction(uuid, text, text)')           IS NULL     AS correction3_gone,
      to_regprocedure('public.review_report(uuid, integer, text, text, text)')           IS NOT NULL AS review5,
      to_regprocedure('public.review_report(uuid, text, text)')                          IS NULL     AS review3_gone,
-     (SELECT count(*) FROM public.schema_migrations) AS applied_count;
+     (SELECT count(*) FROM supabase_migrations.schema_migrations) AS applied_count;
    ```
    Semua boolean harus `true`. `NOTIFY pgrst` sudah disertakan di migrasi; bila PostgREST belum segar, reload API dari Dashboard.
 4. Merge cabang ke `main` → Vercel deploy otomatis. Pastikan commit deploy = merge commit cabang ini.
