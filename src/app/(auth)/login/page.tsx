@@ -16,6 +16,7 @@ export default function LoginPage() {
   const [errorMessage, setErrorMessage] = React.useState("");
   const [isHydrated, setIsHydrated] = React.useState(false);
   const [turnstileToken, setTurnstileToken] = React.useState("");
+  const [turnstileResetNonce, setTurnstileResetNonce] = React.useState(0);
 
   React.useEffect(() => {
     setIsHydrated(true);
@@ -41,8 +42,10 @@ export default function LoginPage() {
 
       if (!response.ok || !result.success) {
         setErrorMessage(result.message || "Terjadi kesalahan saat masuk ke sistem.");
-        // Reset Turnstile token so user must complete challenge again
+        // Reset Turnstile token and re-render the widget so the user must
+        // complete a fresh challenge (tokens are single-use server-side).
         setTurnstileToken("");
+        setTurnstileResetNonce((n) => n + 1);
         setIsLoading(false);
         return;
       }
@@ -138,6 +141,9 @@ export default function LoginPage() {
                 siteKey={siteKey}
                 onToken={setTurnstileToken}
                 onExpire={() => setTurnstileToken("")}
+                onError={() => setTurnstileToken("")}
+                onScriptError={() => setTurnstileToken("")}
+                resetNonce={turnstileResetNonce}
               />
             </div>
           )}

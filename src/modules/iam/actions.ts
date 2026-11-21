@@ -18,6 +18,21 @@ import { withMfaAuditRetry } from "@/lib/auth/mfa-audit";
 import { MEMBER_CATEGORIES, REGISTRATION_PRIVACY_VERSION, type ClaimedMemberType } from "./registration";
 
 const VALID_ROLES = ["super_admin", "yayasan", "pengurus", "koordinator", "santri"] as const;
+
+type RegistrationDiagnosticStage = "honeypot" | "turnstile" | "auth" | "database";
+
+// Strips anything email-shaped so diagnostics never carry PII (REG/SEC review).
+function sanitizeRegistrationDiagnostic(detail: string): string {
+  return detail
+    .replace(/[\w.+-]+@[\w-]+\.[\w.-]+/g, "[redacted-email]")
+    .slice(0, 200);
+}
+
+function logRegistrationDiagnostic(stage: RegistrationDiagnosticStage, detail = ""): void {
+  console.warn(
+    `[iam-registration] stage=${stage}${detail ? ` reason=${sanitizeRegistrationDiagnostic(detail)}` : ""}`,
+  );
+}
 type ValidRole = (typeof VALID_ROLES)[number];
 
 function normalizeRole(value: string | null | undefined): ValidRole | null {
@@ -156,6 +171,7 @@ export async function submitAccountApplicationAction(payload: {
   website?: string;
 }): Promise<{ success: boolean; message: string }> {
   if (payload.website) {
+    logRegistrationDiagnostic("honeypot", "hidden website field populated (autofill or bot)");
     return { success: false, message: "Permohonan tidak dapat diproses." };
   }
   if (!payload.fullName.trim() || !payload.email.trim() || !payload.phoneNumber.trim()) {
@@ -184,9 +200,11 @@ export async function submitAccountApplicationAction(payload: {
   if (!process.env.VITEST && process.env.NODE_ENV !== "development") {
     const turnstileSecret = process.env.TURNSTILE_SECRET_KEY;
     if (!turnstileSecret) {
+      logRegistrationDiagnostic("turnstile", "secret-not-configured");
       return { success: false, message: "Verifikasi keamanan belum dikonfigurasi. Hubungi administrator sistem." };
     }
     if (!payload.turnstileToken) {
+      logRegistrationDiagnostic("turnstile", "token-missing");
       return { success: false, message: "Verifikasi keamanan wajib diselesaikan." };
     }
     const verification = await fetch("https://challenges.cloudflare.com/turnstile/v0/siteverify", {
@@ -194,8 +212,10 @@ export async function submitAccountApplicationAction(payload: {
       headers: { "content-type": "application/x-www-form-urlencoded" },
       body: new URLSearchParams({ secret: turnstileSecret, response: payload.turnstileToken }),
     });
-    const result = (await verification.json()) as { success?: boolean };
+    const result = (await verification.json()) as { success?: boolean; "error-codes"?: unknown };
     if (!verification.ok || !result.success) {
+      const codes = Array.isArray(result["error-codes"]) ? result["error-codes"].join(",") : "unknown";
+      logRegistrationDiagnostic("turnstile", `siteverify-rejected http=${verification.status} codes=${codes}`);
       return { success: false, message: "Verifikasi keamanan gagal. Silakan coba lagi." };
     }
   }
@@ -302,6 +322,10 @@ export async function submitAccountApplicationAction(payload: {
     });
 
     if (authError) {
+      logRegistrationDiagnostic(
+        "auth",
+        `signup-failed code=${authError.error_code ?? "none"} status=${authError.status ?? "none"}`,
+      );
       return {
         success: false,
         message: "Gagal memproses pengajuan akun. Silakan coba lagi atau hubungi Admin.",
@@ -310,6 +334,7 @@ export async function submitAccountApplicationAction(payload: {
 
     // F-25: Prevent deleting an existing user in catch block if identities is empty (Supabase obfuscation)
     if (authData.user && (!authData.user.identities || authData.user.identities.length === 0)) {
+      logRegistrationDiagnostic("auth", "signup-identities-empty (email likely already registered)");
       return {
         success: false,
         message: "Gagal membuat akun. Silakan gunakan email lain atau hubungi Admin.",
@@ -342,7 +367,10 @@ export async function submitAccountApplicationAction(payload: {
       message: "Pengajuan akun berhasil dikirim! Menunggu peninjauan dan persetujuan Super Admin.",
     };
   } catch (err: any) {
-    console.error("Gagal menyimpan permohonan akun:", err);
+    logRegistrationDiagnostic(
+      "database",
+      `persist-failed code=${err?.code ?? err?.error ?? "unknown"} constraint=${err?.constraint ?? "none"}`,
+    );
     // Roll back the orphaned auth user so the email is not permanently blocked
     if (authUserId) {
       const supabase = createAdminClient();
