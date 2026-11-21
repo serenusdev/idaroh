@@ -1,7 +1,7 @@
 # Runbook Remediasi Auth & Rekonsiliasi Skema — 2026-11-21
 
 Cabang: `fix/idaroh-auth-and-schema-reconciliation` (basis `4e66ce2` = produksi Vercel saat audit).
-Status: **siap direview operator. Jangan merge/push ke `main` dan jangan `supabase db push` sebelum checklist §2–§3 selesai dan hasil §4 dicatat.**
+Status: **SELESAI DIEKSEKUSI 2026-11-21** — 22 migrasi diterapkan ke produksi (assert §4.3 semua `true`, applied_count=55), `main` = merge `85c6185`, Vercel live dengan CSP Turnstile. Sisa: smoke test manual §4.5 (login TOTP + registrasi) oleh operator.
 
 Runbook ini melengkapi `docs/operator-release-gates.md` (gate umum) dan `docs/disposable-db-verification.md` (prosedur DB sekali-pakai).
 
@@ -81,8 +81,10 @@ Tanpa replay ini, verifikasi yang tersedia adalah guard statis di `src/__tests__
 1. **Merge + deploy kode dulu sebelum push migrasi?** Tidak. Urutan aman: **migrasi → kode**, karena kode baru memanggil RPC 4/5-argumen yang baru dijamin ada setelah `20261121000001`; migrasi sendiri kompatibel-mundur (wrapper lama tidak dipakai aplikasi lama setelah deploy, dan `review_report` 3-argumen sudah dihapus oleh `20261118000001` di produksi). Aplikasi lama yang masih mengirim `review_report` 3-argumen hanya ada bila produksi > `4e66ce2` — produksi saat ini = `4e66ce2` yang sudah memakai 5-argumen.
 2. Push migrasi (menambah `20261121000001` = 22 file):
    ```bash
-   supabase db push        # terhadap project ref yang di-link;Review daftar "Applying migration" dulu
+   supabase db push --remote --dry-run   # WAJIB: cek daftar = tepat 22 file pending + "Target" = project produksi
+   supabase db push --remote --yes
    ```
+   Catatan CLI v3: TANPA `--remote`, `supabase db push` menyerang stack lokal secara default (gagal `ECONNREFUSED 127.0.0.1:54322` bila Docker mati) — jangan pernah menjalankan versi tanpa flag terhadap project yang ter-link ke produksi.
    Semua file mencatat versi ke `schema_migrations`; tidak ada CREATE mentah yang bisa gagal karena drift.
 3. **Verifikasi pasca-migrasi** (ulangi query §2b + assert):
    ```sql
@@ -110,7 +112,7 @@ Tanpa replay ini, verifikasi yang tersedia adalah guard statis di `src/__tests__
 
 - **Aplikasi**: redeploy commit produksi sebelumnya (`4e66ce2`) dari Vercel.
 - **Database**: migrasi bersifat forward-fix; jangan menurunkan skema secara otomatis. Rollback manual hanya untuk `20261118000001` via `supabase/rollback/20261118000001_report_review_command_idempotency_down.sql` — hanya jika aplikasi juga diturunkan ke versi pra-idempotensi (urutan manual ada di header file itu). `20261121000001` tidak perlu di-rollback (hanya DROP + assert; menjalankan ulang kode lama di atas skema baru tidak dijamin — kembali ke §5 aplikasi).
-- Jika push migrasi gagal di tengah: tiap file bertransaksi sendiri (`BEGIN/COMMIT`); catat file yang gagal, perbaiki penyebab (biasanya §2c/§2d belum dibereskan), lalu `supabase db push` lagi — file yang sudah sukses tidak diulang.
+- Jika push migrasi gagal di tengah: tiap file bertransaksi sendiri (`BEGIN/COMMIT`); catat file yang gagal, perbaiki penyebab (biasanya §2c/§2d belum dibereskan), lalu `supabase db push --remote` lagi — file yang sudah sukses tidak diulang.
 
 ## 6. Bukti yang dicatat
 
