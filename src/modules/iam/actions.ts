@@ -324,7 +324,7 @@ export async function submitAccountApplicationAction(payload: {
     if (authError) {
       logRegistrationDiagnostic(
         "auth",
-        `signup-failed code=${authError.error_code ?? "none"} status=${authError.status ?? "none"}`,
+        `signup-failed code=${(authError as { error_code?: string }).error_code ?? "none"} status=${authError.status ?? "none"}`,
       );
       return {
         success: false,
