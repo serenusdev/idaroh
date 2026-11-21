@@ -15,6 +15,7 @@ import { enforceRateLimit } from "@/lib/rate-limit";
 import { throwQueryError } from "@/lib/query-error";
 import { friendlyActionError } from "@/lib/action-error";
 import { withMfaAuditRetry } from "@/lib/auth/mfa-audit";
+import { resolveEmailRedirectOrigin } from "@/lib/auth/email-redirect-origin";
 import { MEMBER_CATEGORIES, REGISTRATION_PRIVACY_VERSION, type ClaimedMemberType } from "./registration";
 
 const VALID_ROLES = ["super_admin", "yayasan", "pengurus", "koordinator", "santri"] as const;
@@ -317,7 +318,7 @@ export async function submitAccountApplicationAction(payload: {
       password: payload.password,
       options: {
         data: { full_name: payload.fullName.trim() },
-        emailRedirectTo: `${process.env.NEXT_PUBLIC_APP_URL || "http://localhost:3000"}/login`,
+        emailRedirectTo: `${resolveEmailRedirectOrigin()}/login`,
       },
     });
 

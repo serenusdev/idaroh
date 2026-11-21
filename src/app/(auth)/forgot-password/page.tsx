@@ -4,6 +4,7 @@ import * as React from "react";
 import Link from "next/link";
 import Image from "next/image";
 import { createClient } from "@/lib/supabase/client";
+import { resolveEmailRedirectOrigin } from "@/lib/auth/email-redirect-origin";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 
@@ -18,7 +19,7 @@ export default function ForgotPasswordPage() {
     setLoading(true);
     setMessage("");
     setError("");
-    const redirectTo = `${window.location.origin}/reset-password`;
+    const redirectTo = `${resolveEmailRedirectOrigin()}/reset-password`;
     const { error: resetError } = await createClient().auth.resetPasswordForEmail(email.trim(), { redirectTo });
     if (resetError) setError("Permintaan reset password gagal. Periksa email dan konfigurasi email Supabase.");
     else setMessage("Jika email terdaftar, tautan untuk membuat password baru sudah dikirim.");
