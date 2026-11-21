@@ -5,7 +5,8 @@
 
 BEGIN;
 
-CREATE TABLE public.email_outbox (
+-- Replay-safe: production already carries this table from out-of-band application.
+CREATE TABLE IF NOT EXISTS public.email_outbox (
   id            uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   recipient     text NOT NULL CHECK (recipient <> ''),
   subject       text NOT NULL CHECK (subject <> ''),
@@ -21,7 +22,7 @@ CREATE TABLE public.email_outbox (
   updated_at    timestamptz NOT NULL DEFAULT now()
 );
 
-CREATE INDEX idx_email_outbox_pending
+CREATE INDEX IF NOT EXISTS idx_email_outbox_pending
   ON public.email_outbox(created_at) WHERE status = 'pending';
 
 ALTER TABLE public.email_outbox ENABLE ROW LEVEL SECURITY;

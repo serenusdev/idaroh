@@ -41,6 +41,7 @@ export default function RegisterPage() {
   });
   const [passwordError, setPasswordError] = React.useState("");
   const [turnstileToken, setTurnstileToken] = React.useState("");
+  const [turnstileResetNonce, setTurnstileResetNonce] = React.useState(0);
 
   const passwordStrength = getPasswordStrength(formData.password);
 
@@ -83,8 +84,10 @@ export default function RegisterPage() {
         setSubmitted(true);
       } else {
         setErrorMessage(res.message);
-        // Reset Turnstile token on failure so user must complete challenge again
+        // Reset Turnstile token and re-render the widget so the user must
+        // complete a fresh challenge (tokens are single-use server-side).
         setTurnstileToken("");
+        setTurnstileResetNonce((n) => n + 1);
       }
     } catch {
       setErrorMessage("Pengajuan belum dapat dikirim. Silakan coba lagi.");
@@ -157,14 +160,24 @@ export default function RegisterPage() {
               </Link>
             </div>
           ) : (
-            <form onSubmit={handleSubmit} className="space-y-4">
+            <form onSubmit={handleSubmit} className="space-y-4" autoComplete="on">
+              {/* Honeypot: hidden from users but present for bots. Autofill
+                  resistances (randomized-looking name exceptions, ignore
+                  hints, non-focusable, off-screen) stop password managers
+                  from populating it and rejecting real registrations. */}
               <input
                 aria-hidden="true"
                 tabIndex={-1}
-                autoComplete="off"
+                name="website"
                 value={formData.website}
                 onChange={(e) => setFormData({ ...formData, website: e.target.value })}
-                className="absolute -left-[9999px] h-0 w-0 opacity-0"
+                autoComplete="new-password"
+                data-lpignore="true"
+                data-1p-ignore="true"
+                data-form-type="other"
+                readOnly
+                onFocus={(e) => e.target.blur()}
+                className="pointer-events-none absolute left-[-9999px] top-[-9999px] h-0 w-0 overflow-hidden opacity-0"
               />
               <Input
                 label="Nama Lengkap"
@@ -349,6 +362,9 @@ export default function RegisterPage() {
                     siteKey={siteKey}
                     onToken={setTurnstileToken}
                     onExpire={() => setTurnstileToken("")}
+                    onError={() => setTurnstileToken("")}
+                    onScriptError={() => setTurnstileToken("")}
+                    resetNonce={turnstileResetNonce}
                   />
                 </div>
               )}

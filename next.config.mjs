@@ -5,11 +5,15 @@ import { PHASE_PRODUCTION_SERVER } from 'next/constants.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
-const isDev = process.env.NODE_ENV !== 'production';
+const isDev = process.env.NODE_ENV !== "production";
+// SEC-11/TRC-01: Turnstile loads its challenge script and renders its iframe from
+// challenges.cloudflare.com, and the widget posts verification traffic there too.
+// Without these allowances window.turnstile stays undefined and login fails closed.
+const turnstileOrigin = "https://challenges.cloudflare.com";
 const scriptSrc = isDev
-  ? "script-src 'self' 'unsafe-inline' 'unsafe-eval'"
-  : "script-src 'self' 'unsafe-inline'";
-const cspHeader = `default-src 'self'; img-src 'self' data: blob: https://lh3.googleusercontent.com https://images.unsplash.com https://*.supabase.co; connect-src 'self' https://*.supabase.co wss://*.supabase.co https://fcm.googleapis.com; style-src 'self' 'unsafe-inline'; font-src 'self' data:; ${scriptSrc}; frame-ancestors 'none'; base-uri 'self'; form-action 'self'`;
+  ? `script-src 'self' 'unsafe-inline' 'unsafe-eval' ${turnstileOrigin}`
+  : `script-src 'self' 'unsafe-inline' ${turnstileOrigin}`;
+const cspHeader = `default-src 'self'; img-src 'self' data: blob: https://lh3.googleusercontent.com https://images.unsplash.com https://*.supabase.co; connect-src 'self' https://*.supabase.co wss://*.supabase.co https://fcm.googleapis.com ${turnstileOrigin}; style-src 'self' 'unsafe-inline'; font-src 'self' data:; ${scriptSrc}; frame-src 'self' ${turnstileOrigin}; frame-ancestors 'none'; base-uri 'self'; form-action 'self'`;
 
 /** @type {import('next').NextConfig} */
 const nextConfig = {

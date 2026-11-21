@@ -6,6 +6,10 @@ Aturan tetap: jangan taruh secret di repo, log, screenshot, atau chat. `.env.exa
 
 ## Urutan aman
 
+> Rilis 2026-11-21 (cabang `fix/idaroh-auth-and-schema-reconciliation`): jalankan dulu
+> `docs/runbook-2026-11-21-auth-schema-remediation.md` (preflight SQL + push 22 migrasi +
+> verifikasi RPC) sebelum mengikuti langkah umum di bawah.
+
 1. Backup dulu (B2 + GitHub Actions) — jaring pengaman sebelum ubah skema.
 2. Apply migrasi.
 3. Environment variables di Vercel + redeploy.
