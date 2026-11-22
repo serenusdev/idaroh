@@ -55,7 +55,9 @@ INSERT INTO public.team_members (team_id, user_id, team_role)
 VALUES
   ('00000000-0000-0000-0000-000000000840', '00000000-0000-0000-0000-000000000801', 'member'),
   ('00000000-0000-0000-0000-000000000840', '00000000-0000-0000-0000-000000000803', 'coordinator'),
-  ('00000000-0000-0000-0000-000000000840', '00000000-0000-0000-0000-000000000809', 'coordinator');
+  -- idx_one_active_coordinator_per_team allows one coordinator row per team;
+  -- the koordinator app role comes from user_roles, team_role stays 'member'.
+  ('00000000-0000-0000-0000-000000000840', '00000000-0000-0000-0000-000000000809', 'member');
 
 INSERT INTO public.reviewer_assignments (reviewee_id, reviewer_id, kind, valid_from, valid_to)
 VALUES
