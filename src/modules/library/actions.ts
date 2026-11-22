@@ -2,7 +2,9 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
 import { createAdminClient } from "@/lib/supabase/admin";
+import { createClient } from "@/lib/supabase/server";
 import { requireAuthUser, requireRole } from "@/lib/auth/guards";
+import { RESOURCE_RULE_MANAGER_ROLES, isResourceId, resourceVisibilityFilter } from "@/lib/resource-policy";
 import { randomUUID } from "node:crypto";
 import { INITIAL_RESOURCES } from "./data";
 import { CategorySummary, ResourceAdminInput, ResourceItem, ResourceRevisionItem } from "./types";
@@ -61,19 +63,34 @@ const RESOURCE_SELECT = `
   resource_tags (tags (name, slug))
 `;
 
-function visibilityFilter(role: string) {
-  return role === "super_admin" || role === "yayasan" || role === "pengurus"
-    ? "visibility.eq.internal,visibility.eq.restricted"
-    : "visibility.eq.internal";
+/**
+ * §3.2/D6: only resource_visibility_rules opens a restricted resource. The
+ * caller-scoped session runs the read so RLS and app.can_view_resource() make
+ * the decision; the admin client then fetches the embedded category/tag rows
+ * those restricted ids belong to.
+ */
+async function grantedRestrictedResourceIds(): Promise<string[]> {
+  const session = await createClient();
+  const { data, error } = await session
+    .from("resources")
+    .select("id")
+    .eq("visibility", "restricted");
+  if (error) throw error;
+  return (data || []).map((row: { id: string }) => row.id).filter(isResourceId);
 }
 
 export async function getCategoriesAction(): Promise<CategorySummary[]> {
   await requireAuthUser();
   try {
     const supabase = createAdminClient();
+    const grantedRestrictedIds = await grantedRestrictedResourceIds();
     const [categoriesResult, resourcesResult] = await Promise.all([
       supabase.from("resource_categories").select("id, name, slug, icon").order("sort_order", { ascending: true }),
-      supabase.from("resources").select("category_id").eq("status", "published"),
+      supabase
+        .from("resources")
+        .select("category_id")
+        .eq("status", "published")
+        .or(resourceVisibilityFilter(grantedRestrictedIds)),
     ]);
 
     if (categoriesResult.error) throw categoriesResult.error;
@@ -118,10 +135,12 @@ export async function getResourceStatsAction(): Promise<{
   await requireAuthUser();
   try {
     const supabase = createAdminClient();
+    const grantedRestrictedIds = await grantedRestrictedResourceIds();
     const { data, error } = await supabase
       .from("resources")
       .select("access_setup, how_to_use, workflow_examples, limitations_cautions, official_sources, documentation_status")
-      .eq("status", "published");
+      .eq("status", "published")
+      .or(resourceVisibilityFilter(grantedRestrictedIds));
 
     if (error) throw error;
 
@@ -166,15 +185,16 @@ export async function getResourcesAction(
   query: string = "",
   categorySlug: string = "all"
 ): Promise<ResourceItem[]> {
-  const user = await requireAuthUser();
+  await requireAuthUser();
   if (typeof query !== "string" || typeof categorySlug !== "string") return [];
   try {
     const supabase = createAdminClient();
+    const grantedRestrictedIds = await grantedRestrictedResourceIds();
     let dbQuery = supabase
       .from("resources")
       .select(RESOURCE_SELECT)
       .eq("status", "published")
-      .or(visibilityFilter(user.role))
+      .or(resourceVisibilityFilter(grantedRestrictedIds))
       .order("created_at", { ascending: false })
       .limit(100);
 
@@ -237,19 +257,20 @@ export async function getResourcesAction(
  * TRC-27: deep-link slug langsung ke DB (tanpa limit 100 getResourcesAction).
  */
 export async function getResourceBySlugAction(slug: string): Promise<ResourceItem | null> {
-  const user = await requireAuthUser();
+  await requireAuthUser();
   if (!isNonEmptyString(slug, 200)) return null;
   if (process.env.VITEST) {
     return INITIAL_RESOURCES.find((resource) => resource.slug === slug) || null;
   }
   try {
     const supabase = createAdminClient();
+    const grantedRestrictedIds = await grantedRestrictedResourceIds();
     const { data, error } = await supabase
       .from("resources")
       .select(RESOURCE_SELECT)
       .eq("status", "published")
       .eq("slug", slug)
-      .or(visibilityFilter(user.role))
+      .or(resourceVisibilityFilter(grantedRestrictedIds))
       .maybeSingle();
     if (error) throw error;
     if (!data) return null;
@@ -445,6 +466,52 @@ export async function setResourceArchiveAction(resourceId: string, archived: boo
   const { error } = await supabase.from("resources").update({ status: archived ? "archived" : "draft", archived_at: archived ? new Date().toISOString() : null, updated_by: user.id, updated_at: new Date().toISOString() }).eq("id", resourceId);
   if (error) return { success: false, message: "Gagal mengubah status resource." };
   return { success: true, message: archived ? "Resource diarsipkan tanpa menghapus riwayat." : "Resource dikembalikan sebagai draft." };
+}
+
+/**
+ * §3.2 / D6: the rule book behind a restricted resource, readable by the same
+ * roles that may change it.
+ */
+export async function getResourceVisibilityRulesAction(
+  resourceId: string
+): Promise<{ roleKeys: string[]; teamIds: string[] } | null> {
+  await requireRole([...RESOURCE_RULE_MANAGER_ROLES]);
+  if (!isResourceId(resourceId)) return null;
+  const supabase = createAdminClient();
+  const { data, error } = await supabase
+    .from("resource_visibility_rules")
+    .select("role_key, team_id")
+    .eq("resource_id", resourceId)
+    .order("created_at", { ascending: true });
+  if (error) throw error;
+  return {
+    roleKeys: (data || []).map((row: any) => row.role_key).filter(Boolean),
+    teamIds: (data || []).map((row: any) => row.team_id).filter(Boolean),
+  };
+}
+
+export async function setResourceVisibilityRulesAction(
+  resourceId: string,
+  roleKeys: string[],
+  teamIds: string[]
+): Promise<{ success: boolean; message: string }> {
+  await requireRole([...RESOURCE_RULE_MANAGER_ROLES]);
+  if (!isResourceId(resourceId)) return { success: false, message: "Resource tidak ditemukan." };
+  // app.resource_rule_set() owns the validation, the delete/insert pair and the
+  // audit row, so the write travels on the caller's own session instead of a
+  // service-role shortcut around it.
+  const session = await createClient();
+  const { data, error } = await session.rpc("resource_rule_set", {
+    p_resource_id: resourceId,
+    p_role_keys: (roleKeys || []).filter((key) => isNonEmptyString(key, 40)),
+    p_team_ids: (teamIds || []).filter(isResourceId),
+  });
+  if (error) throw error;
+  const result = data as { success?: boolean; message?: string } | null;
+  return {
+    success: Boolean(result?.success),
+    message: result?.message || "Aturan visibilitas resource tidak tersimpan.",
+  };
 }
 
 export async function getResourceRevisionsAction(resourceId: string): Promise<ResourceRevisionItem[]> {

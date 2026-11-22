@@ -76,6 +76,8 @@ Legenda: **S** = `santri`, **K** = `koordinator`, **P** = `pengurus`, **Y** = `y
 | `library.export` | — | — | `all` | `all` | — | Ekspor metadata library sesuai visibilitas pemanggil. |
 | `library.revision.restore` | — | — | `all` | `all` | `all` | Pemulihan versi revisi dokumen sebelumnya. |
 
+> **Catatan `D6` (LIB-02):** baris `resource_visibility_rules(resource_id, role_key, team_id)` adalah satu-satunya jalur menuju resource `restricted`; tidak ada peran — termasuk `super_admin` — yang mendapat cabang blanket. Grant dibaca oleh policy `resources` melalui `app.can_view_resource()` (role aktif + keanggotaan tim aktif), dan ditulis hanya lewat `app.resource_rule_set()` pada tier `library.resource.update` (`P`/`Y`/`SA`) dengan baris `audit_logs` pada transaksi yang sama.
+
 ### 3.3 Attendance (`PRD-03`)
 | Permission | S | K | P | Y | SA | Aturan Scope & Validasi |
 |---|---|---|---|---|---|---|

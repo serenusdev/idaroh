@@ -222,4 +222,18 @@ REVOKE ALL ON FUNCTION public.resource_rule_set(uuid, text[], uuid[]) FROM PUBLI
 REVOKE ALL ON FUNCTION public.resource_rule_set(uuid, text[], uuid[]) FROM anon;
 GRANT EXECUTE ON FUNCTION public.resource_rule_set(uuid, text[], uuid[]) TO authenticated;
 
+-- ---------------------------------------------------------------------------
+-- 4. The resources SELECT policy now travels through the predicate.
+-- ---------------------------------------------------------------------------
+-- The old rule could only say `visibility = 'internal'` because no grant table
+-- existed, which pushed every restricted read into the Server Action. With
+-- app.can_view_resource() the database is the enforcement point again, so the
+-- action-layer filter is a projection of this policy rather than its substitute.
+DROP POLICY IF EXISTS "Active users can view published internal resources" ON public.resources;
+DROP POLICY IF EXISTS "Active members can view granted resources" ON public.resources;
+
+CREATE POLICY "Active members can view granted resources"
+  ON public.resources FOR SELECT TO authenticated
+  USING (app.can_view_resource(id));
+
 NOTIFY pgrst, 'reload schema';
