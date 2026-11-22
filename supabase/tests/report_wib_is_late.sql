@@ -49,6 +49,28 @@ CREATE TEMP TABLE draft_forged AS SELECT public.save_report(
   p_items => '[{"categoryId":"keagamaan","title":"Setoran hafalan","description":"Menyetor satu halaman","resultProgress":"Lancar","obstacles":"","durationMinutes":45}]'::jsonb
 ) AS r;
 
+-- The draft row is inspected before the submissions run. All three saves of
+-- this santri share one daily_reports row (unique on user_id + report_date),
+-- and a submitted save pins is_late from the WIB deadline, so reading the draft
+-- afterwards would make this assertion depend on whether CI ran before or after
+-- policy_settings.report_deadline_time.
+RESET ROLE;
+SELECT is((SELECT r->>'success' FROM draft_forged), 'true',
+  'draft save succeeds through the public save_report wrapper');
+SELECT is((SELECT d.is_late FROM public.daily_reports d JOIN draft_forged f ON d.id = (f.r->>'report_id')::uuid), false,
+  'a forged client is_late=true never lands on a draft');
+SELECT is((SELECT count(*)::int FROM public.report_items ri JOIN draft_forged f ON ri.report_id = (f.r->>'report_id')::uuid), 1,
+  'draft items are persisted');
+SELECT is((SELECT ri.duration_minutes FROM public.report_items ri JOIN draft_forged f ON ri.report_id = (f.r->>'report_id')::uuid), 45,
+  'durationMinutes is parsed as an integer, not silently defaulted to 60');
+
+SET LOCAL ROLE authenticated;
+SELECT set_config(
+  'request.jwt.claims',
+  '{"role":"authenticated","sub":"00000000-0000-0000-0000-000000000601"}',
+  true
+);
+
 CREATE TEMP TABLE submit_forged AS SELECT public.save_report(
   p_user_id => '00000000-0000-0000-0000-000000000601',
   p_report_date => ((now() AT TIME ZONE 'Asia/Jakarta')::date),
@@ -91,14 +113,6 @@ CREATE TEMP TABLE cross_user_forged AS SELECT public.save_report(
 -- is service-only by design, like report_review_idempotency.sql).
 RESET ROLE;
 
-SELECT is((SELECT r->>'success' FROM draft_forged), 'true',
-  'draft save succeeds through the public save_report wrapper');
-SELECT is((SELECT d.is_late FROM public.daily_reports d JOIN draft_forged f ON d.id = (f.r->>'report_id')::uuid), false,
-  'a forged client is_late=true never lands on a draft');
-SELECT is((SELECT count(*)::int FROM public.report_items ri JOIN draft_forged f ON ri.report_id = (f.r->>'report_id')::uuid), 1,
-  'draft items are persisted');
-SELECT is((SELECT ri.duration_minutes FROM public.report_items ri JOIN draft_forged f ON ri.report_id = (f.r->>'report_id')::uuid), 45,
-  'durationMinutes is parsed as an integer, not silently defaulted to 60');
 SELECT is((SELECT r->>'success' FROM submit_forged), 'true',
   'submission succeeds through the public save_report wrapper');
 SELECT ok((SELECT r->>'is_late' FROM submit_forged) IN ('true', 'false'),
