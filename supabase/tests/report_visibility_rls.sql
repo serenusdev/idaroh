@@ -1,6 +1,6 @@
 BEGIN;
 
-SELECT plan(26);
+SELECT plan(23);
 
 -- SEC-03 / REP-01: report visibility must match PERMISSIONS.md §3.4 + D1.
 -- daily_reports carries only compliance metadata; report_items carries the
@@ -153,26 +153,15 @@ SELECT is((SELECT count(*)::int FROM public.daily_reports WHERE id = '00000000-0
 SELECT is((SELECT count(*)::int FROM public.report_items WHERE id = '00000000-0000-0000-0000-000000000851'), 0,
   'expired assignment revokes report content');
 
--- 9) report_reviews direct INSERT: active assignment plus koordinator/pengurus role, never self.
-SELECT public.vis_as('00000000-0000-0000-0000-000000000804');
-SELECT throws_ok(
-  $$ INSERT INTO public.report_reviews (report_id, revision_no, reviewer_id, decision, notes)
-     VALUES ('00000000-0000-0000-0000-000000000850', 1, '00000000-0000-0000-0000-000000000804', 'approved', 'tanpa penugasan') $$,
-  '42501', NULL, 'unassigned pengurus cannot insert a review row');
-SELECT public.vis_as('00000000-0000-0000-0000-000000000801');
-SELECT throws_ok(
-  $$ INSERT INTO public.report_reviews (report_id, revision_no, reviewer_id, decision, notes)
-     VALUES ('00000000-0000-0000-0000-000000000850', 1, '00000000-0000-0000-0000-000000000801', 'approved', 'self review') $$,
-  '42501', NULL, 'owner cannot insert a review row for own report');
+-- 9) The write path stays closed: 20261102000020_report_write_grants.sql revokes
+--    INSERT on report_reviews from authenticated, so reviews travel only through
+--    app.review_report. The review-integrity rules below are enforced inside that
+--    RPC (a SECURITY DEFINER body bypasses RLS), not by the INSERT policy.
 SELECT public.vis_as('00000000-0000-0000-0000-000000000802');
-SELECT lives_ok(
+SELECT throws_ok(
   $$ INSERT INTO public.report_reviews (report_id, revision_no, reviewer_id, decision, notes)
-     VALUES ('00000000-0000-0000-0000-000000000850', 1, '00000000-0000-0000-0000-000000000802', 'approved', 'dengan penugasan') $$,
-  'assigned koordinator can insert a review row');
-
-RESET ROLE;
-SELECT is((SELECT count(*)::int FROM public.report_reviews WHERE report_id = '00000000-0000-0000-0000-000000000850'), 1,
-  'only the assigned reviewer row was persisted');
+     VALUES ('00000000-0000-0000-0000-000000000850', 1, '00000000-0000-0000-0000-000000000802', 'approved', 'langsung tanpa RPC') $$,
+  '42501', NULL, 'assigned reviewer cannot write a review row outside the RPC');
 
 -- 10) app.review_report must reject elevated-but-unassigned actors and honor assignments.
 SET LOCAL ROLE authenticated;

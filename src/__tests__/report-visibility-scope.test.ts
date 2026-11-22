@@ -159,9 +159,9 @@ describe("pgTAP visibility matrix integrity", () => {
   const tap = readFileSync(tapPath, "utf8");
 
   it("has no forbidden fixture table or dangling role usage", () => {
-    expect(tap).toContain("SELECT plan(26);");
+    expect(tap).toContain("SELECT plan(23);");
     const assertions = tap.match(/^SELECT (is|throws_ok|lives_ok)\(/gm) || [];
-    expect(assertions.length).toBe(26);
+    expect(assertions.length).toBe(23);
   });
 
   it("asserts content denial for every unassigned elevated identity", () => {
