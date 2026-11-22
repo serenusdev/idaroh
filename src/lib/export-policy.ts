@@ -11,6 +11,8 @@ import type { UserProfile, UserRole } from "@/lib/auth/types";
  */
 export const EXPORT_ROLES: readonly UserRole[] = ["pengurus", "yayasan"];
 export const AUDIT_EXPORT_ROLES: readonly UserRole[] = ["yayasan"];
+/** §3.8 `admin.audit.read`: yayasan and super_admin may read the trail; pengurus may not. */
+export const AUDIT_READ_ROLES: readonly UserRole[] = ["yayasan", "super_admin"];
 
 export const EXPORT_CATEGORIES = [
   "presensi",

@@ -7,6 +7,8 @@ import { Avatar } from "@/components/ui/avatar";
 import { useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 import { cleanupPushNotifications } from "@/lib/notifications";
+import { AUDIT_READ_ROLES, holdsRole } from "@/lib/export-policy";
+import { holdsTaskRole, TASK_READ_ROLES } from "@/lib/task-policy";
 
 interface MoreSheetProps {
   isOpen: boolean;
@@ -63,6 +65,9 @@ export function MoreSheet({ isOpen, onClose, user }: MoreSheetProps) {
     user.role === "super_admin" ||
     user.role === "yayasan" ||
     user.role === "pengurus";
+
+  // §3.5: every role except super_admin has a task read scope.
+  const canViewTasks = holdsTaskRole(user, TASK_READ_ROLES);
 
   return (
     <div className="fixed inset-0 z-50 md:hidden flex flex-col justify-end">
@@ -140,6 +145,7 @@ export function MoreSheet({ isOpen, onClose, user }: MoreSheetProps) {
             </Link>
           )}
 
+          {canViewTasks && (
           <Link
             href="/tugas"
             onClick={onClose}
@@ -157,6 +163,7 @@ export function MoreSheet({ isOpen, onClose, user }: MoreSheetProps) {
               </span>
             </div>
           </Link>
+          )}
 
           <Link
             href="/jadwal"
@@ -266,6 +273,7 @@ export function MoreSheet({ isOpen, onClose, user }: MoreSheetProps) {
                 </div>
               </Link>
 
+              {holdsRole(user, AUDIT_READ_ROLES) && (
               <Link
                 href="/admin/audit"
                 onClick={onClose}
@@ -283,6 +291,7 @@ export function MoreSheet({ isOpen, onClose, user }: MoreSheetProps) {
                   </span>
                 </div>
               </Link>
+              )}
 
               <Link
                 href="/admin/kehadiran"

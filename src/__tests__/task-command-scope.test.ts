@@ -34,9 +34,11 @@ describe("task command scope contract (SEC-04 / TASK-01)", () => {
     expect(actions).toContain("holdsTaskRole(user, TASK_OVERSIGHT_ROLES)");
     expect(actions).not.toContain("super_admin");
     expect(actions).not.toContain("hasMinimumRole");
-    // Four read paths: the access helper, the task list, the project list and
-    // the assignable-roster lookup.
-    expect((actions.match(/holdsTaskRole\(user, TASK_OVERSIGHT_ROLES\)/g) || []).length).toBe(4);
+    // Seven call sites: four read paths (the access helper, the task list, the
+    // project list and the assignable-roster lookup) plus the three task write
+    // guards, which stay oversight-only so a creator can never widen their own
+    // row by editing it.
+    expect((actions.match(/holdsTaskRole\(user, TASK_OVERSIGHT_ROLES\)/g) || []).length).toBe(7);
   });
 
   it("keeps review authority with the designated reviewer only", () => {

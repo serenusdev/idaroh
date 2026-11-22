@@ -19,7 +19,10 @@ describe("export scope contract (SEC-01)", () => {
     const policy = read(policyPath);
     expect(policy).toContain('export const EXPORT_ROLES: readonly UserRole[] = ["pengurus", "yayasan"];');
     expect(policy).toContain('export const AUDIT_EXPORT_ROLES: readonly UserRole[] = ["yayasan"];');
-    expect(policy).not.toContain('"super_admin"');
+    // §3.8 denies analytics.export to super_admin. The scan stays on the two
+    // export constants: AUDIT_READ_ROLES legitimately lists super_admin because
+    // admin.audit.read grants it (§3.8 denies pengurus, not super_admin).
+    expect(policy).not.toMatch(/EXPORT_ROLES[^\n]*super_admin/);
   });
 
   it("requests exports as yayasan/pengurus over a closed category list", () => {

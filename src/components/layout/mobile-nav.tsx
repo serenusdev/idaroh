@@ -6,6 +6,7 @@ import { usePathname } from "next/navigation";
 import { cn } from "@/lib/utils";
 import { MoreSheet } from "./more-sheet";
 import { UserProfile } from "@/lib/auth/types";
+import { AUDIT_READ_ROLES, holdsRole } from "@/lib/export-policy";
 
 interface MobileNavProps {
   user: UserProfile;
@@ -49,12 +50,14 @@ export function MobileNav({ user }: MobileNavProps) {
           icon: "calendar_month",
           active: (isActive("/admin/jadwal") || isActive("/jadwal")) && !isMoreOpen,
         },
-        {
+        // §3.8 admin.audit.read belongs to yayasan and super_admin; a plain
+        // pengurus gets no audit shortcut.
+        ...(holdsRole(user, AUDIT_READ_ROLES) ? [{
           label: "Audit",
           href: "/admin/audit",
           icon: "monitoring",
           active: isActive("/admin/audit") && !isMoreOpen,
-        },
+        }] : []),
       ]
     : isKoordinator
     ? [

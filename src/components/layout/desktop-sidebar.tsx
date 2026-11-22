@@ -10,6 +10,8 @@ import { Avatar } from "@/components/ui/avatar";
 import { useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 import { cleanupPushNotifications } from "@/lib/notifications";
+import { AUDIT_READ_ROLES, holdsRole } from "@/lib/export-policy";
+import { holdsTaskRole, TASK_READ_ROLES } from "@/lib/task-policy";
 
 interface DesktopSidebarProps {
   user: UserProfile;
@@ -38,12 +40,17 @@ export function DesktopSidebar({ user }: DesktopSidebarProps) {
     user.role === "yayasan" ||
     user.role === "pengurus";
 
+  // §3.5 gives every role except super_admin a task read scope, and §3.8 keeps
+  // admin.audit.read with yayasan/super_admin only. A link the database would
+  // reject must not be offered here.
+  const canViewTasks = holdsTaskRole(user, TASK_READ_ROLES);
+
   const mainNav = [
     { label: "Beranda", href: "/", icon: "dashboard" },
     { label: "Presensi Harian", href: "/kehadiran", icon: "how_to_reg" },
     { label: "Laporan Aktivitas", href: "/laporan", icon: "edit_document" },
     { label: "Review Laporan", href: "/review", icon: "fact_check" },
-    { label: "Tugas & Proyek", href: "/tugas", icon: "task_alt" },
+    ...(canViewTasks ? [{ label: "Tugas & Proyek", href: "/tugas", icon: "task_alt" }] : []),
     { label: "Jadwal & Agenda", href: "/jadwal", icon: "calendar_month" },
   ];
 
@@ -62,7 +69,7 @@ export function DesktopSidebar({ user }: DesktopSidebarProps) {
     { label: "Kelola Jadwal & Siaran", href: "/admin/jadwal", icon: "edit_calendar" },
     { label: "Kelola Resource Library", href: "/admin/resources", icon: "library_books" },
     { label: "Review Presensi", href: "/admin/kehadiran", icon: "fact_check" },
-    { label: "Analitik & Audit Log", href: "/admin/audit", icon: "monitoring" },
+    ...(holdsRole(user, AUDIT_READ_ROLES) ? [{ label: "Analitik & Audit Log", href: "/admin/audit", icon: "monitoring" }] : []),
   ];
 
   const roleLabel =
