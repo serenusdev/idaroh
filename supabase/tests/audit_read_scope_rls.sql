@@ -103,6 +103,8 @@ SELECT public.audit_vis_as('00000000-0000-0000-0000-000000000903');
 SELECT is((SELECT count(*)::int FROM public.resource_import_batches WHERE id IN ('00000000-0000-0000-0000-000000000960', '00000000-0000-0000-0000-000000000961')), 0,
   'pengurus cannot read import batches');
 
+-- The helper belongs to the bootstrap role; the session is still authenticated.
+RESET ROLE;
 DROP FUNCTION public.audit_vis_as(uuid);
 
 SELECT * FROM finish();

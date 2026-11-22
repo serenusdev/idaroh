@@ -140,6 +140,13 @@ SELECT public.review_report(
   'Mohon tambahkan rincian progres.',
   'review-command-1'
 );
+
+-- Ledger inspection runs as the privileged test role: PERMISSIONS.md §3.8
+-- denies pengurus admin.audit.read, so the reviewer session above can no longer
+-- see the trail its own decision wrote. These three assertions are about the
+-- write side (one record per persisted decision), which the owner still sees.
+RESET ROLE;
+
 SELECT is(
   (SELECT count(*)::int FROM public.audit_logs
    WHERE target_id = '00000000-0000-0000-0000-000000000503'
@@ -162,10 +169,9 @@ SELECT is(
   'audit event semantics match the decision type'
 );
 
--- Ledger inspection runs as the privileged test role: the ledger is
--- service_role-only by design (authenticated denial is asserted below).
-RESET ROLE;
-
+-- The notification ledger stays service_role-only by design (authenticated
+-- denial is asserted below), and the session is already the privileged test
+-- role since the audit ledger inspection above.
 SELECT is(
   (SELECT count(*)::int FROM public.notifications
    WHERE user_id = '00000000-0000-0000-0000-000000000501'
