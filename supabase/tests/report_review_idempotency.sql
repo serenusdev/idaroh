@@ -16,12 +16,22 @@ VALUES
 INSERT INTO public.profiles (id, email, full_name, status, member_type)
 VALUES
   ('00000000-0000-0000-0000-000000000501', 'review-owner@example.test', 'Review Owner', 'active', 'santri'),
-  ('00000000-0000-0000-0000-000000000502', 'reviewer@example.test', 'Review Admin', 'active', 'super_admin');
+  ('00000000-0000-0000-0000-000000000502', 'reviewer@example.test', 'Review Pengurus', 'active', 'pengurus');
 
+-- SSOT alignment (SEC-03, PERMISSIONS.md §3.4): the former fixture used a
+-- super_admin reviewer with no assignment. report.review is now "assigned
+-- koordinator/pengurus only", so the idempotency contracts are exercised
+-- through an active reviewer_assignments row instead. Every other assertion
+-- below is unchanged.
 INSERT INTO public.user_roles (user_id, role_id)
 SELECT '00000000-0000-0000-0000-000000000502', id
 FROM public.roles
-WHERE key = 'super_admin';
+WHERE key = 'pengurus';
+
+INSERT INTO public.reviewer_assignments (reviewee_id, reviewer_id, kind, valid_from)
+VALUES
+  ('00000000-0000-0000-0000-000000000501', '00000000-0000-0000-0000-000000000502', 'report', CURRENT_DATE - 1),
+  ('00000000-0000-0000-0000-000000000504', '00000000-0000-0000-0000-000000000502', 'report', CURRENT_DATE - 1);
 
 INSERT INTO public.daily_reports (
   id, user_id, report_date, submission_status, review_status, revision_no
@@ -258,6 +268,8 @@ VALUES ('00000000-0000-0000-0000-000000000506', 'audit-drill-owner@example.test'
 INSERT INTO public.daily_reports (id, user_id, report_date, submission_status, review_status, revision_no)
 VALUES ('00000000-0000-0000-0000-000000000507', '00000000-0000-0000-0000-000000000506',
   DATE '2026-11-20', 'submitted', 'not_reviewed', 1);
+INSERT INTO public.reviewer_assignments (reviewee_id, reviewer_id, kind, valid_from)
+VALUES ('00000000-0000-0000-0000-000000000506', '00000000-0000-0000-0000-000000000502', 'report', CURRENT_DATE - 1);
 
 CREATE FUNCTION public.tg_fail_audit_drill()
 RETURNS trigger LANGUAGE plpgsql AS $$

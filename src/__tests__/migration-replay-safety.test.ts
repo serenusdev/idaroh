@@ -40,11 +40,12 @@ describe("pending migration inventory", () => {
     expect(pendingMigrations).toContain("20261121000001_reconcile_rpc_overloads.sql");
   });
 
-  it("places the reconciliation migration before the only follow-up remediation", () => {
+  it("places the reconciliation migration before the follow-up remediations", () => {
     const index = pendingMigrations.indexOf("20261121000001_reconcile_rpc_overloads.sql");
     expect(index).toBeGreaterThanOrEqual(0);
     expect(pendingMigrations.slice(index + 1)).toEqual([
       "20261122000001_report_save_wib_is_late.sql",
+      "20261122000002_report_rls_review_scope.sql",
     ]);
   });
 });

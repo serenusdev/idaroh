@@ -272,38 +272,34 @@ export async function getMyReportHistoryAction(
  */
 export async function getReviewQueueAction(): Promise<DailyReport[]> {
   try {
-    // Only reviewers can view review queue
-    const reviewer = await requireRole(["super_admin", "yayasan", "pengurus", "koordinator"]);
+    // §3.4: the review queue belongs to koordinator and pengurus only, and
+    // REP-01: only reports with an active reviewer_assignments row naming the
+    // reviewer are listed — never whole-team backlogs. The admin client
+    // bypasses RLS, so this scope is enforced here explicitly.
+    const reviewer = await requireRole(["pengurus", "koordinator"]);
 
     const supabase = createAdminClient();
-    let scopedAuthorIds: string[] | undefined;
-    if (reviewer.role === "koordinator") {
-      const { data: memberships, error: membershipError } = await supabase
-        .from("team_members")
-        .select("team_id")
-        .eq("user_id", reviewer.id)
-        .is("valid_to", null);
-      if (membershipError) throw membershipError;
-      const teamIds = Array.from(new Set((memberships || []).map((item: any) => item.team_id).filter(Boolean)));
-      if (teamIds.length === 0) return [];
-      const { data: scopedAuthors, error: scopedAuthorError } = await supabase
-        .from("team_members")
-        .select("user_id")
-        .in("team_id", teamIds)
-        .is("valid_to", null);
-      if (scopedAuthorError) throw scopedAuthorError;
-      scopedAuthorIds = Array.from(new Set((scopedAuthors || []).map((item: any) => item.user_id).filter(Boolean)));
-      if (scopedAuthorIds.length === 0) return [];
-    }
+    const todayWib = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Jakarta" }).format(new Date());
+    const { data: assignments, error: assignmentError } = await supabase
+      .from("reviewer_assignments")
+      .select("reviewee_id")
+      .eq("reviewer_id", reviewer.id)
+      .eq("kind", "report")
+      .lte("valid_from", todayWib)
+      .or(`valid_to.is.null,valid_to.gte.${todayWib}`);
+    if (assignmentError) throw assignmentError;
+    const revieweeIds = Array.from(
+      new Set((assignments || []).map((item: any) => item.reviewee_id).filter(Boolean)),
+    );
+    if (revieweeIds.length === 0) return [];
 
-    let reportsQuery = supabase
+    const { data: reports, error } = await supabase
       .from("daily_reports")
       .select("*, report_items(*, report_categories(name))")
       .eq("submission_status", "submitted")
+      .in("user_id", revieweeIds)
       .order("created_at", { ascending: false })
       .limit(50);
-    if (scopedAuthorIds) reportsQuery = reportsQuery.in("user_id", scopedAuthorIds);
-    const { data: reports, error } = await reportsQuery;
 
     if (error) throw error;
 
@@ -613,7 +609,9 @@ export async function reviewReportAction(
     };
   }
 
-  const reviewer = await requireRole(["super_admin", "yayasan", "pengurus", "koordinator"]);
+  // §3.4 report.review = assigned koordinator/pengurus only; the RPC
+  // re-validates the active reviewer_assignments row and blocks self-review.
+  const reviewer = await requireRole(["pengurus", "koordinator"]);
   let reviewId: string | undefined;
   let isIdempotentRetry = false;
 
