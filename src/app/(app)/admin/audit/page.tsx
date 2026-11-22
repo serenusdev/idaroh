@@ -103,7 +103,9 @@ export default function AdminAuditPage() {
 
   // PERMISSIONS.md §3.8: admin.audit.read is yayasan/super_admin only and names
   // pengurus as explicitly denied, so the union of held roles decides, not the
-  // primary role.
+  // primary role. analytics.export in turn excludes super_admin, and the audit
+  // dataset follows admin.audit.read. The server action and download route
+  // enforce the same sets; the UI only mirrors them.
   const heldRoles = new Set<string>([currentUser?.role, ...(currentUser?.roles || [])].filter(Boolean) as string[]);
   const canReadAuditLogs = heldRoles.has("super_admin") || heldRoles.has("yayasan");
 
@@ -111,10 +113,6 @@ export default function AdminAuditPage() {
     return <UnauthorizedState requiredRole="Super Admin / Yayasan" />;
   }
 
-  // PERMISSIONS.md §3.8: analytics.export excludes super_admin, and the audit
-  // dataset additionally follows admin.audit.read (pengurus denied). The server
-  // action and download route enforce the same sets; the UI only mirrors them.
-  const heldRoles = new Set<string>([currentUser.role, ...(currentUser.roles || [])]);
   const canExport = EXPORT_ROLES.some((role) => heldRoles.has(role));
   const canExportAuditLogs = AUDIT_EXPORT_ROLES.some((role) => heldRoles.has(role));
 
