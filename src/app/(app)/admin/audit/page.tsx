@@ -101,13 +101,14 @@ export default function AdminAuditPage() {
     void statsQuery.refresh();
   };
 
-  const isAdminOrPengurus =
-    currentUser?.role === "super_admin" ||
-    currentUser?.role === "yayasan" ||
-    currentUser?.role === "pengurus";
+  // PERMISSIONS.md §3.8: admin.audit.read is yayasan/super_admin only and names
+  // pengurus as explicitly denied, so the union of held roles decides, not the
+  // primary role.
+  const heldRoles = new Set<string>([currentUser?.role, ...(currentUser?.roles || [])].filter(Boolean) as string[]);
+  const canReadAuditLogs = heldRoles.has("super_admin") || heldRoles.has("yayasan");
 
-  if (!isAdminOrPengurus) {
-    return <UnauthorizedState requiredRole="Super Admin / Pengurus / Yayasan" />;
+  if (!canReadAuditLogs) {
+    return <UnauthorizedState requiredRole="Super Admin / Yayasan" />;
   }
 
   // PERMISSIONS.md §3.8: analytics.export excludes super_admin, and the audit

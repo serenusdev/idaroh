@@ -68,6 +68,10 @@ export default function AdminResourcesPage() {
     return <UnauthorizedState requiredRole="Super Admin / Yayasan / Pengurus" />;
   }
 
+  // PERMISSIONS.md §3.2: library.import.run is exclusive to super_admin, while
+  // the rest of this admin surface stays shared with yayasan and pengurus.
+  const canRunImport = new Set<string>([user.role, ...(user.roles || [])].filter(Boolean) as string[]).has("super_admin");
+
   const selectResource = async (resource: ResourceAdminInput & { id: string; updatedAt: string }) => {
     setEditingId(resource.id);
     setForm(resource);
@@ -170,12 +174,14 @@ export default function AdminResourcesPage() {
       </header>
       {notice && <div className="rounded-xl border border-primary/30 bg-accent/30 p-3 text-sm" aria-live="polite">{notice}</div>}
 
+      {canRunImport && (
       <section className="rounded-2xl border border-border bg-card p-5 space-y-3">
         <div><h2 className="font-semibold">Impor Everything Library dari CSV</h2><p className="text-xs text-muted-foreground mt-1">Gunakan header: <code>name,slug,description,category_slug,tags,access_setup,how_to_use,workflow_examples,limitations_cautions,official_sources,documentation_status</code>. Pisahkan banyak tag dengan koma atau <code>|</code>.</p></div>
         <input value={importFileName} onChange={(event) => setImportFileName(event.target.value)} placeholder="Nama file" className="h-10 w-full rounded-lg border border-border bg-surface-container-low px-3 text-sm" />
         <textarea value={importCsv} onChange={(event) => setImportCsv(event.target.value)} rows={5} placeholder="name,slug,description,category_slug,tags\nSupabase,supabase,Database,database-backend,Postgres|RLS" className="w-full rounded-lg border border-border bg-surface-container-low px-3 py-2 font-mono text-xs" />
         <div className="flex items-center gap-3"><button type="button" disabled={!importCsv.trim()} onClick={() => void importCsvResources()} className="h-10 rounded-lg bg-primary px-4 text-xs font-semibold text-on-primary disabled:opacity-50">Validasi &amp; impor</button>{importFeedback && <p className="text-xs text-muted-foreground" aria-live="polite">{importFeedback}</p>}</div>
       </section>
+      )}
 
       <div className="grid grid-cols-1 xl:grid-cols-[minmax(0,1fr)_minmax(360px,1.1fr)] gap-5 items-start">
         <section className="rounded-2xl border border-border bg-card overflow-hidden">

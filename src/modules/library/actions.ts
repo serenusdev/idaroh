@@ -10,6 +10,9 @@ import { throwQueryError } from "@/lib/query-error";
 import { isNonEmptyString } from "@/lib/input-validation";
 
 const RESOURCE_ADMIN_ROLES = ["super_admin", "yayasan", "pengurus"] as const;
+// PERMISSIONS.md §3.2: library.import.run is exclusive to super_admin, even
+// though the rest of the admin surface stays shared with yayasan/pengurus.
+const LIBRARY_IMPORT_ROLES = ["super_admin"] as const;
 
 function mapResourceRow(r: any, authorName: string): ResourceItem {
   const cat = r.resource_categories;
@@ -496,7 +499,7 @@ export interface ResourceImportResult {
 }
 
 export async function importResourcesCsvAction(fileName: string, csv: string): Promise<ResourceImportResult> {
-  const user = await requireRole([...RESOURCE_ADMIN_ROLES]);
+  const user = await requireRole([...LIBRARY_IMPORT_ROLES]);
   const rows = parseResourceCsv(csv.replace(/^\uFEFF/, ""));
   if (rows.length < 2) return { success: false, message: "CSV resource harus memiliki header dan minimal satu baris.", totalRows: 0, importedRows: 0, rejectedRows: 0, errors: [] };
   const headers = rows[0].map((header) => header.toLowerCase().trim().replace(/\s+/g, "_"));

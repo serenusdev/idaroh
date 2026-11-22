@@ -115,7 +115,8 @@ export async function queryAuditLogsAction(
   scope: string = "Semua Tim (Organisasi)",
   page = 1
 ): Promise<{ success: boolean; logs: AuditLogItem[]; hasMore: boolean; page: number }> {
-  await requireRole(["super_admin", "yayasan", "pengurus"]);
+  // PERMISSIONS.md §3.8: admin.audit.read denies pengurus.
+  await requireRole(["super_admin", "yayasan"]);
   try {
     const supabase = createAdminClient();
     const pageSize = 50;
@@ -194,7 +195,8 @@ export async function queryAuditLogsAction(
 }
 
 export async function getAuditChainStatusAction(): Promise<{ valid: boolean; checked: number; message: string }> {
-  await requireRole(["super_admin", "yayasan", "pengurus"]);
+  // app.verify_audit_chain() enforces the same §3.8 reader set in the database.
+  await requireRole(["super_admin", "yayasan"]);
   if (process.env.VITEST) return { valid: true, checked: 0, message: "Audit chain test fixture valid." };
   try {
     const supabase = await createClient();
