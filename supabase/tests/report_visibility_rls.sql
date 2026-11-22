@@ -80,7 +80,9 @@ VALUES ('00000000-0000-0000-0000-000000000852', '00000000-0000-0000-0000-0000000
 INSERT INTO public.report_items (id, report_id, title, description, duration_minutes)
 VALUES ('00000000-0000-0000-0000-000000000853', '00000000-0000-0000-0000-000000000852', 'Kajian kitab', 'Fathul Qarib bab thaharah', 90);
 
-CREATE TEMP FUNCTION vis_as(p_user uuid) RETURNS void
+-- PostgreSQL has no temporary functions: the switch helper is a plain function
+-- inside this rolled-back transaction, dropped again before finish().
+CREATE FUNCTION public.vis_as(p_user uuid) RETURNS void
 LANGUAGE sql
 AS $$
   SELECT set_config('request.jwt.claim.sub', p_user::text, true),
@@ -91,78 +93,78 @@ $$;
 SET LOCAL ROLE authenticated;
 
 -- 1) Owner always sees metadata and content.
-SELECT vis_as('00000000-0000-0000-0000-000000000801');
+SELECT public.vis_as('00000000-0000-0000-0000-000000000801');
 SELECT is((SELECT count(*)::int FROM public.daily_reports WHERE id = '00000000-0000-0000-0000-000000000850'), 1,
   'owner sees own report metadata');
 SELECT is((SELECT count(*)::int FROM public.report_items WHERE id = '00000000-0000-0000-0000-000000000851'), 1,
   'owner sees own report content');
 
 -- 2) Assigned koordinator sees metadata and content.
-SELECT vis_as('00000000-0000-0000-0000-000000000802');
+SELECT public.vis_as('00000000-0000-0000-0000-000000000802');
 SELECT is((SELECT count(*)::int FROM public.daily_reports WHERE id = '00000000-0000-0000-0000-000000000850'), 1,
   'assigned koordinator sees report metadata');
 SELECT is((SELECT count(*)::int FROM public.report_items WHERE id = '00000000-0000-0000-0000-000000000851'), 1,
   'assigned koordinator sees report content');
 
 -- 3) Unassigned koordinator in the same team sees metadata only (§3.4 compliance.read = team).
-SELECT vis_as('00000000-0000-0000-0000-000000000803');
+SELECT public.vis_as('00000000-0000-0000-0000-000000000803');
 SELECT is((SELECT count(*)::int FROM public.daily_reports WHERE id = '00000000-0000-0000-0000-000000000850'), 1,
   'team koordinator sees compliance metadata');
 SELECT is((SELECT count(*)::int FROM public.report_items WHERE id = '00000000-0000-0000-0000-000000000851'), 0,
   'unassigned koordinator cannot read report content');
 
 -- 4) Pengurus without assignment sees metadata only (report.read = assigned).
-SELECT vis_as('00000000-0000-0000-0000-000000000804');
+SELECT public.vis_as('00000000-0000-0000-0000-000000000804');
 SELECT is((SELECT count(*)::int FROM public.daily_reports WHERE id = '00000000-0000-0000-0000-000000000850'), 1,
   'pengurus sees compliance metadata');
 SELECT is((SELECT count(*)::int FROM public.report_items WHERE id = '00000000-0000-0000-0000-000000000851'), 0,
   'unassigned pengurus cannot read report content');
 
 -- 5) Yayasan default is compliance metadata; content requires an explicit grant (D1).
-SELECT vis_as('00000000-0000-0000-0000-000000000805');
+SELECT public.vis_as('00000000-0000-0000-0000-000000000805');
 SELECT is((SELECT count(*)::int FROM public.daily_reports WHERE id = '00000000-0000-0000-0000-000000000850'), 1,
   'yayasan sees compliance metadata');
 SELECT is((SELECT count(*)::int FROM public.report_items WHERE id = '00000000-0000-0000-0000-000000000851'), 0,
   'yayasan without explicit grant cannot read report content');
-SELECT vis_as('00000000-0000-0000-0000-000000000806');
+SELECT public.vis_as('00000000-0000-0000-0000-000000000806');
 SELECT is((SELECT count(*)::int FROM public.daily_reports WHERE id = '00000000-0000-0000-0000-000000000852'), 1,
   'explicitly granted yayasan sees report metadata');
 SELECT is((SELECT count(*)::int FROM public.report_items WHERE id = '00000000-0000-0000-0000-000000000853'), 1,
   'explicitly granted yayasan reads report content (D1 explicit grant)');
 
 -- 6) Super Admin is denied everything report-related (§3.4 dashes).
-SELECT vis_as('00000000-0000-0000-0000-000000000807');
+SELECT public.vis_as('00000000-0000-0000-0000-000000000807');
 SELECT is((SELECT count(*)::int FROM public.daily_reports WHERE id = '00000000-0000-0000-0000-000000000850'), 0,
   'super_admin sees no report metadata');
 SELECT is((SELECT count(*)::int FROM public.report_items WHERE id = '00000000-0000-0000-0000-000000000851'), 0,
   'super_admin reads no report content');
 
 -- 7) Unrelated santri sees nothing.
-SELECT vis_as('00000000-0000-0000-0000-000000000808');
+SELECT public.vis_as('00000000-0000-0000-0000-000000000808');
 SELECT is((SELECT count(*)::int FROM public.daily_reports WHERE id = '00000000-0000-0000-0000-000000000850'), 0,
   'unrelated santri sees no report metadata');
 SELECT is((SELECT count(*)::int FROM public.report_items WHERE id = '00000000-0000-0000-0000-000000000851'), 0,
   'unrelated santri reads no report content');
 
 -- 8) Expired assignment revokes content while the team metadata scope stays.
-SELECT vis_as('00000000-0000-0000-0000-000000000809');
+SELECT public.vis_as('00000000-0000-0000-0000-000000000809');
 SELECT is((SELECT count(*)::int FROM public.daily_reports WHERE id = '00000000-0000-0000-0000-000000000850'), 1,
   'koordinator with expired assignment keeps team metadata scope');
 SELECT is((SELECT count(*)::int FROM public.report_items WHERE id = '00000000-0000-0000-0000-000000000851'), 0,
   'expired assignment revokes report content');
 
 -- 9) report_reviews direct INSERT: active assignment plus koordinator/pengurus role, never self.
-SELECT vis_as('00000000-0000-0000-0000-000000000804');
+SELECT public.vis_as('00000000-0000-0000-0000-000000000804');
 SELECT throws_ok(
   $$ INSERT INTO public.report_reviews (report_id, revision_no, reviewer_id, decision, notes)
      VALUES ('00000000-0000-0000-0000-000000000850', 1, '00000000-0000-0000-0000-000000000804', 'approved', 'tanpa penugasan') $$,
   '42501', NULL, 'unassigned pengurus cannot insert a review row');
-SELECT vis_as('00000000-0000-0000-0000-000000000801');
+SELECT public.vis_as('00000000-0000-0000-0000-000000000801');
 SELECT throws_ok(
   $$ INSERT INTO public.report_reviews (report_id, revision_no, reviewer_id, decision, notes)
      VALUES ('00000000-0000-0000-0000-000000000850', 1, '00000000-0000-0000-0000-000000000801', 'approved', 'self review') $$,
   '42501', NULL, 'owner cannot insert a review row for own report');
-SELECT vis_as('00000000-0000-0000-0000-000000000802');
+SELECT public.vis_as('00000000-0000-0000-0000-000000000802');
 SELECT lives_ok(
   $$ INSERT INTO public.report_reviews (report_id, revision_no, reviewer_id, decision, notes)
      VALUES ('00000000-0000-0000-0000-000000000850', 1, '00000000-0000-0000-0000-000000000802', 'approved', 'dengan penugasan') $$,
@@ -174,13 +176,13 @@ SELECT is((SELECT count(*)::int FROM public.report_reviews WHERE report_id = '00
 
 -- 10) app.review_report must reject elevated-but-unassigned actors and honor assignments.
 SET LOCAL ROLE authenticated;
-SELECT vis_as('00000000-0000-0000-0000-000000000807');
+SELECT public.vis_as('00000000-0000-0000-0000-000000000807');
 SELECT is((app.review_report('00000000-0000-0000-0000-000000000850', 1, 'approved', '', 'vis-rpc-sa')->>'success'), 'false',
   'super_admin without assignment cannot review through the RPC');
-SELECT vis_as('00000000-0000-0000-0000-000000000806');
+SELECT public.vis_as('00000000-0000-0000-0000-000000000806');
 SELECT is((app.review_report('00000000-0000-0000-0000-000000000850', 1, 'approved', '', 'vis-rpc-yay')->>'success'), 'false',
   'yayasan read grant does not confer review rights (§3.4 report.review = assigned koordinator/pengurus)');
-SELECT vis_as('00000000-0000-0000-0000-000000000802');
+SELECT public.vis_as('00000000-0000-0000-0000-000000000802');
 SELECT is((app.review_report('00000000-0000-0000-0000-000000000850', 1, 'approved', '', 'vis-rpc-ko')->>'success'), 'true',
   'assigned koordinator reviews successfully through the RPC');
 
@@ -190,6 +192,8 @@ SELECT is((SELECT count(*)::int FROM public.daily_reports
              AND review_status = 'approved'
              AND reviewer_id = '00000000-0000-0000-0000-000000000802'), 1,
   'RPC approved the report on behalf of the assigned koordinator');
+
+DROP FUNCTION public.vis_as(uuid);
 
 SELECT * FROM finish();
 ROLLBACK;
