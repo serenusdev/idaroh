@@ -26,6 +26,16 @@ Satu perbaikan = satu cakupan kecil, di branch terisolasi sendiri.
 - Jangan push ke `origin/main` dan jangan `supabase db push --remote` tanpa persetujuan eksplisit operator.
 - Perubahan izin wajib disinkronkan serentak di 5 lapisan: Navigasi UI ↔ Server Action Guard ↔ Helper SQL ↔ RLS Policy ↔ RPC + tests — lalu PERMISSIONS.md ikut diperbarui.
 
+## Aturan otonomi & pengujian runtime (update operator 2026-11-22)
+
+- D1–D7 final → jalankan siklus Tahap A→B→C→D per item backlog secara berkesinambungan tanpa berhenti meminta persetujuan per item. Persetujuan tetap dibutuhkan hanya untuk: perubahan di luar cakupan yang dianalisis, atau tindakan yang menyentuh garis merah di bawah.
+- Runtime call / simulasi request sebagai user dan pemanggilan RPC langsung DIIZINKAN untuk memverifikasi bug dan hasil perbaikan.
+  - Utamakan lingkungan lokal/CI/staging.
+  - Jika verifikasi perlu menyentuh produksi setelah migrasi diterapkan: hanya akun uji coba khusus (bukan akun asli santri/pengurus/admin), dilarang mengubah/menghapus data pengguna asli, dan wajib cleanup data dummy setelahnya.
+- Dalam cakupan item, boleh memodifikasi file pemanggil (callers), `types.ts`, komponen UI terkait, dan file tes yang terdampak langsung, agar `npm run build` dan `tsc --noEmit` lulus bersih.
+- Boleh menjalankan `npm run build`, server lokal, Playwright E2E, dan simulasi runtime dengan akun uji terisolasi.
+- **Garis merah (tetap mutlak):** JANGAN push ke `origin/main`; JANGAN `supabase db push --remote` ke produksi; keduanya hanya atas perintah rilis akhir eksplisit dari operator. Push ke branch remediation sendiri diizinkan sebagai bagian dari siklus kerja (CI butuh branch remote).
+
 ## Aturan laporan
 
 - Bedakan: **terverifikasi** (sudah dijalankan/dites) vs **dugaan** (hanya dibaca).
