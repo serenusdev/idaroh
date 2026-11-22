@@ -45,11 +45,20 @@ ON CONFLICT (id) DO NOTHING;
 INSERT INTO public.profiles (id, email, full_name, status, member_type)
 VALUES
   ('$OWNER', 'drill-owner@example.test', 'Drill Owner', 'active', 'santri'),
-  ('$REVIEWER', 'drill-reviewer@example.test', 'Drill Reviewer', 'active', 'super_admin')
+  ('$REVIEWER', 'drill-reviewer@example.test', 'Drill Reviewer', 'active', 'pengurus')
 ON CONFLICT (id) DO NOTHING;
+-- SSOT alignment (SEC-03, PERMISSIONS.md 3.4): report.review is reserved for
+-- koordinator/pengurus holding an active reviewer_assignments row. The drill
+-- previously ran as an unassigned super_admin, which the hardened RPC rejects.
 INSERT INTO public.user_roles (user_id, role_id)
-SELECT '$REVIEWER', id FROM public.roles WHERE key = 'super_admin'
+SELECT '$REVIEWER', id FROM public.roles WHERE key = 'pengurus'
 ON CONFLICT DO NOTHING;
+INSERT INTO public.reviewer_assignments (reviewee_id, reviewer_id, kind, valid_from)
+SELECT '$OWNER', '$REVIEWER', 'report', CURRENT_DATE
+WHERE NOT EXISTS (
+  SELECT 1 FROM public.reviewer_assignments
+  WHERE reviewee_id = '$OWNER' AND reviewer_id = '$REVIEWER' AND kind = 'report'
+);
 INSERT INTO public.daily_reports (id, user_id, report_date, submission_status, review_status, revision_no)
 VALUES ('$REPORT', '$OWNER', DATE '2026-11-18', 'submitted', 'not_reviewed', 1);
 SQL

@@ -21,7 +21,8 @@ VALUES
   ('00000000-0000-0000-0000-000000000806', '00000000-0000-0000-0000-000000000000', 'authenticated', 'authenticated', 'vis-yayasan-granted@example.test', 'not-a-password', now(), '{}'::jsonb, '{}'::jsonb, now(), now()),
   ('00000000-0000-0000-0000-000000000807', '00000000-0000-0000-0000-000000000000', 'authenticated', 'authenticated', 'vis-sa@example.test', 'not-a-password', now(), '{}'::jsonb, '{}'::jsonb, now(), now()),
   ('00000000-0000-0000-0000-000000000808', '00000000-0000-0000-0000-000000000000', 'authenticated', 'authenticated', 'vis-outsider@example.test', 'not-a-password', now(), '{}'::jsonb, '{}'::jsonb, now(), now()),
-  ('00000000-0000-0000-0000-000000000809', '00000000-0000-0000-0000-000000000000', 'authenticated', 'authenticated', 'vis-ko-expired@example.test', 'not-a-password', now(), '{}'::jsonb, '{}'::jsonb, now(), now());
+  ('00000000-0000-0000-0000-000000000809', '00000000-0000-0000-0000-000000000000', 'authenticated', 'authenticated', 'vis-ko-expired@example.test', 'not-a-password', now(), '{}'::jsonb, '{}'::jsonb, now(), now()),
+  ('00000000-0000-0000-0000-000000000810', '00000000-0000-0000-0000-000000000000', 'authenticated', 'authenticated', 'vis-owner2@example.test', 'not-a-password', now(), '{}'::jsonb, '{}'::jsonb, now(), now());
 
 INSERT INTO public.profiles (id, email, full_name, status, member_type)
 VALUES
@@ -33,7 +34,8 @@ VALUES
   ('00000000-0000-0000-0000-000000000806', 'vis-yayasan-granted@example.test', 'Yayasan Grant', 'active', 'pengurus'),
   ('00000000-0000-0000-0000-000000000807', 'vis-sa@example.test', 'Super Admin Uji', 'active', 'pengurus'),
   ('00000000-0000-0000-0000-000000000808', 'vis-outsider@example.test', 'Santri Lain', 'active', 'santri'),
-  ('00000000-0000-0000-0000-000000000809', 'vis-ko-expired@example.test', 'Ko Expired', 'active', 'pengurus');
+  ('00000000-0000-0000-0000-000000000809', 'vis-ko-expired@example.test', 'Ko Expired', 'active', 'pengurus'),
+  ('00000000-0000-0000-0000-000000000810', 'vis-owner2@example.test', 'Santri Kedua', 'active', 'santri');
 
 INSERT INTO public.user_roles (user_id, role_id)
 VALUES
@@ -45,7 +47,8 @@ VALUES
   ('00000000-0000-0000-0000-000000000806', (SELECT id FROM public.roles WHERE key = 'yayasan')),
   ('00000000-0000-0000-0000-000000000807', (SELECT id FROM public.roles WHERE key = 'super_admin')),
   ('00000000-0000-0000-0000-000000000808', (SELECT id FROM public.roles WHERE key = 'santri')),
-  ('00000000-0000-0000-0000-000000000809', (SELECT id FROM public.roles WHERE key = 'koordinator'));
+  ('00000000-0000-0000-0000-000000000809', (SELECT id FROM public.roles WHERE key = 'koordinator')),
+  ('00000000-0000-0000-0000-000000000810', (SELECT id FROM public.roles WHERE key = 'santri'));
 
 -- Owner, koordinator 803 (never assigned) and koordinator 809 (expired
 -- assignment) share one team, so the koordinator team scope is exercised.
@@ -59,16 +62,23 @@ VALUES
   -- the koordinator app role comes from user_roles, team_role stays 'member'.
   ('00000000-0000-0000-0000-000000000840', '00000000-0000-0000-0000-000000000809', 'member');
 
+-- idx_reviewer_assignments_one_active allows a single ACTIVE assignment per
+-- reviewee, so the yayasan explicit grant is modeled on second owner 810.
 INSERT INTO public.reviewer_assignments (reviewee_id, reviewer_id, kind, valid_from, valid_to)
 VALUES
   ('00000000-0000-0000-0000-000000000801', '00000000-0000-0000-0000-000000000802', 'report', CURRENT_DATE - 5, NULL),
-  ('00000000-0000-0000-0000-000000000801', '00000000-0000-0000-0000-000000000806', 'report', CURRENT_DATE - 5, NULL),
+  ('00000000-0000-0000-0000-000000000810', '00000000-0000-0000-0000-000000000806', 'report', CURRENT_DATE - 5, NULL),
   ('00000000-0000-0000-0000-000000000801', '00000000-0000-0000-0000-000000000809', 'report', CURRENT_DATE - 30, CURRENT_DATE - 2);
 
 INSERT INTO public.daily_reports (id, user_id, report_date, submission_status, review_status, first_submitted_at)
 VALUES ('00000000-0000-0000-0000-000000000850', '00000000-0000-0000-0000-000000000801', DATE '2026-11-20', 'submitted', 'not_reviewed', now());
 INSERT INTO public.report_items (id, report_id, title, description, duration_minutes)
 VALUES ('00000000-0000-0000-0000-000000000851', '00000000-0000-0000-0000-000000000850', 'Setoran hafalan', 'Juz 30 ayat 1-20', 60);
+
+INSERT INTO public.daily_reports (id, user_id, report_date, submission_status, review_status, first_submitted_at)
+VALUES ('00000000-0000-0000-0000-000000000852', '00000000-0000-0000-0000-000000000810', DATE '2026-11-21', 'submitted', 'not_reviewed', now());
+INSERT INTO public.report_items (id, report_id, title, description, duration_minutes)
+VALUES ('00000000-0000-0000-0000-000000000853', '00000000-0000-0000-0000-000000000852', 'Kajian kitab', 'Fathul Qarib bab thaharah', 90);
 
 CREATE TEMP FUNCTION vis_as(p_user uuid) RETURNS void
 LANGUAGE sql
@@ -115,9 +125,9 @@ SELECT is((SELECT count(*)::int FROM public.daily_reports WHERE id = '00000000-0
 SELECT is((SELECT count(*)::int FROM public.report_items WHERE id = '00000000-0000-0000-0000-000000000851'), 0,
   'yayasan without explicit grant cannot read report content');
 SELECT vis_as('00000000-0000-0000-0000-000000000806');
-SELECT is((SELECT count(*)::int FROM public.daily_reports WHERE id = '00000000-0000-0000-0000-000000000850'), 1,
+SELECT is((SELECT count(*)::int FROM public.daily_reports WHERE id = '00000000-0000-0000-0000-000000000852'), 1,
   'explicitly granted yayasan sees report metadata');
-SELECT is((SELECT count(*)::int FROM public.report_items WHERE id = '00000000-0000-0000-0000-000000000851'), 1,
+SELECT is((SELECT count(*)::int FROM public.report_items WHERE id = '00000000-0000-0000-0000-000000000853'), 1,
   'explicitly granted yayasan reads report content (D1 explicit grant)');
 
 -- 6) Super Admin is denied everything report-related (§3.4 dashes).
