@@ -288,13 +288,19 @@ SELECT is((SELECT p.prosecdef FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pr
    WHERE n.nspname = 'app' AND p.proname = 'can_access_task'), true,
   'app.can_access_task stays SECURITY DEFINER');
 
-SET LOCAL ROLE authenticated;
+-- The state machine itself, called through the schema-qualified name: as the
+-- migration owner this probe reaches the trigger, which is the point—the
+-- legal-transition matrix must still refuse in_review back to todo. The
+-- authenticated path goes through public.task_transition and its grants are
+-- covered above.
+SET LOCAL ROLE postgres;
 SELECT public.tcmd_as('00000000-0000-0000-0000-000000000705');
 SELECT throws_ok(
-  $$SELECT public.task_transition('00000000-0000-0000-0000-000000000761', 'todo',
+  $$SELECT app.task_transition('00000000-0000-0000-0000-000000000761', 'todo',
        '00000000-0000-0000-0000-000000000705')$$,
   'P0001', NULL, 'the state machine still refuses in_review back to todo for every role');
 
+RESET ROLE;
 DROP FUNCTION public.tcmd_as(uuid);
 
 SELECT * FROM finish();
