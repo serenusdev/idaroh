@@ -18,8 +18,8 @@ INSERT INTO auth.users (
   email_confirmed_at, raw_app_meta_data, raw_user_meta_data,
   created_at, updated_at
 )
-SELECT id, '00000000-0000-0000-0000-000000000000', 'authenticated', 'authenticated',
-       email, 'not-a-password', now(), '{}'::jsonb, '{}'::jsonb, now(), now()
+SELECT seed.id::uuid, '00000000-0000-0000-0000-000000000000', 'authenticated', 'authenticated',
+       seed.email, 'not-a-password', now(), '{}'::jsonb, '{}'::jsonb, now(), now()
 FROM (VALUES
   ('00000000-0000-0000-0000-000000000a11', 'lib-santri@example.test'),
   ('00000000-0000-0000-0000-000000000a12', 'lib-santri-team-a@example.test'),
