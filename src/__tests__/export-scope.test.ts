@@ -262,7 +262,9 @@ describe("SEC-01 stored filters are applied", () => {
     const response = await download("/api/exports/export-1.csv", "export-1.csv");
     expect(response.status).toBe(200);
     expect(opsFor("tasks")).toContain('gte:["created_at","2026-10-31T17:00:00.000Z"]');
-    expect(opsFor("tasks")).toContain('lt:["created_at","2026-11-06T17:00:00.000Z"]');
+    // Exclusive upper bound is the start of the WIB day after date_to, so the
+    // whole final day stays inside the export.
+    expect(opsFor("tasks")).toContain('lt:["created_at","2026-11-07T17:00:00.000Z"]');
   });
 
   it("narrows the audit dataset for yayasan and keeps the CSV escaping", async () => {

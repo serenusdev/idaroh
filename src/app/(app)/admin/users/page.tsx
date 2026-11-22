@@ -7,6 +7,7 @@ import { Illustration } from "@/components/ui/illustration";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { Modal } from "@/components/ui/modal";
 import { useIdentity } from "@/components/auth/identity-context";
+import { EXPORT_ROLES } from "@/lib/export-policy";
 import {
   getAccountRequestsAction,
   getActiveUsersAction,
@@ -145,6 +146,11 @@ export default function AdminUsersPage() {
   if (!isAdminOrPengurus) {
     return <UnauthorizedState requiredRole="Super Admin / Pengurus / Yayasan" />;
   }
+
+  // §3.8 analytics.export excludes super_admin; the account recap download
+  // follows the same set that the action and route enforce.
+  const heldRoles = new Set<string>([currentUser.role, ...(currentUser.roles || [])]);
+  const canExportAccounts = EXPORT_ROLES.some((role) => heldRoles.has(role));
 
   const roleOptions = [
     { value: "santri", label: "Santri" },
@@ -919,15 +925,17 @@ export default function AdminUsersPage() {
         </button>
 
         <div className="flex items-center justify-between gap-2">
-          <button
-            className="flex-1 h-11 rounded-xl bg-card text-on-surface-variant font-label-sm text-label-sm shadow-sm flex items-center justify-center gap-1.5 active:bg-muted transition-all border border-border hover:bg-surface-container"
-            type="button"
-            onClick={exportUsers}
-            disabled={isExportingUsers}
-          >
-            <span className="material-symbols-outlined text-[18px]">download</span>
-            {isExportingUsers ? "Menyiapkan..." : "Unduh Rekap Akun"}
-          </button>
+          {canExportAccounts && (
+            <button
+              className="flex-1 h-11 rounded-xl bg-card text-on-surface-variant font-label-sm text-label-sm shadow-sm flex items-center justify-center gap-1.5 active:bg-muted transition-all border border-border hover:bg-surface-container"
+              type="button"
+              onClick={exportUsers}
+              disabled={isExportingUsers}
+            >
+              <span className="material-symbols-outlined text-[18px]">download</span>
+              {isExportingUsers ? "Menyiapkan..." : "Unduh Rekap Akun"}
+            </button>
+          )}
           <Link
             href="/admin/audit"
             className="flex-1 h-11 rounded-xl bg-card text-on-surface-variant font-label-sm text-label-sm shadow-sm flex items-center justify-center gap-1.5 active:bg-muted transition-all border border-border hover:bg-surface-container"
