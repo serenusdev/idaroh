@@ -48,6 +48,7 @@ describe("pending migration inventory", () => {
       "20261122000002_report_rls_review_scope.sql",
       "20261122000003_audit_read_scope_and_import_administration.sql",
       "20261122000004_task_command_scope_alignment.sql",
+      "20261122000005_resource_visibility_rules.sql",
     ]);
   });
 });
