@@ -50,7 +50,8 @@ describe("SEC-02 save_report WIB integrity contract", () => {
   it("keeps the duration regex fix in the replacement implementation", () => {
     // 20261102000006 shipped '\\d+$' (literal backslash + d) which never
     // matches; the SEC-02 rewrite must carry the single-backslash form.
-    expect(migration()).toContain("'\\d+$'");
+    expect(migration()).toContain("'^\\d+$'");
+    expect(migration()).not.toContain("'\\\\d+$'");
   });
 
   it("ends trusting the server action's own clock for the submitted value", () => {

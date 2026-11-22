@@ -554,21 +554,22 @@ export async function submitReportAction(
   const nowTotal = jakarta.totalMinutes;
   const deadlineTotal = deadlineH * 60 + deadlineM;
   const isLate = nowTotal > deadlineTotal;
-  const statusLabel = isLate ? `Terlambat (melewati ${deadlineDisplay})` : "Tepat Waktu";
 
+  let dbIsLate: boolean | undefined;
   try {
     const supabase = await createClient();
     const { data, error } = await supabase.rpc("save_report", {
       p_user_id: user.id,
       p_report_date: payload.reportDate,
       p_submission_status: "submitted",
-      p_is_late: isLate,
+      p_is_late: false,
       p_items: serializeReportItems(payload.items),
     });
     if (error) throw error;
     if (!data?.success) {
       return { success: false, message: data?.message || "Laporan tidak tersimpan.", isLate, submittedAtTime };
     }
+    dbIsLate = data?.is_late === true;
   } catch (err: any) {
     console.error("Failed to submit report to Supabase:", err);
     return {
@@ -579,10 +580,15 @@ export async function submitReportAction(
     };
   }
 
+  // SEC-02: the database clock owns is_late; the client-side computation above
+  // is only a pre-RPC fallback so failure paths still have something to show.
+  const finalIsLate = dbIsLate === true;
+  const dbStatusLabel = finalIsLate ? `Terlambat (melewati ${deadlineDisplay})` : "Tepat Waktu";
+
   return {
     success: true,
-    message: `Laporan aktivitas harian berhasil dikirim pada ${submittedAtTime} [${statusLabel}]. Menunggu peninjauan ustadz/pembina.`,
-    isLate,
+    message: `Laporan aktivitas harian berhasil dikirim pada ${submittedAtTime} [${dbStatusLabel}]. Menunggu peninjauan ustadz/pembina.`,
+    isLate: finalIsLate,
     submittedAtTime,
   };
 }
