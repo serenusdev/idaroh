@@ -50,6 +50,7 @@ describe("pending migration inventory", () => {
       "20261122000004_task_command_scope_alignment.sql",
       "20261122000005_resource_visibility_rules.sql",
       "20261122000006_event_occurrence_cancellation.sql",
+      "20261122000007_team_command_rpcs_and_resource_upsert.sql",
     ]);
   });
 });
