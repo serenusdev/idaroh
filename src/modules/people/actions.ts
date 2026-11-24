@@ -214,7 +214,9 @@ export async function setTeamCoordinatorAction(
   userId: string,
   userName: string
 ): Promise<{ success: boolean; message: string }> {
-  await requireRole(["super_admin", "pengurus"]);
+  // PPL-01: PERMISSIONS.md §3.7 grants yayasan `team.coordinator.set`, so the
+  // team commands may not stop at pengurus.
+  await requireRole(["super_admin", "yayasan", "pengurus"]);
   if (process.env.VITEST) {
     return {
       success: true,
@@ -246,35 +248,57 @@ export async function addTeamMemberAction(payload: {
   teamRole?: "member" | "coordinator" | "assistant";
   title?: string;
 }): Promise<{ success: boolean; message: string }> {
-  const admin = await requireRole(["super_admin", "pengurus"]);
+  // PPL-01: the whole command (membership row and its audit row) now runs
+  // inside app.team_member_set under the caller's own session, so no
+  // service-role client and no hand-written date exist here.
+  await requireRole(["super_admin", "yayasan", "pengurus"]);
   if (!payload.teamId || !payload.userId) return { success: false, message: "Tim dan anggota wajib dipilih." };
   if (payload.teamRole === "coordinator") {
     return setTeamCoordinatorAction(payload.teamId, payload.userId, "Anggota");
   }
   if (process.env.VITEST) return { success: true, message: "Anggota berhasil ditambahkan ke tim." };
-  const supabase = createAdminClient();
-  const existing = await supabase.from("team_members").select("id").eq("team_id", payload.teamId).eq("user_id", payload.userId).is("valid_to", null).maybeSingle();
-  if (existing.error) throw existing.error;
-  const mutation = existing.data
-    ? await supabase.from("team_members").update({ team_role: payload.teamRole || "member", title: payload.title || null }).eq("id", existing.data.id)
-    : await supabase.from("team_members").insert({ team_id: payload.teamId, user_id: payload.userId, team_role: payload.teamRole || "member", title: payload.title || null, valid_from: new Date().toISOString().slice(0, 10) });
-  if (mutation.error) throw mutation.error;
-  await supabase.from("audit_logs").insert({ event_name: "people.team_member_added", actor_id: admin.id, actor_name: admin.full_name, target_id: payload.userId, target_label: payload.teamId, action_detail: `Menambahkan anggota ke tim sebagai ${payload.teamRole || "member"}.` });
-  return { success: true, message: "Anggota berhasil ditambahkan ke tim." };
+  try {
+    const supabase = await createClient();
+    const { data, error } = await supabase.rpc("team_member_set", {
+      p_team_id: payload.teamId,
+      p_user_id: payload.userId,
+      p_team_role: payload.teamRole || "member",
+      p_title: payload.title || null,
+    });
+    if (error) throw error;
+    if (!data?.success) return { success: false, message: data?.message || "Anggota tidak dapat disimpan." };
+    return { success: true, message: data?.message || "Anggota berhasil ditambahkan ke tim." };
+  } catch (err) {
+    console.error("addTeamMemberAction failed:", err);
+    return { success: false, message: "Anggota gagal ditambahkan ke tim." };
+  }
 }
 
 export async function removeTeamMemberAction(teamId: string, userId: string): Promise<{ success: boolean; message: string }> {
-  const admin = await requireRole(["super_admin", "pengurus"]);
+  // app.team_member_end closes the membership with a WIB date and audits it in
+  // the same transaction; the history row is never deleted.
+  await requireRole(["super_admin", "yayasan", "pengurus"]);
+  if (!teamId || !userId) return { success: false, message: "Tim dan anggota wajib dipilih." };
   if (process.env.VITEST) return { success: true, message: "Keanggotaan tim diakhiri secara historis." };
-  const supabase = createAdminClient();
-  const { error } = await supabase.from("team_members").update({ valid_to: new Date().toISOString().slice(0, 10) }).eq("team_id", teamId).eq("user_id", userId).is("valid_to", null);
-  if (error) throw error;
-  await supabase.from("audit_logs").insert({ event_name: "people.team_member_removed", actor_id: admin.id, actor_name: admin.full_name, target_id: userId, target_label: teamId, action_detail: "Mengakhiri keanggotaan aktif tanpa menghapus riwayat." });
-  return { success: true, message: "Keanggotaan tim diakhiri; riwayat tetap tersimpan." };
+  try {
+    const supabase = await createClient();
+    const { data, error } = await supabase.rpc("team_member_end", {
+      p_team_id: teamId,
+      p_user_id: userId,
+    });
+    if (error) throw error;
+    if (!data?.success) return { success: false, message: data?.message || "Keanggotaan tim tidak dapat diakhiri." };
+    return { success: true, message: data?.message || "Keanggotaan tim diakhiri; riwayat tetap tersimpan." };
+  } catch (err) {
+    console.error("removeTeamMemberAction failed:", err);
+    return { success: false, message: "Keanggotaan tim gagal diakhiri." };
+  }
 }
 
 export async function assignReviewerAction(payload: { revieweeId: string; reviewerId: string; kind?: "report" | "attendance_correction" | "task"; reason?: string }): Promise<{ success: boolean; message: string }> {
-  const admin = await requireRole(["super_admin", "pengurus"]);
+  // PPL-01: yayasan assigns reviewers too (§3.7). The audit write moved into
+  // app.assign_reviewer so the assignment and its ledger row cannot split.
+  await requireRole(["super_admin", "yayasan", "pengurus"]);
   if (payload.revieweeId === payload.reviewerId) return { success: false, message: "Anggota tidak dapat menjadi reviewer dirinya sendiri." };
   if (process.env.VITEST) return { success: true, message: "Reviewer utama berhasil ditetapkan." };
   const supabase = await createClient();
@@ -287,8 +311,6 @@ export async function assignReviewerAction(payload: { revieweeId: string; review
   });
   if (error) throw error;
   if (!data?.success) return { success: false, message: data?.message || "Reviewer tidak dapat ditetapkan." };
-  const auditClient = createAdminClient();
-  await auditClient.from("audit_logs").insert({ event_name: "people.reviewer_assigned", actor_id: admin.id, actor_name: admin.full_name, target_id: payload.revieweeId, target_label: payload.reviewerId, action_detail: `Reviewer ${kind} ditetapkan dengan alasan: ${payload.reason || "-"}.` });
   return { success: true, message: "Reviewer utama berhasil ditetapkan." };
 }
 

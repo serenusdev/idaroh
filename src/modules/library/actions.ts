@@ -359,42 +359,28 @@ function normalizeResourceInput(payload: ResourceAdminInput): ResourceAdminInput
   };
 }
 
-function resourceRow(input: ResourceAdminInput, userId: string) {
+/**
+ * LIB-03: the payload app.resource_upsert reads. Actor ids and timestamps are
+ * deliberately absent — the RPC derives them from the session and the database
+ * clock, so a client can no longer stamp its own UTC date on a resource row.
+ */
+function resourceUpsertPayload(input: ResourceAdminInput) {
   return {
-    legacy_record_id: input.legacyRecordId || null,
+    legacy_record_id: input.legacyRecordId,
     name: input.name,
     slug: input.slug,
     description: input.description,
     category_id: input.categoryId,
     official_url: input.officialUrl,
-    visibility: input.visibility,
-    status: input.status,
     access_setup: input.accessSetup,
     how_to_use: input.howToUse,
     workflow_examples: input.workflowExamples,
     limitations_cautions: input.limitationsCautions,
     official_sources: input.officialSources,
     documentation_status: input.documentationStatus,
-    archived_at: input.status === "archived" ? new Date().toISOString() : null,
-    updated_by: userId,
-    updated_at: new Date().toISOString(),
+    visibility: input.visibility,
+    status: input.status,
   };
-}
-
-async function syncResourceTags(supabase: ReturnType<typeof createAdminClient>, resourceId: string, names: string[]) {
-  const normalized = names.map((name) => ({
-    name,
-    slug: name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, ""),
-  })).filter((tag) => tag.slug);
-  const { error: deleteError } = await supabase.from("resource_tags").delete().eq("resource_id", resourceId);
-  if (deleteError) throw deleteError;
-  if (!normalized.length) return;
-  const { error: upsertError } = await supabase.from("tags").upsert(normalized, { onConflict: "slug" });
-  if (upsertError) throw upsertError;
-  const { data: tags, error: tagsError } = await supabase.from("tags").select("id, slug").in("slug", normalized.map((tag) => tag.slug));
-  if (tagsError) throw tagsError;
-  const { error: linkError } = await supabase.from("resource_tags").insert((tags || []).map((tag: { id: string }) => ({ resource_id: resourceId, tag_id: tag.id })));
-  if (linkError) throw linkError;
 }
 
 function toResourceAdminInput(row: any, tags: string[] = []): ResourceAdminInput {
@@ -442,33 +428,30 @@ export async function saveResourceAction(
   payload: ResourceAdminInput,
   changeNote = "Pembaruan Resource Library"
 ): Promise<{ success: boolean; message: string; id?: string }> {
-  const user = await requireRole([...RESOURCE_ADMIN_ROLES]);
+  await requireRole([...RESOURCE_ADMIN_ROLES]);
   const input = normalizeResourceInput(payload);
   if (!input.name || !input.slug || !input.description) return { success: false, message: "Nama, slug, dan deskripsi wajib diisi." };
-  const supabase = createAdminClient();
+  if (process.env.VITEST) {
+    return { success: true, message: resourceId ? "Resource berhasil diperbarui." : "Resource berhasil dibuat.", id: resourceId ?? undefined };
+  }
   try {
-    let id = resourceId;
-    if (resourceId) {
-      const { error } = await supabase.from("resources").update(resourceRow(input, user.id)).eq("id", resourceId);
-      if (error) throw error;
-    } else {
-      const { data, error } = await supabase.from("resources").insert({ ...resourceRow(input, user.id), created_by: user.id }).select("id").single();
-      if (error) throw error;
-      id = data.id;
-    }
-    await syncResourceTags(supabase, id!, input.tags);
-    const { data: saved, error: savedError } = await supabase.from("resources").select("*").eq("id", id!).single();
-    if (savedError) throw savedError;
-    const { data: latest } = await supabase.from("resource_revisions").select("revision_no").eq("resource_id", id!).order("revision_no", { ascending: false }).limit(1).maybeSingle();
-    const { error: revisionError } = await supabase.from("resource_revisions").insert({
-      resource_id: id,
-      revision_no: Number(latest?.revision_no || 0) + 1,
-      snapshot: saved,
-      changed_by: user.id,
-      change_note: changeNote.trim() || "Pembaruan Resource Library",
+    // LIB-03 / LIB-08: resource row, tag book, revision and audit row are one
+    // statement set inside app.resource_upsert, run as the caller's session so
+    // auth.uid() is real and a half-written save cannot survive.
+    const supabase = await createClient();
+    const { data, error } = await supabase.rpc("resource_upsert", {
+      p_resource_id: resourceId,
+      p_row: resourceUpsertPayload(input),
+      p_tag_names: input.tags,
+      p_change_note: changeNote,
     });
-    if (revisionError) throw revisionError;
-    return { success: true, message: resourceId ? "Resource berhasil diperbarui." : "Resource berhasil dibuat.", id: id! };
+    if (error) throw error;
+    if (!data?.success) return { success: false, message: data?.message || "Gagal menyimpan resource." };
+    return {
+      success: true,
+      message: data?.message || (resourceId ? "Resource berhasil diperbarui." : "Resource berhasil dibuat."),
+      id: typeof data?.id === "string" ? data.id : (resourceId ?? undefined),
+    };
   } catch (error: any) {
     console.error("Failed to save resource:", error);
     return { success: false, message: error?.message || "Gagal menyimpan resource." };
@@ -608,6 +591,7 @@ export async function importResourcesCsvAction(fileName: string, csv: string): P
   if (process.env.VITEST) return { success: true, message: `${items.length} resource lolos validasi.`, totalRows: items.length, importedRows: items.length, rejectedRows: 0, errors: [] };
 
   const supabase = createAdminClient();
+  const session = await createClient();
   const batchId = randomUUID();
   const errors: string[] = [];
   let importedRows = 0;
@@ -637,26 +621,24 @@ export async function importResourcesCsvAction(fileName: string, csv: string): P
     });
     if (!input.name || !input.slug || !input.description) { errors.push(`Baris ${rowNo}: name, slug, dan description wajib diisi.`); continue; }
     try {
+      // The batch ledger and the id lookup stay on the service-role client: an
+      // import has to see rows RLS hides from the caller (drafts, restricted
+      // without a rule) to update rather than duplicate them. Every write goes
+      // through the caller's session so app.resource_upsert can guard, audit and
+      // roll the row back with its tags and revision (LIB-03 / LIB-08).
       const lookup = input.legacyRecordId
         ? supabase.from("resources").select("id").eq("legacy_record_id", input.legacyRecordId).maybeSingle()
         : supabase.from("resources").select("id").eq("slug", input.slug).maybeSingle();
       const { data: existing, error: lookupError } = await lookup;
       if (lookupError) throw lookupError;
-      let resourceId = existing?.id;
-      if (resourceId) {
-        const { error } = await supabase.from("resources").update(resourceRow(input, user.id)).eq("id", resourceId);
-        if (error) throw error;
-      } else {
-        const { data: inserted, error } = await supabase.from("resources").insert({ ...resourceRow(input, user.id), created_by: user.id }).select("id").single();
-        if (error) throw error;
-        resourceId = inserted.id;
-      }
-      await syncResourceTags(supabase, resourceId, input.tags);
-      const { data: saved, error: savedError } = await supabase.from("resources").select("*").eq("id", resourceId).single();
-      if (savedError) throw savedError;
-      const { data: latest } = await supabase.from("resource_revisions").select("revision_no").eq("resource_id", resourceId).order("revision_no", { ascending: false }).limit(1).maybeSingle();
-      const { error: revisionError } = await supabase.from("resource_revisions").insert({ resource_id: resourceId, revision_no: Number(latest?.revision_no || 0) + 1, snapshot: saved, changed_by: user.id, change_note: `Impor CSV batch ${batchId}` });
-      if (revisionError) throw revisionError;
+      const { data, error } = await session.rpc("resource_upsert", {
+        p_resource_id: existing?.id ?? null,
+        p_row: resourceUpsertPayload(input),
+        p_tag_names: input.tags,
+        p_change_note: `Impor CSV batch ${batchId}`,
+      });
+      if (error) throw error;
+      if (!data?.success) throw new Error(data?.message || "baris gagal disimpan");
       importedRows += 1;
     } catch (error: any) {
       errors.push(`Baris ${rowNo}: ${error?.message || "gagal disimpan"}`);

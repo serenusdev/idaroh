@@ -48,6 +48,17 @@ describe("PPL-01 — team and reviewer commands follow PERMISSIONS.md §3.7", ()
     }
   });
 
+  it("opens the admin people page itself to yayasan", () => {
+    // Five-layer sync (§3.7): the server action guard, the RPC and the page gate
+    // all deny or admit the same role set, and a grant can live in roles[].
+    const page = readOrEmpty("src/app/(app)/admin/people/page.tsx");
+    expect(page, "admin people page is missing").not.toBe("");
+    expect(page).toContain('["super_admin", "yayasan", "pengurus"]');
+    expect(page).toContain("user.roles");
+    expect(page).toContain('requiredRole="Super Admin / Yayasan / Pengurus"');
+    expect(page).not.toContain('["super_admin", "pengurus"].includes(user.role)');
+  });
+
   it("guards the team commands on explicit role keys instead of a rank", () => {
     for (const name of [
       "setTeamCoordinatorAction",
