@@ -128,14 +128,17 @@ SELECT throws_ok(
   'even a manager cannot write an exception row directly');
 
 -- 5-16: the guard and the series arithmetic. Every one of these must refuse
--- without leaving a row behind.
-SELECT public.schocc_as('00000000-0000-0000-0000-000000000b11');
+-- without leaving a row behind. The two counting assertions run as pengurus,
+-- because under the read policy a santri sees none of these rows at all.
+SELECT public.schocc_as('00000000-0000-0000-0000-000000000b13');
 SELECT is((SELECT count(*)::int FROM public.event_occurrence_exceptions), 1,
   'nothing has been cancelled yet besides the fixture');
 
+SELECT public.schocc_as('00000000-0000-0000-0000-000000000b11');
 SELECT is((public.event_occurrence_set('00000000-0000-0000-0000-000000000b21', CURRENT_DATE + 9)->>'success'), 'false',
   'santri is refused by the occurrence RPC');
 
+SELECT public.schocc_as('00000000-0000-0000-0000-000000000b13');
 SELECT is((SELECT count(*)::int FROM public.event_occurrence_exceptions), 1,
   'a refused call writes no exception');
 
