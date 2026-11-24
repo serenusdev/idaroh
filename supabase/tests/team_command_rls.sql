@@ -72,7 +72,8 @@ AS $$
                     json_build_object('sub', p_user::text, 'role', 'authenticated')::text, true);
 $$;
 
-SET LOCAL ROLE authenticated;
+-- Assertions 1-4 read pg_proc, whose prosecdef/proconfig columns are only
+-- reliable for the table owner, so the caller identity starts at assertion 5.
 
 -- 1-2: the two new command entry points exist.
 SELECT ok(EXISTS (SELECT 1 FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
@@ -93,6 +94,7 @@ SELECT ok((SELECT array_to_string(p.proconfig, ',') LIKE '%search_path=%'
 
 -- 5-6: yayasan may appoint a coordinator (§3.7 team.coordinator.set = all) and
 -- the appointment is audited in the same transaction as the seat change.
+SET LOCAL ROLE authenticated;
 SELECT public.pplcmd_as('00000000-0000-0000-0000-000000000854');
 SELECT is((public.team_set_coordinator('00000000-0000-0000-0000-000000000840',
         '00000000-0000-0000-0000-000000000853')->>'success'), 'true',
@@ -111,6 +113,7 @@ SELECT public.pplcmd_as('00000000-0000-0000-0000-000000000855');
 SELECT is((public.team_set_coordinator('00000000-0000-0000-0000-000000000840',
         '00000000-0000-0000-0000-000000000852')->>'success'), 'true',
   'super admin can set a team coordinator');
+RESET ROLE;
 SELECT is((SELECT string_agg(user_id::text, ',') FROM public.team_members
            WHERE team_id = '00000000-0000-0000-0000-000000000840'
              AND team_role = 'coordinator' AND valid_to IS NULL),
@@ -118,6 +121,7 @@ SELECT is((SELECT string_agg(user_id::text, ',') FROM public.team_members
   'exactly one active coordinator remains and it is the newly appointed one');
 
 -- 9-10: the roles §3.7 excludes stay excluded.
+SET LOCAL ROLE authenticated;
 SELECT public.pplcmd_as('00000000-0000-0000-0000-000000000852');
 SELECT is((public.team_set_coordinator('00000000-0000-0000-0000-000000000840',
         '00000000-0000-0000-0000-000000000857')->>'success'), 'false',
@@ -155,6 +159,7 @@ SELECT is((public.team_set_coordinator('00000000-0000-0000-0000-000000000899',
 SELECT is((public.team_member_set('00000000-0000-0000-0000-000000000840',
         '00000000-0000-0000-0000-000000000857', 'member', 'Anggota Baru')->>'success'), 'true',
   'yayasan can add a member to a team');
+RESET ROLE;
 SELECT is((SELECT count(*)::int FROM public.team_members
            WHERE team_id = '00000000-0000-0000-0000-000000000840'
              AND user_id = '00000000-0000-0000-0000-000000000857'
@@ -162,10 +167,12 @@ SELECT is((SELECT count(*)::int FROM public.team_members
   'the new membership opens on the WIB calendar date');
 
 -- 17-18: a repeat add updates the active row instead of stacking duplicates.
+SET LOCAL ROLE authenticated;
 SELECT public.pplcmd_as('00000000-0000-0000-0000-000000000853');
 SELECT is((public.team_member_set('00000000-0000-0000-0000-000000000840',
         '00000000-0000-0000-0000-000000000857', 'assistant', 'Wakil')->>'success'), 'true',
   'pengurus can change an existing members role');
+RESET ROLE;
 SELECT is((SELECT string_agg(team_role || coalesce(':' || title, ''), ';')
              FROM public.team_members
            WHERE team_id = '00000000-0000-0000-0000-000000000840'
@@ -175,6 +182,7 @@ SELECT is((SELECT string_agg(team_role || coalesce(':' || title, ''), ';')
 
 -- 19-21: the refusals that used to be open because the caller wrote the table
 -- directly from the application.
+SET LOCAL ROLE authenticated;
 SELECT is((public.team_member_set('00000000-0000-0000-0000-000000000840',
         '00000000-0000-0000-0000-000000000857', 'coordinator', NULL)->>'success'), 'false',
   'the coordinator seat stays reserved for the coordinator RPC');
@@ -190,10 +198,12 @@ SELECT is((public.team_member_set('00000000-0000-0000-0000-000000000840',
 SELECT is((public.team_member_end('00000000-0000-0000-0000-000000000840',
         '00000000-0000-0000-0000-000000000857')->>'success'), 'true',
   'pengurus can end an active membership');
+RESET ROLE;
 SELECT is((SELECT count(*)::int FROM public.team_members
            WHERE team_id = '00000000-0000-0000-0000-000000000840'
              AND user_id = '00000000-0000-0000-0000-000000000857'), 1,
   'the departed membership is dated closed, never deleted');
+SET LOCAL ROLE authenticated;
 SELECT is((public.team_member_end('00000000-0000-0000-0000-000000000840',
         '00000000-0000-0000-0000-000000000857')->>'message'), 'Keanggotaan aktif tidak ditemukan.',
   'ending an already closed membership is refused instead of silently succeeding');

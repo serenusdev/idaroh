@@ -122,14 +122,17 @@ SELECT is((public.resource_upsert(NULL,
   'Sesi tidak valid atau akun tidak aktif.',
   'a pengurus on a pending account cannot save a resource');
 
--- 8-13: yayasan creates a resource and the whole bundle lands together.
-SELECT public.ups_as('00000000-0000-0000-0000-000000000904');
+-- 8-13: yayasan creates a resource and the whole bundle lands together. The
+-- pre-check reads as superuser: under the caller identity a hidden row and an
+-- absent row give the same count, so it would prove nothing.
+RESET ROLE;
 SELECT is((SELECT count(*)::int FROM public.resources
            WHERE slug = 'r-baru-yayasan'), 0,
   'the fixture starts without the new resource');
 
 -- 9-13 are driven by one call so the row, its tags, its revision and its audit
 -- entry are proven to come from the same statement.
+SET LOCAL ROLE authenticated;
 SELECT public.ups_as('00000000-0000-0000-0000-000000000904');
 SELECT is((public.resource_upsert(NULL,
          jsonb_build_object('name', 'Panduan Baru', 'slug', 'r-baru-yayasan',
@@ -200,6 +203,10 @@ SELECT is((public.resource_upsert('00000000-0000-0000-0000-000000000920',
                             'description', 'Punya satu tag.', 'visibility', 'internal', 'status', 'published'),
          ARRAY['Baru'], 'Pembaruan tunggal')->>'revision_no'), '2',
   'the second save appends revision 2 instead of racing revision 1');
+-- The write ran as the caller; the ledger reads below are superuser checks, so
+-- the identity switch ends first. On the caller's own identity RLS hides
+-- resource_revisions and audit_logs, which is the behaviour being proven.
+RESET ROLE;
 SELECT is((SELECT count(*)::int FROM public.resource_revisions
            WHERE resource_id = '00000000-0000-0000-0000-000000000920'), 2,
   'both revisions survive the update');
