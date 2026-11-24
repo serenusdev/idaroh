@@ -12,6 +12,11 @@ import { createClient } from "@/lib/supabase/client";
 import { cleanupPushNotifications } from "@/lib/notifications";
 import { AUDIT_READ_ROLES, holdsRole } from "@/lib/export-policy";
 import { holdsTaskRole, TASK_READ_ROLES } from "@/lib/task-policy";
+import {
+  AGENDA_MANAGER_ROLES,
+  AGENDA_WRITE_ROLES,
+  holdsScheduleRole,
+} from "@/lib/schedule-policy";
 
 interface DesktopSidebarProps {
   user: UserProfile;
@@ -35,10 +40,12 @@ export function DesktopSidebar({ user }: DesktopSidebarProps) {
     router.refresh();
   };
 
-  const isAdminOrPengurus =
-    user.role === "super_admin" ||
-    user.role === "yayasan" ||
-    user.role === "pengurus";
+  const isAdminOrPengurus = holdsScheduleRole(user, AGENDA_MANAGER_ROLES);
+
+  // §3.6 gives a koordinator schedule.event.* at scope own but no other administrative
+  // surface, and §2 rule 8 forbids a link that ends in "Unauthorized", so the agenda
+  // entry is decided by every role the account holds rather than the primary one.
+  const canWriteAgenda = holdsScheduleRole(user, AGENDA_WRITE_ROLES);
 
   // §3.5 gives every role except super_admin a task read scope, and §3.8 keeps
   // admin.audit.read with yayasan/super_admin only. A link the database would
@@ -52,6 +59,11 @@ export function DesktopSidebar({ user }: DesktopSidebarProps) {
     { label: "Review Laporan", href: "/review", icon: "fact_check" },
     ...(canViewTasks ? [{ label: "Tugas & Proyek", href: "/tugas", icon: "task_alt" }] : []),
     { label: "Jadwal & Agenda", href: "/jadwal", icon: "calendar_month" },
+    // A manager gets the command page inside Administrasi; a plain koordinator has one
+    // agenda entry here and none of the other administrative surfaces (§3.6).
+    ...(canWriteAgenda && !isAdminOrPengurus
+      ? [{ label: "Kelola Jadwal Agenda", href: "/admin/jadwal", icon: "edit_calendar" }]
+      : []),
   ];
 
   const libraryNav = [

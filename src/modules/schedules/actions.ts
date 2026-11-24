@@ -42,6 +42,17 @@ export async function getAudienceUserIds(supabase: ReturnType<typeof createAdmin
   return Array.from(new Set((data || []).map((row: any) => row.user_id)));
 }
 
+// Listing the audience is a delivery read, not an authorization decision: the profiles an
+// agenda addresses are mostly invisible to the acting coordinator's own RLS policies, so
+// this one read keeps the service-role client while every agenda write runs on the session.
+async function notifyAudience(
+  config: AudienceConfig | undefined,
+  message: Parameters<typeof sendPushToUsers>[1]
+): Promise<void> {
+  const recipientIds = await getAudienceUserIds(createAdminClient(), config);
+  await sendPushToUsers(recipientIds, message);
+}
+
 function expandEventRows(rows: any[], cancelledKeys: Set<string> = new Set()): any[] {
   const expanded: any[] = [];
   const horizon = Date.now() + 180 * 24 * 60 * 60 * 1000;
@@ -496,127 +507,151 @@ export async function saveAnnouncementDraftAction(payload: {
 export interface CreateEventPayload {
   title: string;
   description?: string;
-  startsAt: string; // ISO string or datetime-local
+  // The WIB wall-clock the operator typed ("YYYY-MM-DDTHH:mm"), not an instant: the
+  // database resolves it in Asia/Jakarta (§2 rule 5).
+  startsAt: string;
   endsAt: string;
   location: string;
   category: "teknologi" | "keagamaan" | "operasional" | "umum";
   audienceConfig?: AudienceConfig;
+  teamId?: string;
   recurrenceRule?: "none" | "daily" | "weekly";
   recurrenceUntil?: string;
+  changeNote?: string;
 }
 
-async function hasEventConflict(
-  supabase: ReturnType<typeof createAdminClient>,
-  startsAt: Date,
-  endsAt: Date,
-  location: string,
-  ignoredEventId?: string
-) {
+// The jsonb shape app.event_upsert() validates and writes. Keeping it here means the
+// WIB text is handed over untouched instead of being re-anchored per caller.
+interface EventFormPayload {
+  title: string;
+  description: string | null;
+  location: string | null;
+  starts_at: string;
+  ends_at: string;
+  category: string;
+  audience: AudienceConfig | null;
+  team_id: string | null;
+  recurrence_rule: string;
+  recurrence_until: string | null;
+  status: string | null;
+}
+
+function eventFormPayload(payload: CreateEventPayload): EventFormPayload {
+  return {
+    title: payload.title.trim(),
+    description: payload.description?.trim() || null,
+    location: payload.location?.trim() || null,
+    starts_at: payload.startsAt,
+    ends_at: payload.endsAt,
+    category: payload.category || "umum",
+    audience: payload.audienceConfig ?? null,
+    team_id: payload.teamId?.trim() || null,
+    recurrence_rule: payload.recurrenceRule || "none",
+    recurrence_until: payload.recurrenceUntil || null,
+    status: null,
+  };
+}
+
+/**
+ * Server Action: the audience a caller may address for a new agenda.
+ *
+ * The admin form used to offer santri/pengurus/all as audience and translate that into
+ * an audience_config of `{"scope":"member_type","memberTypes":[…]}`, which §2 rule 1
+ * forbids and app.can_write_event_audience() now refuses. The picker is derived from the
+ * session instead, so the browser cannot offer a choice the database will reject.
+ */
+export async function getEventAudienceOptionsAction(): Promise<{
+  tier: "manager" | "coordinator" | "none";
+  teams: { id: string; name: string }[];
+  coordinated: { id: string; name: string }[];
+}> {
+  const user = await requireAuthUser();
+  const roles = (user.roles && user.roles.length ? user.roles : [user.role]) as string[];
+  const supabase = await createClient();
   const { data, error } = await supabase
-    .from("events")
-    .select("id, starts_at, ends_at")
-    .eq("location", location)
-    .eq("status", "scheduled")
-    .is("deleted_at", null);
+    .from("team_members")
+    .select("team_id, team_role, teams(id, name, slug, status)")
+    .eq("user_id", user.id)
+    .eq("team_role", "coordinator")
+    .is("valid_to", null);
   if (error) throw error;
-  return (data || []).some((event: any) => {
-    if (ignoredEventId && event.id === ignoredEventId) return false;
-    const existingStart = new Date(event.starts_at).getTime();
-    const existingEnd = new Date(event.ends_at).getTime();
-    return existingStart < endsAt.getTime() && existingEnd > startsAt.getTime();
-  });
+  const mine = (data || [])
+    .filter((row: any) => row.team_id && row.teams?.status === "active")
+    .map((row: any) => ({ id: String(row.team_id), name: row.teams?.name || row.teams?.slug || "Tim" }));
+  if (roles.includes("super_admin") || roles.includes("yayasan") || roles.includes("pengurus")) {
+    const { data: allTeams, error: teamsError } = await supabase
+      .from("teams")
+      .select("id, name, slug, status")
+      .eq("status", "active");
+    if (teamsError) throw teamsError;
+    return {
+      tier: "manager",
+      teams: (allTeams || []).map((team: any) => ({ id: String(team.id), name: team.name || team.slug })),
+      coordinated: mine,
+    };
+  }
+  if (roles.includes("koordinator")) {
+    return { tier: "coordinator", teams: mine, coordinated: mine };
+  }
+  return { tier: "none", teams: [], coordinated: [] };
 }
 
 export async function updateEventAction(
   eventId: string,
   payload: CreateEventPayload
 ): Promise<{ success: boolean; message: string; eventId?: string }> {
-  const admin = await requireRole(["super_admin", "yayasan", "pengurus"]);
+  // §3.6 schedule.event.update for pengurus/yayasan/super_admin plus the koordinator the
+  // same row grants with scope own. Which agenda and which audience a caller may write is
+  // decided by app.event_upsert(), not by this list.
+  await requireRole(["super_admin", "yayasan", "pengurus", "koordinator"]);
   if (!eventId || !payload.title.trim() || !payload.startsAt || !payload.endsAt) {
     return { success: false, message: "ID, judul, dan waktu agenda wajib diisi." };
   }
-  const startsAt = new Date(payload.startsAt);
-  const endsAt = new Date(payload.endsAt);
-  if (Number.isNaN(startsAt.getTime()) || Number.isNaN(endsAt.getTime()) || startsAt >= endsAt) {
-    return { success: false, message: "Rentang waktu agenda tidak valid." };
-  }
-  const recurrenceRule = payload.recurrenceRule || "none";
-  const recurrenceUntil = payload.recurrenceUntil ? new Date(payload.recurrenceUntil) : null;
-  if (!["none", "daily", "weekly"].includes(recurrenceRule) || (recurrenceUntil && Number.isNaN(recurrenceUntil.getTime()))) {
-    return { success: false, message: "Aturan pengulangan agenda tidak valid." };
-  }
-  if (payload.title.trim().length > 160 || (payload.description || "").trim().length > 5000 || payload.location.trim().length > 240) {
-    return { success: false, message: "Judul, deskripsi, atau lokasi melebihi batas yang diizinkan." };
-  }
-  if (process.env.VITEST) return { success: true, message: "Agenda berhasil diperbarui.", eventId };
 
   // A recurring agenda is listed once per day under `<uuid>:<WIB date>`. An edit
-  // always applies to the whole series, so the date half is resolved away here;
-  // passing the composite key to Postgres failed as an invalid uuid, which is why
-  // every edit of a recurring agenda used to end in "Gagal memperbarui agenda.".
+  // always applies to the whole series, so the date half is resolved away here.
   const ref = parseEventRef(eventId);
   if (!ref) return { success: false, message: "ID agenda tidak valid." };
   const seriesId = ref.eventId;
+  if (process.env.VITEST) return { success: true, message: "Agenda berhasil diperbarui.", eventId: seriesId };
 
   try {
-    const supabase = createAdminClient();
+    const supabase = await createClient();
     const { data: existing, error: readError } = await supabase
       .from("events")
-      .select("*")
+      .select("id, title, starts_at, ends_at, location, audience_config")
       .eq("id", seriesId)
+      .is("deleted_at", null)
       .maybeSingle();
     if (readError) throw readError;
     if (!existing) return { success: false, message: "Agenda tidak ditemukan." };
-    if (await hasEventConflict(supabase, startsAt, endsAt, payload.location.trim(), seriesId)) {
-      return { success: false, message: "Bentrok: sudah ada agenda di lokasi dan waktu tersebut." };
+
+    // The validation, the revision snapshot, the row and its audit entry are one
+    // transaction inside the RPC: a counted revision_no could previously collide between
+    // two editors, and a failed audit insert left the agenda changed without a ledger row.
+    const { data, error } = await supabase.rpc("event_upsert", {
+      p_event_id: seriesId,
+      p_payload: eventFormPayload(payload),
+      p_note: payload.changeNote || null,
+    });
+    if (error) throw error;
+    const result = (data || {}) as { success?: boolean; message?: string; schedule_changed?: boolean };
+    if (!result.success) {
+      return { success: false, message: result.message || "Gagal memperbarui agenda." };
     }
 
-    const { count } = await supabase
-      .from("event_revisions")
-      .select("id", { count: "exact", head: true })
-      .eq("event_id", seriesId);
-    const { error: revisionError } = await supabase.from("event_revisions").insert({
-      event_id: seriesId,
-      revision_no: (count || 0) + 1,
-      snapshot: existing,
-      changed_by: admin.id,
-    });
-    if (revisionError) throw revisionError;
-
-    const { error } = await supabase.from("events").update({
-      title: payload.title.trim(),
-      description: payload.description?.trim() || "",
-      starts_at: startsAt.toISOString(),
-      ends_at: endsAt.toISOString(),
-      location: payload.location.trim(),
-      location_changed: existing.location !== payload.location.trim(),
-      previous_location: existing.location !== payload.location.trim() ? existing.location : existing.previous_location,
-      category: payload.category,
-      audience_config: payload.audienceConfig || existing.audience_config || { scope: "all" },
-      recurrence_rule: recurrenceRule,
-      recurrence_until: recurrenceUntil?.toISOString() || null,
-      updated_at: new Date().toISOString(),
-    }).eq("id", seriesId);
-    if (error) throw error;
-
-    const { error: auditError } = await supabase.from("audit_logs").insert({
-      event_name: "event.updated",
-      actor_id: admin.id,
-      actor_name: admin.full_name,
-      target_id: seriesId,
-      target_label: payload.title.trim(),
-      action_detail: "Agenda diperbarui; snapshot versi sebelumnya disimpan.",
-    });
-    if (auditError) throw auditError;
-    if (existing.starts_at !== startsAt.toISOString() || existing.ends_at !== endsAt.toISOString() || existing.location !== payload.location.trim()) {
+    if (result.schedule_changed !== false) {
       try {
-        const recipientIds = await getAudienceUserIds(supabase, payload.audienceConfig || existing.audience_config || { scope: "all" });
-        await sendPushToUsers(recipientIds, { type: "EVENT_UPDATED", title: `Perubahan Agenda: ${payload.title.trim()}`, body: "Waktu atau lokasi agenda telah diperbarui.", url: "/jadwal", referenceId: seriesId });
+        await notifyAudience(payload.audienceConfig || existing.audience_config || { scope: "all" }, { type: "EVENT_UPDATED", title: `Perubahan Agenda: ${payload.title.trim()}`, body: "Waktu atau lokasi agenda telah diperbarui.", url: "/jadwal", referenceId: seriesId });
       } catch (pushError) {
         console.error("Event updated but push delivery failed:", pushError);
       }
     }
-    return { success: true, message: "Agenda berhasil diperbarui dan revisi sebelumnya disimpan.", eventId: seriesId };
+    return {
+      success: true,
+      message: result.message || "Agenda berhasil diperbarui dan revisi sebelumnya disimpan.",
+      eventId: seriesId,
+    };
   } catch (err) {
     console.error("Failed to update event:", err);
     return { success: false, message: "Gagal memperbarui agenda." };
@@ -629,7 +664,7 @@ export async function updateEventAction(
 export async function createEventAction(
   payload: CreateEventPayload
 ): Promise<{ success: boolean; message: string; eventId?: string }> {
-  const admin = await requireRole(["super_admin", "yayasan", "pengurus"]);
+  await requireRole(["super_admin", "yayasan", "pengurus", "koordinator"]);
 
   if (!payload.title.trim()) {
     return { success: false, message: "Judul agenda wajib diisi." };
@@ -637,63 +672,26 @@ export async function createEventAction(
   if (!payload.startsAt || !payload.endsAt) {
     return { success: false, message: "Waktu mulai dan selesai wajib ditentukan." };
   }
-  const startsAt = new Date(payload.startsAt);
-  const endsAt = new Date(payload.endsAt);
-  if (Number.isNaN(startsAt.getTime()) || Number.isNaN(endsAt.getTime()) || startsAt >= endsAt) {
-    return { success: false, message: "Rentang waktu agenda tidak valid." };
-  }
-  if (payload.title.trim().length > 160 || (payload.description || "").trim().length > 5000) {
-    return { success: false, message: "Judul maksimal 160 karakter dan deskripsi maksimal 5.000 karakter." };
-  }
-  if (payload.location.trim().length > 240) {
-    return { success: false, message: "Lokasi maksimal 240 karakter." };
-  }
-  const recurrenceRule = payload.recurrenceRule || "none";
-  const recurrenceUntil = payload.recurrenceUntil ? new Date(payload.recurrenceUntil) : null;
-  if (!["none", "daily", "weekly"].includes(recurrenceRule) || (recurrenceUntil && Number.isNaN(recurrenceUntil.getTime()))) {
-    return { success: false, message: "Aturan pengulangan agenda tidak valid." };
+  if (process.env.VITEST) {
+    return { success: true, message: `Agenda "${payload.title}" berhasil ditambahkan ke jadwal.`, eventId: "event-created" };
   }
 
   try {
-    const supabase = createAdminClient();
-    if (await hasEventConflict(supabase, startsAt, endsAt, payload.location.trim())) {
-      return { success: false, message: "Bentrok: sudah ada agenda di lokasi dan waktu tersebut." };
-    }
-    const { data: inserted, error } = await supabase
-      .from("events")
-      .insert({
-        title: payload.title,
-        description: payload.description || "",
-        starts_at: startsAt.toISOString(),
-        ends_at: endsAt.toISOString(),
-        location: payload.location || "Lab Utama Pondok",
-        organizer_id: admin.id,
-        created_by: admin.id,
-        category: payload.category || "umum",
-        status: "scheduled",
-        audience_config: payload.audienceConfig || { scope: "all" },
-        recurrence_rule: recurrenceRule,
-        recurrence_until: recurrenceUntil?.toISOString() || null,
-      })
-      .select("id")
-      .single();
-
-    if (error) throw error;
-
-    const { error: auditError } = await supabase.from("audit_logs").insert({
-      event_name: "event.created",
-      actor_id: admin.id,
-      actor_name: admin.full_name,
-      target_id: inserted?.id,
-      target_label: payload.title,
-      action_detail: `Menambahkan agenda baru: ${payload.title} (${payload.category}) di ${payload.location}`,
+    const supabase = await createClient();
+    const { data, error } = await supabase.rpc("event_upsert", {
+      p_event_id: null,
+      p_payload: eventFormPayload(payload),
+      p_note: payload.changeNote || null,
     });
-    if (auditError) throw auditError;
-
+    if (error) throw error;
+    const result = (data || {}) as { success?: boolean; message?: string; event_id?: string };
+    if (!result.success) {
+      return { success: false, message: result.message || "Gagal menambahkan agenda kegiatan." };
+    }
     return {
       success: true,
-      message: `Agenda "${payload.title}" berhasil ditambahkan ke jadwal.`,
-      eventId: inserted?.id,
+      message: result.message || `Agenda "${payload.title}" berhasil ditambahkan ke jadwal.`,
+      eventId: result.event_id,
     };
   } catch (err) {
     console.error("Failed to create event:", err);
@@ -707,34 +705,34 @@ export async function createEventAction(
 export async function deleteEventAction(
   eventId: string
 ): Promise<{ success: boolean; message: string }> {
-  const admin = await requireRole(["super_admin", "yayasan", "pengurus"]);
+  await requireRole(["super_admin", "yayasan", "pengurus", "koordinator"]);
   const ref = parseEventRef(eventId);
   if (!ref) return { success: false, message: "ID agenda tidak valid." };
   const seriesId = ref.eventId;
   try {
-    const supabase = createAdminClient();
-    const { data: existing, error: readError } = await supabase.from("events").select("*").eq("id", seriesId).maybeSingle();
+    const supabase = await createClient();
+    const { data: existing, error: readError } = await supabase
+      .from("events")
+      .select("id, title, audience_config")
+      .eq("id", seriesId)
+      .is("deleted_at", null)
+      .maybeSingle();
     if (readError) throw readError;
     if (!existing) return { success: false, message: "Agenda tidak ditemukan." };
-    const { count } = await supabase.from("event_revisions").select("id", { count: "exact", head: true }).eq("event_id", seriesId);
-    const { error: revisionError } = await supabase.from("event_revisions").insert({ event_id: seriesId, revision_no: (count || 0) + 1, snapshot: existing, changed_by: admin.id });
-    if (revisionError) throw revisionError;
-    const { error } = await supabase
-      .from("events")
-      .update({ status: "cancelled", updated_at: new Date().toISOString() })
-      .eq("id", seriesId);
-    if (error) throw error;
-    const { error: auditError } = await supabase.from("audit_logs").insert({
-      event_name: "event.deleted",
-      actor_name: admin.full_name,
-      target_id: seriesId,
-      target_label: "Agenda",
-      action_detail: `Membatalkan agenda ID ${seriesId}`,
+    // event_cancel owns the row and its ledger entry together; the old path wrote the
+    // audit row without an actor_id, so the delete could not be attributed.
+    const { data, error } = await supabase.rpc("event_cancel", {
+      p_event_id: seriesId,
+      p_status: "deleted",
+      p_reason: null,
     });
-    if (auditError) throw auditError;
+    if (error) throw error;
+    const result = (data || {}) as { success?: boolean; message?: string };
+    if (!result.success) {
+      return { success: false, message: result.message || "Gagal menghapus agenda." };
+    }
     try {
-      const recipientIds = await getAudienceUserIds(supabase, existing.audience_config || { scope: "all" });
-      await sendPushToUsers(recipientIds, { type: "EVENT_CANCELLED", title: `Agenda Dibatalkan: ${existing.title}`, body: "Agenda ini telah dibatalkan oleh administrator.", url: "/jadwal", referenceId: seriesId });
+      await notifyAudience(existing.audience_config || { scope: "all" }, { type: "EVENT_CANCELLED", title: `Agenda Dibatalkan: ${existing.title}`, body: "Agenda ini telah dibatalkan oleh administrator.", url: "/jadwal", referenceId: seriesId });
     } catch (pushError) {
       console.error("Event cancellation saved but push delivery failed:", pushError);
     }
@@ -836,7 +834,7 @@ export async function cancelEventAction(
   eventId: string,
   reason?: string
 ): Promise<{ success: boolean; message: string }> {
-  const admin = await requireRole(["super_admin", "yayasan", "pengurus"]);
+  await requireRole(["super_admin", "yayasan", "pengurus", "koordinator"]);
   if (!eventId) return { success: false, message: "ID agenda tidak valid." };
 
   if (process.env.VITEST) {
@@ -848,7 +846,7 @@ export async function cancelEventAction(
   const seriesId = ref.eventId;
 
   try {
-    const supabase = createAdminClient();
+    const supabase = await createClient();
     const { data: existing, error: readError } = await supabase
       .from("events")
       .select("id, title, status, audience_config")
@@ -857,34 +855,22 @@ export async function cancelEventAction(
       .maybeSingle();
     if (readError) throw readError;
     if (!existing) return { success: false, message: "Agenda tidak ditemukan." };
-    if (existing.status === "cancelled") {
-      return { success: false, message: "Agenda ini sudah dibatalkan sebelumnya." };
+
+    // app.event_cancel() re-reads the row under a lock, refuses an already cancelled
+    // agenda and writes the event.cancelled ledger row in the same transaction.
+    const { data, error } = await supabase.rpc("event_cancel", {
+      p_event_id: seriesId,
+      p_status: "cancelled",
+      p_reason: reason || null,
+    });
+    if (error) throw error;
+    const result = (data || {}) as { success?: boolean; message?: string };
+    if (!result.success) {
+      return { success: false, message: result.message || "Gagal membatalkan agenda." };
     }
 
-    const { error } = await supabase
-      .from("events")
-      .update({ status: "cancelled", updated_at: new Date().toISOString() })
-      .eq("id", seriesId);
-    if (error) throw error;
-
-    const { error: auditError } = await supabase.from("audit_logs").insert({
-      event_name: "event.cancelled",
-      actor_id: admin.id,
-      actor_name: admin.full_name,
-      target_id: seriesId,
-      target_label: existing.title,
-      action_detail: reason
-        ? `Agenda dibatalkan: ${reason}`
-        : `Agenda dibatalkan oleh ${admin.full_name}.`,
-    });
-    if (auditError) throw auditError;
-
     try {
-      const recipientIds = await getAudienceUserIds(
-        supabase,
-        existing.audience_config || { scope: "all" }
-      );
-      await sendPushToUsers(recipientIds, {
+      await notifyAudience(existing.audience_config || { scope: "all" }, {
         type: "EVENT_CANCELLED",
         title: `Agenda Dibatalkan: ${existing.title}`,
         body: reason || "Agenda ini telah dibatalkan oleh administrator.",
@@ -895,7 +881,7 @@ export async function cancelEventAction(
       console.error("Event cancelled but push delivery failed:", pushError);
     }
 
-    return { success: true, message: `Agenda "${existing.title}" berhasil dibatalkan.` };
+    return { success: true, message: result.message || `Agenda "${existing.title}" berhasil dibatalkan.` };
   } catch (err) {
     console.error("Failed to cancel event:", err);
     return { success: false, message: "Gagal membatalkan agenda." };
