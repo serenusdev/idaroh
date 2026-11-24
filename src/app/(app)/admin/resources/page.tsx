@@ -11,12 +11,15 @@ import {
   getResourceAdminListAction,
   getResourceCategoryOptionsAction,
   getResourceRevisionsAction,
+  getResourceRuleOptionsAction,
+  getResourceVisibilityRulesAction,
   importResourcesCsvAction,
   restoreResourceRevisionAction,
   saveResourceAction,
   setResourceArchiveAction,
+  setResourceVisibilityRulesAction,
 } from "@/modules/library/actions";
-import type { ResourceAdminInput, ResourceRevisionItem } from "@/modules/library/types";
+import type { ResourceAdminInput, ResourceRevisionItem, ResourceRuleOptions } from "@/modules/library/types";
 
 const EMPTY_FORM: ResourceAdminInput = {
   name: "",
@@ -51,6 +54,10 @@ export default function AdminResourcesPage() {
   const [importFeedback, setImportFeedback] = React.useState<string | null>(null);
   const [archiveTarget, setArchiveTarget] = React.useState<(ResourceAdminInput & { id: string; updatedAt: string }) | null>(null);
   const [archiving, setArchiving] = React.useState(false);
+  const [ruleOptions, setRuleOptions] = React.useState<ResourceRuleOptions | null>(null);
+  const [ruleRoleKeys, setRuleRoleKeys] = React.useState<string[]>([]);
+  const [ruleTeamIds, setRuleTeamIds] = React.useState<string[]>([]);
+  const [rulesSaving, setRulesSaving] = React.useState(false);
 
   const loading = listQuery.isLoading || categoriesQuery.isLoading;
   const loadError = listQuery.error ?? categoriesQuery.error;
@@ -72,15 +79,32 @@ export default function AdminResourcesPage() {
   // the rest of this admin surface stays shared with yayasan and pengurus.
   const canRunImport = new Set<string>([user.role, ...(user.roles || [])].filter(Boolean) as string[]).has("super_admin");
 
+  const loadRules = async (resourceId: string) => {
+    try {
+      const [options, rules] = await Promise.all([
+        ruleOptions ? Promise.resolve(ruleOptions) : getResourceRuleOptionsAction(),
+        getResourceVisibilityRulesAction(resourceId),
+      ]);
+      setRuleOptions(options);
+      setRuleRoleKeys(rules?.roleKeys ?? []);
+      setRuleTeamIds(rules?.teamIds ?? []);
+    } catch {
+      setNotice("Aturan visibilitas resource belum dapat dimuat.");
+    }
+  };
+
   const selectResource = async (resource: ResourceAdminInput & { id: string; updatedAt: string }) => {
     setEditingId(resource.id);
     setForm(resource);
+    setRuleRoleKeys([]);
+    setRuleTeamIds([]);
     try {
       setRevisions(await getResourceRevisionsAction(resource.id));
     } catch {
       setRevisions([]);
       setNotice("Riwayat revisi belum dapat dimuat.");
     }
+    if (resource.visibility === "restricted") await loadRules(resource.id);
   };
 
   const updateField = <K extends keyof ResourceAdminInput>(key: K, value: ResourceAdminInput[K]) => {
@@ -101,6 +125,7 @@ export default function AdminResourcesPage() {
           const saved = items?.find((item) => item.id === result.id);
           if (saved) setForm(saved);
           setRevisions(await getResourceRevisionsAction(result.id));
+          if (form.visibility === "restricted") await loadRules(result.id);
         }
         invalidateUserResources();
       }
@@ -114,6 +139,26 @@ export default function AdminResourcesPage() {
   const archive = (resource: ResourceAdminInput & { id: string; updatedAt: string }) => {
     setArchiveTarget(resource);
   };
+
+  const saveRules = async () => {
+    if (!editingId || rulesSaving) return;
+    setRulesSaving(true);
+    try {
+      const result = await setResourceVisibilityRulesAction(editingId, ruleRoleKeys, ruleTeamIds);
+      setNotice(result.message);
+      if (result.success) {
+        await loadRules(editingId);
+        invalidateUserResources();
+      }
+    } catch {
+      setNotice("Aturan visibilitas resource belum dapat disimpan.");
+    } finally {
+      setRulesSaving(false);
+    }
+  };
+
+  const toggleRule = (current: string[], value: string) =>
+    current.includes(value) ? current.filter((item) => item !== value) : [...current, value];
 
   const confirmArchive = async () => {
     if (!archiveTarget || archiving) return;
@@ -217,6 +262,50 @@ export default function AdminResourcesPage() {
             <div className="grid grid-cols-1 md:grid-cols-2 gap-3">{(["accessSetup", "howToUse", "workflowExamples", "limitationsCautions", "officialSources", "documentationStatus"] as const).map((field) => <textarea key={field} value={form[field] || ""} onChange={(e) => updateField(field, e.target.value)} placeholder={field} rows={3} className="w-full rounded-lg border border-border bg-surface-container-low px-3 py-2 text-sm" />)}</div>
             <button disabled={saving} type="submit" className="h-10 px-4 rounded-lg bg-primary text-on-primary text-xs font-semibold disabled:opacity-50">{saving ? "Menyimpan…" : "Simpan resource"}</button>
           </form>
+          {editingId && form.visibility === "restricted" && (
+            <div className="mt-6 border-t border-border pt-4">
+              <h3 className="text-sm font-semibold">Aturan akses restricted</h3>
+              <p className="text-xs text-muted-foreground mt-1">
+                Resource <code>restricted</code> hanya terbuka bagi peran atau tim yang didaftarkan di sini. Tanpa satu aturan pun, tidak ada peran yang dapat membacanya — termasuk Super Admin.
+              </p>
+              {!ruleOptions ? (
+                <button type="button" onClick={() => void loadRules(editingId)} className="mt-3 h-9 px-3 rounded-lg border border-border text-xs font-semibold">Muat aturan</button>
+              ) : (
+                <div className="mt-3 space-y-4">
+                  <fieldset>
+                    <legend className="text-[11px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">Peran</legend>
+                    <div className="mt-2 flex flex-wrap gap-2">
+                      {ruleOptions.roles.map((role) => (
+                        <label key={role.key} className={`inline-flex items-center gap-2 rounded-lg border px-3 py-1.5 text-xs cursor-pointer ${ruleRoleKeys.includes(role.key) ? "border-primary bg-accent/40" : "border-border"}`}>
+                          <input type="checkbox" className="accent-primary" checked={ruleRoleKeys.includes(role.key)} onChange={() => setRuleRoleKeys((current) => toggleRule(current, role.key))} />
+                          {role.name}
+                        </label>
+                      ))}
+                    </div>
+                  </fieldset>
+                  <fieldset>
+                    <legend className="text-[11px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">Tim</legend>
+                    {ruleOptions.teams.length === 0 ? (
+                      <p className="mt-2 text-xs text-muted-foreground">Belum ada tim aktif untuk dijadikan aturan.</p>
+                    ) : (
+                      <div className="mt-2 flex flex-wrap gap-2">
+                        {ruleOptions.teams.map((team) => (
+                          <label key={team.id} className={`inline-flex items-center gap-2 rounded-lg border px-3 py-1.5 text-xs cursor-pointer ${ruleTeamIds.includes(team.id) ? "border-primary bg-accent/40" : "border-border"}`}>
+                            <input type="checkbox" className="accent-primary" checked={ruleTeamIds.includes(team.id)} onChange={() => setRuleTeamIds((current) => toggleRule(current, team.id))} />
+                            {team.name}
+                          </label>
+                        ))}
+                      </div>
+                    )}
+                  </fieldset>
+                  <div className="flex flex-wrap items-center gap-3">
+                    <button type="button" onClick={() => void saveRules()} disabled={rulesSaving} className="h-10 px-4 rounded-lg bg-primary text-on-primary text-xs font-semibold disabled:opacity-50">{rulesSaving ? "Menyimpan…" : "Simpan aturan"}</button>
+                    <span className="text-[11px] text-muted-foreground">{ruleRoleKeys.length + ruleTeamIds.length} aturan aktif · {ruleRoleKeys.length} peran · {ruleTeamIds.length} tim</span>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
           {editingId && revisions.length > 0 && <div className="mt-6 border-t border-border pt-4"><h3 className="text-sm font-semibold">Riwayat revisi</h3><div className="mt-2 space-y-2">{revisions.map((revision) => <div key={revision.id} className="flex items-center justify-between gap-2 text-xs"><span>Revisi {revision.revisionNo} · {new Date(revision.changedAt).toLocaleString("id-ID")}</span><button type="button" onClick={() => void restoreRevision(revision)} className="text-primary hover:underline">Pulihkan</button></div>)}</div></div>}
         </section>
       </div>

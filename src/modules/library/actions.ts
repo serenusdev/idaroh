@@ -7,7 +7,7 @@ import { requireAuthUser, requireRole } from "@/lib/auth/guards";
 import { RESOURCE_RULE_MANAGER_ROLES, isResourceId, resourceVisibilityFilter } from "@/lib/resource-policy";
 import { randomUUID } from "node:crypto";
 import { INITIAL_RESOURCES } from "./data";
-import { CategorySummary, ResourceAdminInput, ResourceItem, ResourceRevisionItem } from "./types";
+import { CategorySummary, ResourceAdminInput, ResourceItem, ResourceRevisionItem, ResourceRuleOptions, ResourceVisibilityRules } from "./types";
 import { throwQueryError } from "@/lib/query-error";
 import { isNonEmptyString } from "@/lib/input-validation";
 
@@ -68,6 +68,10 @@ const RESOURCE_SELECT = `
  * caller-scoped session runs the read so RLS and app.can_view_resource() make
  * the decision; the admin client then fetches the embedded category/tag rows
  * those restricted ids belong to.
+ *
+ * The session read stops at PostgREST's row cap, so past ~1000 granted
+ * restricted rows the list query hides the remainder rather than widening the
+ * grant; the library surface is orders of magnitude below that today.
  */
 async function grantedRestrictedResourceIds(): Promise<string[]> {
   const session = await createClient();
@@ -288,7 +292,7 @@ export async function toggleFavoriteAction(
   resourceId: string
 ): Promise<{ success: boolean; isFavorited: boolean }> {
   const user = await requireAuthUser();
-  if (!isNonEmptyString(resourceId, 100)) {
+  if (!isResourceId(resourceId)) {
     return { success: false, isFavorited: false };
   }
   if (process.env.VITEST) return { success: true, isFavorited: true };
@@ -310,6 +314,17 @@ export async function toggleFavoriteAction(
       if (error) throw error;
       return { success: true, isFavorited: false };
     }
+    // Adding a favourite is the one place a raw id could be probed, so the row
+    // has to be readable through the resources policy first (§3.2/D6). Removing
+    // a favourite stays open even after a grant is withdrawn.
+    const session = await createClient();
+    const { data: readable, error: readableError } = await session
+      .from("resources")
+      .select("id")
+      .eq("id", resourceId)
+      .maybeSingle();
+    if (readableError) throw readableError;
+    if (!readable) return { success: false, isFavorited: false };
     const { error } = await supabase.from("resource_favorites").insert({
       user_id: user.id,
       resource_id: resourceId,
@@ -474,7 +489,7 @@ export async function setResourceArchiveAction(resourceId: string, archived: boo
  */
 export async function getResourceVisibilityRulesAction(
   resourceId: string
-): Promise<{ roleKeys: string[]; teamIds: string[] } | null> {
+): Promise<ResourceVisibilityRules | null> {
   await requireRole([...RESOURCE_RULE_MANAGER_ROLES]);
   if (!isResourceId(resourceId)) return null;
   const supabase = createAdminClient();
@@ -485,8 +500,23 @@ export async function getResourceVisibilityRulesAction(
     .order("created_at", { ascending: true });
   if (error) throw error;
   return {
-    roleKeys: (data || []).map((row: any) => row.role_key).filter(Boolean),
-    teamIds: (data || []).map((row: any) => row.team_id).filter(Boolean),
+    roleKeys: (data || []).map((row: { role_key: string | null }) => row.role_key).filter((key: string | null): key is string => Boolean(key)),
+    teamIds: (data || []).map((row: { team_id: string | null }) => row.team_id).filter(isResourceId),
+  };
+}
+
+export async function getResourceRuleOptionsAction(): Promise<ResourceRuleOptions> {
+  await requireRole([...RESOURCE_RULE_MANAGER_ROLES]);
+  const supabase = createAdminClient();
+  const [rolesResult, teamsResult] = await Promise.all([
+    supabase.from("roles").select("key, name").order("key", { ascending: true }),
+    supabase.from("teams").select("id, name").eq("status", "active").order("name", { ascending: true }),
+  ]);
+  if (rolesResult.error) throw rolesResult.error;
+  if (teamsResult.error) throw teamsResult.error;
+  return {
+    roles: (rolesResult.data || []).map((row: { key: string; name: string }) => ({ key: row.key, name: row.name })),
+    teams: (teamsResult.data || []).map((row: { id: string; name: string }) => ({ id: row.id, name: row.name })),
   };
 }
 
