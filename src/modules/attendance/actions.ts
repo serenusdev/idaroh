@@ -5,6 +5,7 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { createClient } from "@/lib/supabase/server";
 import { requireAuthUser, getHighestRole, ROLE_PRIORITY, getJakartaTime } from "@/lib/auth/guards";
 import { UserRole } from "@/lib/auth/types";
+import { parseEventRef } from "@/lib/event-occurrence";
 import { ATTENDANCE_HISTORY } from "./data";
 import { AttendanceClassification, AttendanceRecordItem, CorrectionRequestPayload } from "./types";
 import { resolveCorrectionClassification } from "./classification";
@@ -27,11 +28,16 @@ export async function assertEventNotCancelled(
   eventId: string
 ): Promise<{ success: false; message: string } | null> {
   if (process.env.VITEST) return null;
+  // The schedule list hands over `<uuid>:<WIB date>` for one day of a recurring agenda, and
+  // Postgres refuses to compare that string with a uuid column (22P02). Splitting it here keeps
+  // the guard honest about the series and about the single day SCH-01 can cancel (SCH-03).
+  const ref = parseEventRef(eventId);
+  if (!ref) return { success: false, message: "ID agenda tidak valid." };
   const supabase = createAdminClient();
   const { data: event, error } = await supabase
     .from("events")
     .select("id, status")
-    .eq("id", eventId)
+    .eq("id", ref.eventId)
     .maybeSingle();
   if (error) throw error;
   if (!event) return null; // No linked event — allow
@@ -40,6 +46,21 @@ export async function assertEventNotCancelled(
       success: false,
       message: "Agenda ini telah dibatalkan. Pembuatan absensi baru tidak diizinkan.",
     };
+  }
+  if (ref.occurrenceDate) {
+    const { data: exception, error: exceptionError } = await supabase
+      .from("event_occurrence_exceptions")
+      .select("event_id")
+      .eq("event_id", ref.eventId)
+      .eq("occurrence_date", ref.occurrenceDate)
+      .maybeSingle();
+    if (exceptionError) throw exceptionError;
+    if (exception) {
+      return {
+        success: false,
+        message: "Agenda ini telah dibatalkan pada tanggal tersebut. Pembuatan absensi baru tidak diizinkan.",
+      };
+    }
   }
   return null;
 }

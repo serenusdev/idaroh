@@ -5,17 +5,22 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { createClient } from "@/lib/supabase/server";
 import { requireAuthUser, requireRole } from "@/lib/auth/guards";
 import { occurrenceKey, parseEventRef } from "@/lib/event-occurrence";
+import { throwQueryError } from "@/lib/query-error";
 import { drainNotificationOutbox, hashCalendarToken, sendPushToUsers } from "@/lib/fcm";
 import { INITIAL_ANNOUNCEMENTS, INITIAL_EVENTS } from "./data";
 import { AnnouncementItem, AudienceConfig, ScheduleEventItem } from "./types";
 import { randomBytes } from "node:crypto";
 
 async function filterByAudience(supabase: ReturnType<typeof createAdminClient>, rows: any[], user: any): Promise<any[]> {
-  const { data: memberships } = await supabase
+  const { data: memberships, error } = await supabase
     .from("team_members")
     .select("team_id, teams(id, name, slug)")
     .eq("user_id", user.id)
     .is("valid_to", null);
+  // A failed membership read would silently drop every team-scoped agenda from the list, so
+  // the caller would present a truncated schedule as the complete one. That is indistinguishable
+  // from "no agenda" and must surface instead (SCH-05).
+  if (error) throwQueryError("schedules.audienceScope", error);
   const userTeams = new Set(
     (memberships || []).flatMap((item: any) => [item.team_id, item.teams?.id, item.teams?.name, item.teams?.slug]).filter(Boolean)
   );
@@ -124,12 +129,17 @@ export async function getEventsAction(): Promise<ScheduleEventItem[]> {
       .is("deleted_at", null)
       .order("starts_at", { ascending: true });
 
-    if (!error && events) {
+    if (error) throwQueryError("schedules.getEvents", error);
+
+    if (events) {
       if (events.length === 0) return [];
 
-      const { data: exceptions } = await supabase
+      const { data: exceptions, error: exceptionError } = await supabase
         .from("event_occurrence_exceptions")
         .select("event_id, occurrence_date");
+      // Missing exception rows would render a cancelled day as a normal agenda, which is the
+      // one thing SCH-01 exists to prevent.
+      if (exceptionError) throwQueryError("schedules.occurrenceExceptions", exceptionError);
       const cancelledKeys = new Set<string>(
         (exceptions || [])
           .filter((row: any) => row.event_id && row.occurrence_date)
@@ -139,6 +149,9 @@ export async function getEventsAction(): Promise<ScheduleEventItem[]> {
       const organizerIds = Array.from(
         new Set(visibleEvents.map((e: any) => e.organizer_id).filter(Boolean))
       );
+      // Deliberately best-effort, unlike the reads above: an organizer name is decoration on
+      // an agenda the caller is already entitled to see, so a failed profiles read must not
+      // blank the whole schedule.
       const { data: organizers } = organizerIds.length
         ? await supabase.from("profiles").select("id, full_name").in("id", organizerIds)
         : { data: [] };
@@ -212,7 +225,11 @@ export async function getAnnouncementsAction(): Promise<AnnouncementItem[]> {
       .or(`expires_at.is.null,expires_at.gt.${new Date().toISOString()}`)
       .order("published_at", { ascending: false });
 
-    if (!error && announcements) {
+    // Same rule as the agenda read: a published announcement that fails to load is not an
+    // empty inbox (SCH-05).
+    if (error) throwQueryError("schedules.getAnnouncements", error);
+
+    if (announcements) {
       const visibleAnnouncements = await filterByAudience(supabase, announcements as any[], user);
       if (visibleAnnouncements.length === 0) return [];
       const { data: reads } = await supabase
@@ -241,7 +258,7 @@ export async function getAdminAnnouncementsAction(): Promise<AnnouncementItem[]>
   if (process.env.VITEST) return INITIAL_ANNOUNCEMENTS;
   const supabase = createAdminClient();
   const { data, error } = await supabase.from("announcements").select("*").order("created_at", { ascending: false });
-  if (error) throw error;
+  if (error) throwQueryError("schedules.getAdminAnnouncements", error);
   return (data || []).map((row: any) => toAnnouncementItem(row));
 }
 
@@ -529,7 +546,9 @@ interface EventFormPayload {
   starts_at: string;
   ends_at: string;
   category: string;
-  audience: AudienceConfig | null;
+  // Absent means "keep what is stored"; app.event_upsert() only COALESCEs a missing key, so
+  // sending null would overwrite an audience the caller never chose to change (SCH-07).
+  audience?: AudienceConfig | null;
   team_id: string | null;
   recurrence_rule: string;
   recurrence_until: string | null;
@@ -544,7 +563,7 @@ function eventFormPayload(payload: CreateEventPayload): EventFormPayload {
     starts_at: payload.startsAt,
     ends_at: payload.endsAt,
     category: payload.category || "umum",
-    audience: payload.audienceConfig ?? null,
+    ...(payload.audienceConfig ? { audience: payload.audienceConfig } : {}),
     team_id: payload.teamId?.trim() || null,
     recurrence_rule: payload.recurrenceRule || "none",
     recurrence_until: payload.recurrenceUntil || null,

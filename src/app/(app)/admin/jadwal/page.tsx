@@ -46,6 +46,14 @@ function toJakartaDateTimeLocal(value?: string) {
 }
 
 /**
+ * An edit form cannot express every audience the picker offers. This sentinel marks a stored
+ * scope the picker has no option for, so submitting keeps the stored value instead of widening
+ * it to the whole pondok (SCH-07). The server omits the key from the RPC payload when the
+ * audience is undefined, and app.event_upsert() only replaces an audience it was given.
+ */
+const KEEP_STORED_AUDIENCE = "__keep_stored_audience__";
+
+/**
  * The audience an agenda may be addressed to (SCH-02).
  *
  * A manager picks the whole pondok or any team. A coordinator only picks a team it
@@ -72,6 +80,7 @@ function AudiencePicker({
       </p>
     );
   }
+  const keepsStoredAudience = value === KEEP_STORED_AUDIENCE;
   return (
     <div className="space-y-2">
       <select
@@ -81,8 +90,11 @@ function AudiencePicker({
         onChange={(e) => onChange(e.target.value)}
         className="w-full h-11 px-3 rounded-xl border border-border bg-surface font-body-sm text-sm text-on-surface"
       >
+        {keepsStoredAudience && (
+          <option value={KEEP_STORED_AUDIENCE}>Audiens tersimpan (tidak diubah)</option>
+        )}
         {tier === "manager" && <option value="">Seluruh pondok</option>}
-        {teams.length === 0 && (
+        {teams.length === 0 && !keepsStoredAudience && (
           <option value="" disabled>
             Tidak ada tim yang dapat dipilih
           </option>
@@ -93,6 +105,13 @@ function AudiencePicker({
           </option>
         ))}
       </select>
+      {keepsStoredAudience && (
+        <p className="font-body-sm text-xs text-warning">
+          Audiens agenda ini memakai konfigurasi lama (berbasis kategori anggota atau daftar
+          pengguna tertentu) dan tetap dipertahankan. Pilih seluruh pondok atau sebuah tim hanya
+          jika audiensnya memang ingin diganti.
+        </p>
+      )}
       <p className="font-body-sm text-xs text-muted-foreground">
         {tier === "manager"
           ? "Pemirsa disimpan sebagai audiens pondok atau audiens tim; database yang menilai ulang hak Anda."
@@ -203,10 +222,12 @@ export default function AdminJadwalPage() {
       description: eventForm.description,
       // An event audience is always all|team now; the team id doubles as events.team_id
       // so app.can_write_event_audience() can judge it against the caller's teams.
-      audienceConfig: eventForm.audienceTeamId
-        ? { scope: "team", teamIds: [eventForm.audienceTeamId] }
+      // Undefined is the "leave the stored audience alone" signal (SCH-07).
+      audienceConfig: eventForm.audienceTeamId === KEEP_STORED_AUDIENCE ? undefined
+        : eventForm.audienceTeamId ? { scope: "team", teamIds: [eventForm.audienceTeamId] }
         : { scope: "all" },
-      teamId: eventForm.audienceTeamId || undefined,
+      teamId: eventForm.audienceTeamId === KEEP_STORED_AUDIENCE ? undefined
+        : eventForm.audienceTeamId || undefined,
       recurrenceRule: eventForm.recurrenceRule,
       recurrenceUntil: eventForm.recurrenceUntil || undefined,
     };
@@ -268,11 +289,16 @@ export default function AdminJadwalPage() {
   };
 
   // The stored audience may name a team by id, slug or display name; the picker is keyed
-  // by id, so the closest option is selected instead of silently dropping the value.
+  // by id, so the closest option is selected instead of silently dropping the value. A scope
+  // the picker cannot offer at all resolves to the keep-sentinel rather than to "" (SCH-07).
   const audienceTeamValue = (evt: ScheduleEventItem) => {
-    if (evt.audienceConfig?.scope !== "team") return "";
-    const stored = String(evt.audienceConfig.teamIds?.[0] ?? evt.groupName ?? "");
-    if (!stored) return "";
+    const scope = evt.audienceConfig?.scope;
+    if (scope === undefined || scope === "all") return "";
+    if (scope !== "team") return KEEP_STORED_AUDIENCE;
+    const stored = String(evt.audienceConfig?.teamIds?.[0] ?? evt.groupName ?? "");
+    // A team-scoped agenda whose team cannot be resolved is kept as stored too: defaulting to
+    // "" would silently re-address the agenda to the whole pondok on an unrelated edit.
+    if (!stored) return KEEP_STORED_AUDIENCE;
     const match = (audienceQuery.data?.teams ?? []).find(
       (team) => team.id === stored || team.name === stored
     );

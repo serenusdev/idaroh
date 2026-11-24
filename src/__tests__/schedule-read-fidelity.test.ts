@@ -60,21 +60,22 @@ type Table = { rows?: unknown[]; error?: unknown };
 function database(tables: Record<string, Table>, seen: Array<{ table: string; filters: unknown[] }> = []) {
   const from = (table: string) => {
     const config = tables[table] || { rows: [] };
-    const filters: unknown[][] = [];
-    const matching = () => (config.rows || []).filter((row: any) => filters.every(([column, value, op]) => {
+    const filters: Array<[string, unknown, string]> = [];
+    const cell = (row: unknown, column: string) =>
+      row && typeof row === "object" ? (row as Record<string, unknown>)[column] : undefined;
+    const matching = () => (config.rows || []).filter((row) => filters.every(([column, value, op]) => {
       if (op === "or") return true;
-      if (column === "or") return true;
-      if (op === "in") return (value as unknown[]).map(String).includes(String(row?.[column]));
-      if (op === "neq") return String(row?.[column]) !== String(value);
-      if (op === "is") return value === null ? row?.[column] == null : String(row?.[column]) === String(value);
-      return String(row?.[column]) === String(value);
+      if (op === "in") return (value as unknown[]).map(String).includes(String(cell(row, column)));
+      if (op === "neq") return String(cell(row, column)) !== String(value);
+      if (op === "is") return value === null ? cell(row, column) == null : String(cell(row, column)) === String(value);
+      return String(cell(row, column)) === String(value);
     }));
     const record = (column: string, value: unknown, op: string) => {
       if (column !== "or") filters.push([column, value, op]);
     };
-    const settle = () => {
+    const settle = (): { data: unknown[]; error: unknown } => {
       seen.push({ table, filters: filters.map(([column, value]) => [column, value]) });
-      return { data: config.error ? null : matching(), error: config.error ?? null };
+      return { data: config.error ? [] : matching(), error: config.error ?? null };
     };
     const chain: Record<string, unknown> = {
       select: () => chain,
