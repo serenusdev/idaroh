@@ -57,9 +57,38 @@ describe("LIB-02 — resource visibility rules are the only route to `restricted
     expect(migration).toContain("SECURITY DEFINER");
     expect(migration).toContain("SET search_path");
     expect(migration).toContain('DROP POLICY IF EXISTS "Active users can view published internal resources" ON public.resources');
+    expect(migration).toContain('CREATE POLICY "Active members can view granted resources"');
     expect(migration).toContain("NOTIFY pgrst, 'reload schema';");
     // §3.2: a restricted row without a rule opens for nobody, super_admin included.
-    expect(migration).not.toMatch(/can_view_resource[\s\S]{0,600}has_any_role\(\s*'super_admin'/);
+    const predicateStart = migration.indexOf("CREATE OR REPLACE FUNCTION app.can_view_resource");
+    const predicateBody = migration.slice(predicateStart, migration.indexOf("$$;", predicateStart));
+    // Guard the slice itself: an empty extraction would let the negative
+    // assertion below pass without testing anything.
+    expect(predicateStart).toBeGreaterThan(-1);
+    expect(predicateBody.length).toBeGreaterThan(200);
+    expect(predicateBody).not.toMatch(/has_any_role|has_role\s*\(/);
+    // Single argument: the predicate decides for the session owner only.
+    expect(migration).toMatch(/FUNCTION app\.can_view_resource\(\s*p_resource_id uuid\s*\)/);
+  });
+
+  it("wires the rule book into the admin surface (§3.2 five-layer sync)", () => {
+    const adminPage = readOrEmpty("src/app/(app)/admin/resources/page.tsx");
+    expect(adminPage).toContain("getResourceVisibilityRulesAction");
+    expect(adminPage).toContain("getResourceRuleOptionsAction");
+    expect(adminPage).toContain("setResourceVisibilityRulesAction");
+    // A restricted resource an operator cannot grant is a resource nobody reads.
+    expect(adminPage).toContain('"restricted"');
+    const guarded = (libraryActions.match(/requireRole\(\[\.\.\.RESOURCE_RULE_MANAGER_ROLES\]\)/g) || []).length;
+    expect(guarded).toBeGreaterThanOrEqual(3);
+    const toggle = libraryActions.slice(
+      libraryActions.indexOf("export async function toggleFavoriteAction"),
+      libraryActions.indexOf("function normalizeResourceInput")
+    );
+    expect(toggle.length).toBeGreaterThan(200);
+    // Favouriting is the one write that takes a raw resource id from the client,
+    // so it has to pass through the caller's own RLS-scoped read first.
+    expect(toggle).toContain("createClient()");
+    expect(toggle).toContain("isResourceId(resourceId)");
   });
 
   it("ships a rollback that restores the pre-fix policy verbatim", () => {

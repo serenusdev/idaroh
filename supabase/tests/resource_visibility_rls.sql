@@ -1,6 +1,6 @@
 BEGIN;
 
-SELECT plan(29);
+SELECT plan(30);
 
 -- LIB-02 / D6: PERMISSIONS.md §3.2 lets a `restricted` resource open only for
 -- the roles and teams named in resource_visibility_rules, so no elevated role
@@ -238,7 +238,7 @@ RESET ROLE;
 SELECT is((SELECT count(*)::int FROM public.audit_logs WHERE event_name = 'library.visibility_rules_updated'), 0,
   'no rule change has been audited yet');
 
--- 22-29: the command RPC, its guard, its effect and its ledger row.
+-- 22-30: the command RPC, its guard, its effect and its ledger row.
 SET LOCAL ROLE authenticated;
 SELECT public.rsrvis_as('00000000-0000-0000-0000-000000000a11');
 SELECT is(public.resource_rule_set('00000000-0000-0000-0000-000000000a24', ARRAY['yayasan'], NULL)->>'success', 'false',
@@ -254,6 +254,12 @@ SELECT is((SELECT count(*)::int FROM public.resource_visibility_rules
 SELECT public.rsrvis_as('00000000-0000-0000-0000-000000000a15');
 SELECT is((SELECT count(*)::int FROM public.resources WHERE id = '00000000-0000-0000-0000-000000000a24'), 1,
   'the fresh role rule opens the resource for yayasan');
+
+-- D6 grants per row, never per manager: the pengurus who wrote that yayasan rule
+-- cannot read the resource it just opened for somebody else.
+SELECT public.rsrvis_as('00000000-0000-0000-0000-000000000a14');
+SELECT is((SELECT count(*)::int FROM public.resources WHERE id = '00000000-0000-0000-0000-000000000a24'), 0,
+  'the writer of a rule for another role does not read the resource it opens');
 
 SELECT public.rsrvis_as('00000000-0000-0000-0000-000000000a14');
 SELECT is(public.resource_rule_set('00000000-0000-0000-0000-000000000a24', ARRAY[]::text[], ARRAY[]::uuid[])->>'success', 'true',

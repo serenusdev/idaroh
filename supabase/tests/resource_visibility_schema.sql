@@ -1,6 +1,6 @@
 BEGIN;
 
-SELECT plan(8);
+SELECT plan(11);
 
 -- LIB-02 / D6: PERMISSIONS.md §3.2 requires that a `restricted` resource only
 -- opens through resource_visibility_rules (role_key or team_id), so the schema
@@ -113,6 +113,45 @@ SELECT ok(
     false
   ),
   'app.can_view_resource pins search_path (AGENTS.md SECURITY DEFINER rule)'
+);
+
+-- The predicate decides for the session owner only; a caller-supplied identity
+-- would be a "what does X see" oracle next to an active-check for the asker.
+SELECT is(
+  COALESCE(
+    (
+      SELECT array_length(p.proargnames, 1)
+      FROM pg_proc p
+      JOIN pg_namespace n ON n.oid = p.pronamespace
+      WHERE n.nspname = 'app' AND p.proname = 'can_view_resource'
+    ),
+    0
+  )::text,
+  '1',
+  'app.can_view_resource takes only the resource id, never a caller-supplied user'
+);
+
+SELECT ok(
+  EXISTS (
+    SELECT 1
+    FROM pg_policies
+    WHERE schemaname = 'public'
+      AND tablename = 'resources'
+      AND policyname = 'Active members can view granted resources'
+      AND qual LIKE '%can_view_resource%'
+  ),
+  'the resources SELECT policy delegates to app.can_view_resource'
+);
+
+SELECT ok(
+  NOT EXISTS (
+    SELECT 1
+    FROM pg_policies
+    WHERE schemaname = 'public'
+      AND tablename = 'resources'
+      AND policyname = 'Active users can view published internal resources'
+  ),
+  'the internal-only policy is replaced rather than left as an OR branch'
 );
 
 SELECT * FROM finish();
