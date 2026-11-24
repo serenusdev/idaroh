@@ -10,7 +10,9 @@
 
 BEGIN;
 
+-- Guarded so the rollback can be replayed after a partial run.
 DROP POLICY IF EXISTS "Active members can view granted resources" ON public.resources;
+DROP POLICY IF EXISTS "Active users can view published internal resources" ON public.resources;
 
 CREATE POLICY "Active users can view published internal resources"
   ON public.resources FOR SELECT
@@ -18,7 +20,7 @@ CREATE POLICY "Active users can view published internal resources"
 
 DROP FUNCTION IF EXISTS public.resource_rule_set(uuid, text[], uuid[]);
 DROP FUNCTION IF EXISTS app.resource_rule_set(uuid, text[], uuid[]);
-DROP FUNCTION IF EXISTS app.can_view_resource(uuid, uuid);
+DROP FUNCTION IF EXISTS app.can_view_resource(uuid);
 DROP TABLE IF EXISTS public.resource_visibility_rules;
 
 NOTIFY pgrst, 'reload schema';

@@ -66,15 +66,18 @@ GRANT SELECT ON public.resource_visibility_rules TO authenticated;
 -- ---------------------------------------------------------------------------
 -- 2. app.can_view_resource: the one predicate §3.2 / D6 describes.
 -- ---------------------------------------------------------------------------
-CREATE OR REPLACE FUNCTION app.can_view_resource(p_resource_id uuid, p_user_id uuid DEFAULT auth.uid())
+-- Deliberately single-argument: the identity it evaluates is always the session
+-- owner's, which is also what app.is_active_member() checks. A p_user_id
+-- parameter would let any caller ask "what does X see" while the active-account
+-- guard still described the asker.
+CREATE OR REPLACE FUNCTION app.can_view_resource(p_resource_id uuid)
 RETURNS boolean
 LANGUAGE sql
 SECURITY DEFINER
 SET search_path = public, app, pg_temp
 STABLE
 AS $$
-  SELECT p_user_id IS NOT NULL
-    AND app.is_active_member()
+  SELECT app.is_active_member()
     AND EXISTS (
       SELECT 1
       FROM public.resources r
@@ -93,7 +96,7 @@ AS $$
                     SELECT 1
                     FROM public.user_roles ur
                     JOIN public.roles ro ON ro.id = ur.role_id
-                    WHERE ur.user_id = p_user_id
+                    WHERE ur.user_id = auth.uid()
                       AND ur.revoked_at IS NULL
                       AND ro.key = v.role_key
                   )
@@ -103,7 +106,7 @@ AS $$
                   AND EXISTS (
                     SELECT 1
                     FROM public.team_members tm
-                    WHERE tm.user_id = p_user_id
+                    WHERE tm.user_id = auth.uid()
                       AND tm.team_id = v.team_id
                       AND tm.valid_to IS NULL
                       AND tm.valid_from <= CURRENT_DATE
@@ -115,8 +118,8 @@ AS $$
     );
 $$;
 
-REVOKE ALL ON FUNCTION app.can_view_resource(uuid, uuid) FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION app.can_view_resource(uuid, uuid) TO authenticated;
+REVOKE ALL ON FUNCTION app.can_view_resource(uuid) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION app.can_view_resource(uuid) TO authenticated;
 
 -- ---------------------------------------------------------------------------
 -- 3. app.resource_rule_set: the only writer, with the audit row it belongs to.
