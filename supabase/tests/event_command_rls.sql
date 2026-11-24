@@ -118,7 +118,7 @@ SELECT ok((SELECT array_to_string(p.proconfig, ',') LIKE '%search_path=%'
   'app.event_upsert pins its search_path');
 
 -- 6: the §3.6 constraint is a real database object, not a comment.
-SELECT ok((SELECT count(*)::int FROM pg_trigger tg
+SELECT is((SELECT count(*)::int FROM pg_trigger tg
            JOIN pg_class c ON c.oid = tg.tgrelid
            JOIN pg_namespace n ON n.oid = c.relnamespace
            JOIN pg_proc p ON p.oid = tg.tgfoid
