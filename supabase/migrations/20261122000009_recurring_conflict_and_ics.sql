@@ -146,7 +146,9 @@ AS $$
        AND EXISTS (
              SELECT 1
                FROM incoming
-               JOIN app.event_occurrence_spans(
+               -- LATERAL is written out: the expander is asked about a day that only the
+               -- incoming row of this iteration knows.
+               CROSS JOIN LATERAL app.event_occurrence_spans(
                       candidate.starts_at,
                       candidate.ends_at,
                       candidate.recurrence_rule,
@@ -154,7 +156,7 @@ AS $$
                       incoming.occurrence_date,
                       incoming.occurrence_date
                     ) occ
-                 ON occ.occurrence_date = incoming.occurrence_date
+              WHERE occ.occurrence_date = incoming.occurrence_date
                 AND occ.occ_starts_at < incoming.occ_ends_at
                 AND occ.occ_ends_at > incoming.occ_starts_at
            )
