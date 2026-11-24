@@ -125,6 +125,8 @@ Legenda: **S** = `santri`, **K** = `koordinator`, **P** = `pengurus`, **Y** = `y
 | `announcement.read_stats` | — | `own` | `all` | `all` | — | Statistik keterbacaan pengumuman. |
 | `schedule.marker.manage` | — | — | `all` | `all` | `all` | Penanda hari libur/efektif kalender pondok. |
 
+> **Catatan `SCH-01`:** pembatalan **satu hari** dari agenda berulang memakai tier `schedule.event.update` (`P`/`Y`/`SA`) dan tersimpan sebagai baris `event_occurrence_exceptions(event_id, occurrence_date)` — `occurrence_date` adalah tanggal kalender WIB `Asia/Jakarta`, bukan id agenda baru. Seluruh operasi lain (`update`/`delete`/`cancel`) tetap beralamat ke baris `events` milik seri, sehingga kunci tampilan `<uuid>:<tanggal>` wajib diurai sebelum menyentuh Postgres. Tanggal yang bukan hasil pengulangan (mis. hari Selasa untuk aturan `weekly`), berada di luar `recurrence_until`/horizon 180 hari, atau milik seri yang sudah `cancelled`/dihapus **ditolak**. Tulis hanya lewat `app.event_occurrence_set()` dengan baris `audit_logs` (`event.occurrence_cancelled` / `event.occurrence_restored`) pada transaksi yang sama. **Selisih yang dilaporkan:** baris `schedule.event.read` di atas menyatakan agenda `cancelled` disembunyikan dari daftar aktif, namun daftar saat ini menampilkan occurrence yang dibatalkan dengan badge `Dibatalkan` agar pengurus masih bisa memulihkannya; keputusan penyembunyian penuh ditunda ke `SCH-02`.
+
 ### 3.7 People & Teams (`PRD-07`)
 | Permission | S | K | P | Y | SA | Aturan Scope & Validasi |
 |---|---|---|---|---|---|---|

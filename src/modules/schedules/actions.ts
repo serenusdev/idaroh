@@ -2,7 +2,9 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
 import { createAdminClient } from "@/lib/supabase/admin";
+import { createClient } from "@/lib/supabase/server";
 import { requireAuthUser, requireRole } from "@/lib/auth/guards";
+import { occurrenceKey, parseEventRef } from "@/lib/event-occurrence";
 import { drainNotificationOutbox, hashCalendarToken, sendPushToUsers } from "@/lib/fcm";
 import { INITIAL_ANNOUNCEMENTS, INITIAL_EVENTS } from "./data";
 import { AnnouncementItem, AudienceConfig, ScheduleEventItem } from "./types";
@@ -40,13 +42,13 @@ export async function getAudienceUserIds(supabase: ReturnType<typeof createAdmin
   return Array.from(new Set((data || []).map((row: any) => row.user_id)));
 }
 
-function expandEventRows(rows: any[]): any[] {
+function expandEventRows(rows: any[], cancelledKeys: Set<string> = new Set()): any[] {
   const expanded: any[] = [];
   const horizon = Date.now() + 180 * 24 * 60 * 60 * 1000;
   for (const row of rows) {
     const rule = row.recurrence_rule;
     if (!rule || rule === "none") {
-      expanded.push(row);
+      expanded.push({ ...row, baseEventId: row.id, occurrenceDate: null, cancelledOccurrence: false });
       continue;
     }
     const baseStart = new Date(row.starts_at);
@@ -58,12 +60,18 @@ function expandEventRows(rows: any[]): any[] {
     );
     const step = rule === "daily" ? 24 * 60 * 60 * 1000 : rule === "weekly" ? 7 * 24 * 60 * 60 * 1000 : 0;
     if (!step || Number.isNaN(baseStart.getTime()) || Number.isNaN(until)) {
-      expanded.push(row);
+      expanded.push({ ...row, baseEventId: row.id, occurrenceDate: null, cancelledOccurrence: false });
       continue;
     }
     for (let occurrence = baseStart.getTime(); occurrence <= until; occurrence += step) {
       const copy = { ...row };
-      copy.id = `${row.id}:${new Date(occurrence).toISOString().slice(0, 10)}`;
+      // Asia/Jakarta has no DST, so stepping by whole days keeps this date and the
+      // one app.event_occurrence_set() derives from starts_at in agreement.
+      const occurrenceDate = new Date(occurrence).toLocaleDateString("en-CA", { timeZone: "Asia/Jakarta" });
+      copy.id = `${row.id}:${occurrenceDate}`;
+      copy.baseEventId = row.id;
+      copy.occurrenceDate = occurrenceDate;
+      copy.cancelledOccurrence = cancelledKeys.has(copy.id);
       copy.starts_at = new Date(occurrence).toISOString();
       copy.ends_at = new Date(occurrence + duration).toISOString();
       expanded.push(copy);
@@ -108,7 +116,15 @@ export async function getEventsAction(): Promise<ScheduleEventItem[]> {
     if (!error && events) {
       if (events.length === 0) return [];
 
-      const visibleEvents = await filterByAudience(supabase, expandEventRows(events as any[]), user);
+      const { data: exceptions } = await supabase
+        .from("event_occurrence_exceptions")
+        .select("event_id, occurrence_date");
+      const cancelledKeys = new Set<string>(
+        (exceptions || [])
+          .filter((row: any) => row.event_id && row.occurrence_date)
+          .map((row: any) => occurrenceKey(row.event_id, String(row.occurrence_date).slice(0, 10)))
+      );
+      const visibleEvents = await filterByAudience(supabase, expandEventRows(events as any[], cancelledKeys), user);
       const organizerIds = Array.from(
         new Set(visibleEvents.map((e: any) => e.organizer_id).filter(Boolean))
       );
@@ -123,6 +139,7 @@ export async function getEventsAction(): Promise<ScheduleEventItem[]> {
         const start = new Date(e.starts_at);
         const end = new Date(e.ends_at);
         const timeRangeStr = `${start.toLocaleTimeString("id-ID", { hour: "2-digit", minute: "2-digit", timeZone: "Asia/Jakarta" })} - ${end.toLocaleTimeString("id-ID", { hour: "2-digit", minute: "2-digit", timeZone: "Asia/Jakarta" })} WIB`;
+        const isCancelled = e.status === "cancelled" || Boolean(e.cancelledOccurrence);
 
         return {
           id: e.id,
@@ -130,8 +147,8 @@ export async function getEventsAction(): Promise<ScheduleEventItem[]> {
           endsAt: e.ends_at,
           dateStr: new Date(e.starts_at).toLocaleDateString("en-CA", { timeZone: "Asia/Jakarta" }),
           timeRangeStr,
-          statusBadge: e.status === "cancelled" ? "cancelled" : e.location_changed ? "location_changed" : "on_schedule",
-          statusLabel: e.status === "cancelled" ? "Dibatalkan" : e.location_changed ? "Perubahan Lokasi" : "Sesuai Jadwal",
+          statusBadge: isCancelled ? "cancelled" : e.location_changed ? "location_changed" : "on_schedule",
+          statusLabel: isCancelled ? "Dibatalkan" : e.location_changed ? "Perubahan Lokasi" : "Sesuai Jadwal",
           category: (e.category || "teknologi") as any,
           categoryLabel:
             e.category === "keagamaan"
@@ -152,6 +169,9 @@ export async function getEventsAction(): Promise<ScheduleEventItem[]> {
           audienceConfig: e.audience_config || undefined,
           recurrenceRule: e.recurrence_rule || undefined,
           recurrenceUntil: e.recurrence_until || undefined,
+          baseEventId: e.baseEventId,
+          occurrenceDate: e.occurrenceDate || undefined,
+          cancelledOccurrence: Boolean(e.cancelledOccurrence),
         };
       });
     }
@@ -530,25 +550,33 @@ export async function updateEventAction(
   }
   if (process.env.VITEST) return { success: true, message: "Agenda berhasil diperbarui.", eventId };
 
+  // A recurring agenda is listed once per day under `<uuid>:<WIB date>`. An edit
+  // always applies to the whole series, so the date half is resolved away here;
+  // passing the composite key to Postgres failed as an invalid uuid, which is why
+  // every edit of a recurring agenda used to end in "Gagal memperbarui agenda.".
+  const ref = parseEventRef(eventId);
+  if (!ref) return { success: false, message: "ID agenda tidak valid." };
+  const seriesId = ref.eventId;
+
   try {
     const supabase = createAdminClient();
     const { data: existing, error: readError } = await supabase
       .from("events")
       .select("*")
-      .eq("id", eventId)
+      .eq("id", seriesId)
       .maybeSingle();
     if (readError) throw readError;
     if (!existing) return { success: false, message: "Agenda tidak ditemukan." };
-    if (await hasEventConflict(supabase, startsAt, endsAt, payload.location.trim(), eventId)) {
+    if (await hasEventConflict(supabase, startsAt, endsAt, payload.location.trim(), seriesId)) {
       return { success: false, message: "Bentrok: sudah ada agenda di lokasi dan waktu tersebut." };
     }
 
     const { count } = await supabase
       .from("event_revisions")
       .select("id", { count: "exact", head: true })
-      .eq("event_id", eventId);
+      .eq("event_id", seriesId);
     const { error: revisionError } = await supabase.from("event_revisions").insert({
-      event_id: eventId,
+      event_id: seriesId,
       revision_no: (count || 0) + 1,
       snapshot: existing,
       changed_by: admin.id,
@@ -568,14 +596,14 @@ export async function updateEventAction(
       recurrence_rule: recurrenceRule,
       recurrence_until: recurrenceUntil?.toISOString() || null,
       updated_at: new Date().toISOString(),
-    }).eq("id", eventId);
+    }).eq("id", seriesId);
     if (error) throw error;
 
     const { error: auditError } = await supabase.from("audit_logs").insert({
       event_name: "event.updated",
       actor_id: admin.id,
       actor_name: admin.full_name,
-      target_id: eventId,
+      target_id: seriesId,
       target_label: payload.title.trim(),
       action_detail: "Agenda diperbarui; snapshot versi sebelumnya disimpan.",
     });
@@ -583,12 +611,12 @@ export async function updateEventAction(
     if (existing.starts_at !== startsAt.toISOString() || existing.ends_at !== endsAt.toISOString() || existing.location !== payload.location.trim()) {
       try {
         const recipientIds = await getAudienceUserIds(supabase, payload.audienceConfig || existing.audience_config || { scope: "all" });
-        await sendPushToUsers(recipientIds, { type: "EVENT_UPDATED", title: `Perubahan Agenda: ${payload.title.trim()}`, body: "Waktu atau lokasi agenda telah diperbarui.", url: "/jadwal", referenceId: eventId });
+        await sendPushToUsers(recipientIds, { type: "EVENT_UPDATED", title: `Perubahan Agenda: ${payload.title.trim()}`, body: "Waktu atau lokasi agenda telah diperbarui.", url: "/jadwal", referenceId: seriesId });
       } catch (pushError) {
         console.error("Event updated but push delivery failed:", pushError);
       }
     }
-    return { success: true, message: "Agenda berhasil diperbarui dan revisi sebelumnya disimpan.", eventId };
+    return { success: true, message: "Agenda berhasil diperbarui dan revisi sebelumnya disimpan.", eventId: seriesId };
   } catch (err) {
     console.error("Failed to update event:", err);
     return { success: false, message: "Gagal memperbarui agenda." };
@@ -680,30 +708,33 @@ export async function deleteEventAction(
   eventId: string
 ): Promise<{ success: boolean; message: string }> {
   const admin = await requireRole(["super_admin", "yayasan", "pengurus"]);
+  const ref = parseEventRef(eventId);
+  if (!ref) return { success: false, message: "ID agenda tidak valid." };
+  const seriesId = ref.eventId;
   try {
     const supabase = createAdminClient();
-    const { data: existing, error: readError } = await supabase.from("events").select("*").eq("id", eventId).maybeSingle();
+    const { data: existing, error: readError } = await supabase.from("events").select("*").eq("id", seriesId).maybeSingle();
     if (readError) throw readError;
     if (!existing) return { success: false, message: "Agenda tidak ditemukan." };
-    const { count } = await supabase.from("event_revisions").select("id", { count: "exact", head: true }).eq("event_id", eventId);
-    const { error: revisionError } = await supabase.from("event_revisions").insert({ event_id: eventId, revision_no: (count || 0) + 1, snapshot: existing, changed_by: admin.id });
+    const { count } = await supabase.from("event_revisions").select("id", { count: "exact", head: true }).eq("event_id", seriesId);
+    const { error: revisionError } = await supabase.from("event_revisions").insert({ event_id: seriesId, revision_no: (count || 0) + 1, snapshot: existing, changed_by: admin.id });
     if (revisionError) throw revisionError;
     const { error } = await supabase
       .from("events")
       .update({ status: "cancelled", updated_at: new Date().toISOString() })
-      .eq("id", eventId);
+      .eq("id", seriesId);
     if (error) throw error;
     const { error: auditError } = await supabase.from("audit_logs").insert({
       event_name: "event.deleted",
       actor_name: admin.full_name,
-      target_id: eventId,
+      target_id: seriesId,
       target_label: "Agenda",
-      action_detail: `Membatalkan agenda ID ${eventId}`,
+      action_detail: `Membatalkan agenda ID ${seriesId}`,
     });
     if (auditError) throw auditError;
     try {
       const recipientIds = await getAudienceUserIds(supabase, existing.audience_config || { scope: "all" });
-      await sendPushToUsers(recipientIds, { type: "EVENT_CANCELLED", title: `Agenda Dibatalkan: ${existing.title}`, body: "Agenda ini telah dibatalkan oleh administrator.", url: "/jadwal", referenceId: eventId });
+      await sendPushToUsers(recipientIds, { type: "EVENT_CANCELLED", title: `Agenda Dibatalkan: ${existing.title}`, body: "Agenda ini telah dibatalkan oleh administrator.", url: "/jadwal", referenceId: seriesId });
     } catch (pushError) {
       console.error("Event cancellation saved but push delivery failed:", pushError);
     }
@@ -812,12 +843,16 @@ export async function cancelEventAction(
     return { success: true, message: "Agenda berhasil dibatalkan." };
   }
 
+  const ref = parseEventRef(eventId);
+  if (!ref) return { success: false, message: "ID agenda tidak valid." };
+  const seriesId = ref.eventId;
+
   try {
     const supabase = createAdminClient();
     const { data: existing, error: readError } = await supabase
       .from("events")
       .select("id, title, status, audience_config")
-      .eq("id", eventId)
+      .eq("id", seriesId)
       .is("deleted_at", null)
       .maybeSingle();
     if (readError) throw readError;
@@ -829,14 +864,14 @@ export async function cancelEventAction(
     const { error } = await supabase
       .from("events")
       .update({ status: "cancelled", updated_at: new Date().toISOString() })
-      .eq("id", eventId);
+      .eq("id", seriesId);
     if (error) throw error;
 
     const { error: auditError } = await supabase.from("audit_logs").insert({
       event_name: "event.cancelled",
       actor_id: admin.id,
       actor_name: admin.full_name,
-      target_id: eventId,
+      target_id: seriesId,
       target_label: existing.title,
       action_detail: reason
         ? `Agenda dibatalkan: ${reason}`
@@ -854,7 +889,7 @@ export async function cancelEventAction(
         title: `Agenda Dibatalkan: ${existing.title}`,
         body: reason || "Agenda ini telah dibatalkan oleh administrator.",
         url: "/jadwal",
-        referenceId: eventId,
+        referenceId: seriesId,
       });
     } catch (pushError) {
       console.error("Event cancelled but push delivery failed:", pushError);
@@ -864,5 +899,54 @@ export async function cancelEventAction(
   } catch (err) {
     console.error("Failed to cancel event:", err);
     return { success: false, message: "Gagal membatalkan agenda." };
+  }
+}
+
+/**
+ * Server Action: Cancel / Restore a Single Occurrence of a Recurring Agenda (SCH-01)
+ * `eventRef` is the list key, so it may be `<uuid>` or `<uuid>:<WIB date>`. Only a
+ * dated reference can be cancelled one day at a time: a plain agenda must go
+ * through cancelEventAction, which is also what app.event_occurrence_set() enforces.
+ */
+export async function setEventOccurrenceCancelledAction(
+  eventRef: string,
+  cancelled: boolean,
+  reason?: string
+): Promise<{ success: boolean; message: string }> {
+  await requireRole(["super_admin", "yayasan", "pengurus"]);
+
+  const ref = parseEventRef(eventRef);
+  if (!ref || !ref.occurrenceDate) {
+    return { success: false, message: "Referensi agenda berulang tidak valid." };
+  }
+  const trimmedReason = (reason || "").trim();
+  if (trimmedReason.length > 300) {
+    return { success: false, message: "Alasan maksimal 300 karakter." };
+  }
+  if (process.env.VITEST) {
+    return { success: true, message: cancelled ? "Occurrence agenda dibatalkan." : "Occurrence agenda dipulihkan." };
+  }
+
+  // The RPC owns the permission check, the recurrence arithmetic and the ledger
+  // row, so the write travels on the caller's own session rather than a
+  // service-role shortcut around app.is_active_member() and auth.uid().
+  try {
+    const session = await createClient();
+    const { data, error } = await session.rpc("event_occurrence_set", {
+      p_event_id: ref.eventId,
+      p_occurrence_date: ref.occurrenceDate,
+      p_cancelled: cancelled,
+      p_reason: trimmedReason || null,
+    });
+    if (error) throw error;
+    const result = data as { success?: boolean; message?: string } | null;
+    return {
+      success: Boolean(result?.success),
+      message: result?.message
+        || (cancelled ? "Gagal membatalkan occurrence agenda." : "Gagal memulihkan occurrence agenda."),
+    };
+  } catch (err) {
+    console.error("Failed to update an event occurrence:", err);
+    return { success: false, message: "Gagal memperbarui occurrence agenda." };
   }
 }

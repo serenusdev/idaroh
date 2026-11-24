@@ -13,6 +13,7 @@ import {
   createEventAction,
   updateEventAction,
   deleteEventAction,
+  setEventOccurrenceCancelledAction,
   publishAnnouncementAction,
   saveAnnouncementDraftAction,
   updateAnnouncementAction,
@@ -59,6 +60,7 @@ export default function AdminJadwalPage() {
   const [editingEventId, setEditingEventId] = React.useState<string | null>(null);
   const [editingAnnouncementId, setEditingAnnouncementId] = React.useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = React.useState(false);
+  const [occurrenceBusyId, setOccurrenceBusyId] = React.useState<string | null>(null);
 
   // Event form
   const [eventForm, setEventForm] = React.useState({
@@ -155,8 +157,29 @@ export default function AdminJadwalPage() {
     }
   };
 
+  // SCH-01: one day of a recurring agenda can be cancelled without touching the
+  // rest of the series. The row keeps its own id as the list key and the series id
+  // in baseEventId, so only the day-level write uses the composite reference.
+  const handleToggleOccurrence = async (evt: ScheduleEventItem) => {
+    const restore = Boolean(evt.cancelledOccurrence);
+    const dayLabel = evt.dateStr || evt.occurrenceDate || "hari itu";
+    if (!confirm(restore
+      ? `Pulihkan agenda "${evt.title}" pada ${dayLabel}?`
+      : `Batalkan agenda "${evt.title}" hanya pada ${dayLabel}?`)) return;
+    setOccurrenceBusyId(evt.id);
+    setFeedbackNotice(null);
+    const res = await setEventOccurrenceCancelledAction(evt.id, !restore);
+    setOccurrenceBusyId(null);
+    if (res.success) {
+      setFeedbackNotice({ type: "success", message: res.message });
+      eventsQuery.refresh();
+    } else {
+      setFeedbackNotice({ type: "error", message: res.message });
+    }
+  };
+
   const handleEditEvent = (evt: ScheduleEventItem) => {
-    setEditingEventId(evt.id);
+    setEditingEventId(evt.baseEventId || evt.id);
     setEventForm({
       title: evt.title,
       category: evt.category,
@@ -428,8 +451,24 @@ export default function AdminJadwalPage() {
                       <span className="material-symbols-outlined text-[16px]">edit</span>
                       <span>Edit</span>
                     </button>
+                    {evt.occurrenceDate && (
+                      <button
+                        onClick={() => handleToggleOccurrence(evt)}
+                        disabled={occurrenceBusyId === evt.id}
+                        className={`h-8 px-2.5 rounded-lg font-label-sm text-xs flex items-center gap-1 transition-colors disabled:opacity-50 ${
+                          evt.cancelledOccurrence
+                            ? "text-primary hover:bg-primary/10"
+                            : "text-error hover:bg-error/10"
+                        }`}
+                      >
+                        <span className="material-symbols-outlined text-[16px]">
+                          {evt.cancelledOccurrence ? "event_available" : "event_busy"}
+                        </span>
+                        <span>{evt.cancelledOccurrence ? "Pulihkan hari ini" : "Batalkan hari ini"}</span>
+                      </button>
+                    )}
                     <button
-                      onClick={() => handleDeleteEvent(evt.id, evt.title)}
+                      onClick={() => handleDeleteEvent(evt.baseEventId || evt.id, evt.title)}
                       className="h-8 px-2.5 rounded-lg text-error hover:bg-error/10 font-label-sm text-xs flex items-center gap-1 transition-colors"
                     >
                       <span className="material-symbols-outlined text-[16px]">delete</span>
