@@ -134,7 +134,12 @@ export default function AdminJadwalPage() {
   const canManageAnnouncements = isAgendaManager;
 
   // Data states
-  const eventsQuery = useCachedData(canManageEvents ? `events:${currentUser.id}` : null, getEventsAction);
+  // `admin:events:` and not `events:`: this fetch keeps the cancelled days so the restore
+  // control has a row to act on, and the user surfaces share the plain key.
+  const eventsQuery = useCachedData(
+    canManageEvents ? `admin:events:${currentUser.id}` : null,
+    () => getEventsAction({ includeCancelledOccurrences: true }),
+  );
   const announcementsQuery = useCachedData(
     canManageAnnouncements ? `admin:announcements:${currentUser.id}` : null,
     getAdminAnnouncementsAction

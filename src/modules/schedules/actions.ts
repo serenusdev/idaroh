@@ -117,8 +117,13 @@ function toAnnouncementItem(row: any, readIds: Set<string> = new Set()): Announc
 
 /**
  * Server Action: Query Events for Schedules
+ *
+ * A day an operator called off with SCH-01 is only listed where it can be put back: the admin
+ * agenda panel passes includeCancelledOccurrences, the santri and koordinator lists skip it.
  */
-export async function getEventsAction(): Promise<ScheduleEventItem[]> {
+export async function getEventsAction(
+  options: { includeCancelledOccurrences?: boolean } = {},
+): Promise<ScheduleEventItem[]> {
   const user = await requireAuthUser();
   try {
     const supabase = createAdminClient();
@@ -159,7 +164,7 @@ export async function getEventsAction(): Promise<ScheduleEventItem[]> {
         ((organizers as any[]) || []).map((p: any) => [p.id, p.full_name])
       );
 
-      return visibleEvents.map((e: any) => {
+      const items: ScheduleEventItem[] = visibleEvents.map((e: any) => {
         const start = new Date(e.starts_at);
         const end = new Date(e.ends_at);
         const timeRangeStr = `${start.toLocaleTimeString("id-ID", { hour: "2-digit", minute: "2-digit", timeZone: "Asia/Jakarta" })} - ${end.toLocaleTimeString("id-ID", { hour: "2-digit", minute: "2-digit", timeZone: "Asia/Jakarta" })} WIB`;
@@ -198,6 +203,10 @@ export async function getEventsAction(): Promise<ScheduleEventItem[]> {
           cancelledOccurrence: Boolean(e.cancelledOccurrence),
         };
       });
+      // The cancelled day stays where the restore control is, and is a plain absence elsewhere.
+      return options.includeCancelledOccurrences
+        ? items
+        : items.filter((item: ScheduleEventItem) => !item.cancelledOccurrence);
     }
   } catch (err) {
     console.error("Failed to query events from Supabase:", err);
