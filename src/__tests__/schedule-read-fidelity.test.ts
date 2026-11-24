@@ -15,6 +15,10 @@
  * picker cannot represent. Defaulting such a row to "Seluruh pondok" made an unrelated edit
  * widen its audience, so the form has to say "kept" and the RPC has to receive no audience
  * key at all — app.event_upsert() then inherits the stored config.
+ *
+ * SCH-08/SCH-09 add the operator's decision about the cancelled day itself: a day the
+ * manager called off is a fact the restore button needs, and a lie the santri does not.
+ * So one read serves two views, and the extra days must not leak into the user list.
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -123,6 +127,20 @@ afterEach(() => {
   vi.unstubAllEnvs();
 });
 
+/**
+ * The admin list keeps the cancelled day because that is where the restore control lives;
+ * the user list hides it. The cast is only needed until this fix adds the option, and keeps
+ * `tsc --noEmit` honest about the signature it is compiled against today.
+ */
+function readEvents(options?: { includeCancelledOccurrences?: boolean }) {
+  const action = getEventsAction as (
+    o?: { includeCancelledOccurrences?: boolean },
+  ) => ReturnType<typeof getEventsAction>;
+  return action(options);
+}
+
+const managerView = () => readEvents({ includeCancelledOccurrences: true });
+
 describe("SCH-05 — a failed schedule read is reported, not presented as an empty schedule", () => {
   it("rejects when the agenda query fails", async () => {
     mocks.createAdminClient.mockReturnValue(database({ events: { error: { message: "connection timeout" } } }));
@@ -169,13 +187,13 @@ describe("SCH-05 — a failed schedule read is reported, not presented as an emp
     expect(events[0]).toMatchObject({ id: SERIES_ID, title: "Kajian Mingguan", statusLabel: "Sesuai Jadwal" });
   });
 
-  it("marks a per-occurrence cancellation as cancelled rather than dropping the day", async () => {
+  it("marks a per-occurrence cancellation as cancelled rather than dropping it from the manager view", async () => {
     mocks.createAdminClient.mockReturnValue(database({
       events: { rows: [eventRow({ recurrence_rule: "weekly", recurrence_until: "2027-01-24T00:00:00.000Z" })] },
       team_members: { rows: [] },
       event_occurrence_exceptions: { rows: [{ event_id: SERIES_ID, occurrence_date: "2027-01-17" }] },
     }));
-    const events = await getEventsAction();
+    const events = await managerView();
     const cancelled = events.find((evt) => evt.occurrenceDate === "2027-01-17");
     expect(cancelled?.cancelledOccurrence).toBe(true);
     expect(cancelled?.statusLabel).toBe("Dibatalkan");
@@ -230,6 +248,57 @@ describe("SCH-03 — an occurrence reference resolves to the series row", () => 
 
     expect(guard).toMatchObject({ success: false, message: expect.stringContaining("tidak valid") });
     expect(seen.map((query) => query.table)).not.toContain("events");
+  });
+});
+
+describe("a cancelled occurrence is a management fact, not a user fact", () => {
+  // Weekly series on 2027-01-10 / 01-17 / 01-24 with the middle day called off.
+  const recurringSeries = () => database({
+    events: { rows: [eventRow({ recurrence_rule: "weekly", recurrence_until: "2027-01-25T00:00:00.000Z" })] },
+    team_members: { rows: [] },
+    event_occurrence_exceptions: { rows: [{ event_id: SERIES_ID, occurrence_date: "2027-01-17" }] },
+  });
+
+  it("shows the days the series does happen", async () => {
+    mocks.createAdminClient.mockReturnValue(recurringSeries());
+    const dates = (await readEvents()).map((evt) => evt.occurrenceDate);
+    expect(dates).toContain("2027-01-10");
+    expect(dates).toContain("2027-01-24");
+  });
+
+  it("hides the called-off day from the default read a santri gets", async () => {
+    mocks.createAdminClient.mockReturnValue(recurringSeries());
+    const dates = (await readEvents()).map((evt) => evt.occurrenceDate);
+    expect(dates).not.toContain("2027-01-17");
+  });
+
+  it("keeps the called-off day in the read that carries the restore control", async () => {
+    mocks.createAdminClient.mockReturnValue(recurringSeries());
+    const cancelled = (await managerView()).find((evt) => evt.occurrenceDate === "2027-01-17");
+    expect(cancelled).toMatchObject({ cancelledOccurrence: true, statusLabel: "Dibatalkan" });
+  });
+
+  it("does not hide a whole-series cancellation, which every schedule surface badges", async () => {
+    mocks.createAdminClient.mockReturnValue(database({
+      events: { rows: [eventRow({ status: "cancelled" })] },
+      team_members: { rows: [] },
+      event_occurrence_exceptions: { rows: [] },
+    }));
+    const events = await readEvents();
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({ statusBadge: "cancelled", statusLabel: "Dibatalkan" });
+  });
+
+  it("wires the manager view to /admin/jadwal only", () => {
+    const adminPage = readFileSync(resolve(__dirname, "../app/(app)/admin/jadwal/page.tsx"), "utf8");
+    expect(adminPage).toMatch(/getEventsAction\(\{ includeCancelledOccurrences: true \}\)/);
+    // A different row set under the same cache key would make the two surfaces overwrite
+    // each other, so the manager fetch is keyed apart from the user surfaces.
+    expect(adminPage).toContain("admin:events:${currentUser.id}");
+    expect(adminPage).not.toContain("`events:${currentUser.id}`");
+    for (const page of ["../app/(app)/jadwal/page.tsx", "../app/(app)/page.tsx"]) {
+      expect(readFileSync(resolve(__dirname, page), "utf8")).not.toMatch(/includeCancelledOccurrences/);
+    }
   });
 });
 
