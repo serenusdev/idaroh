@@ -209,6 +209,11 @@ describe("ANN — the announcement command runs on the caller session", () => {
     expect(pgtap, "supabase/tests/announcement_command_scope.sql is missing").not.toBe("");
     expect(pgtap).toContain("SELECT plan(37)");
     expect(pgtap).toContain("SET LOCAL ROLE authenticated");
+    expect(pgtap).toContain("RESET ROLE;");
+    // Every physical read (audit_logs, drafts, the revision ledger) has to run outside the
+    // impersonated session: the SELECT policy hides exactly those rows, so read as
+    // `authenticated` the assertions would pass while the RPC wrote nothing.
+    expect(pgtap).toMatch(/RESET ROLE;\nSELECT is\(\(SELECT count\(\*\)::int FROM public\.audit_logs/);
     expect(pgtap).toContain("throws_ok");
     expect(pgtap).toContain("'42501'");
     expect(pgtap).toContain("announcement.published");
