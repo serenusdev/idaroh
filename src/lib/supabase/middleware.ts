@@ -12,6 +12,7 @@ export const PUBLIC_PATHS = [
   '/mfa',
   '/api/auth/login',
   '/api/calendar/feed',
+  '/api/version',
   '/sw.js',
   '/manifest.webmanifest',
 ];

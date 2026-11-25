@@ -49,10 +49,20 @@ export function useCachedData<T>(key: string | null, fetcher: () => Promise<T>) 
       setState({ key, data: readCache<T>(key), error: null, isLoading: false });
     }
     void revalidate(key, !hasCache(key));
-    return onInvalidate((prefix) => {
+    const refreshOnResume = () => {
+      void revalidate(key, false);
+    };
+    window.addEventListener("focus", refreshOnResume);
+    window.addEventListener("online", refreshOnResume);
+    const unsubscribe = onInvalidate((prefix) => {
       if (!key.startsWith(prefix)) return;
       void revalidate(key, !hasCache(key));
     });
+    return () => {
+      window.removeEventListener("focus", refreshOnResume);
+      window.removeEventListener("online", refreshOnResume);
+      unsubscribe();
+    };
   }, [key, revalidate]);
 
   const refresh = React.useCallback((): Promise<T | undefined> => {
