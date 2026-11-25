@@ -248,7 +248,13 @@ SELECT is((public.task_transition('00000000-0000-0000-0000-000000000760', 'in_pr
 SELECT public.tcmd_as('00000000-0000-0000-0000-000000000701');
 SELECT is((SELECT count(*)::int FROM public.tasks
   WHERE id = '00000000-0000-0000-0000-000000000763' AND status = 'todo'), 1, 'private task still todo');
-UPDATE public.tasks SET status = 'in_progress' WHERE id = '00000000-0000-0000-0000-000000000763';
+DO $$
+BEGIN
+  UPDATE public.tasks SET status = 'in_progress' WHERE id = '00000000-0000-0000-0000-000000000763';
+EXCEPTION WHEN insufficient_privilege THEN
+  -- TSK-02 (20261122000015) revokes table-level UPDATE from authenticated.
+  NULL;
+END $$;
 SELECT is((SELECT count(*)::int FROM public.tasks
   WHERE id = '00000000-0000-0000-0000-000000000763' AND status = 'todo'), 1,
   'a direct authenticated UPDATE can no longer change task status');
