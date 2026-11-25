@@ -4,7 +4,13 @@ export type AttendanceClassification =
   | "late"
   | "excused"
   | "sick"
-  | "no_checkin";
+  | "duty"
+  | "no_checkin"
+  // §3.3: the two statuses the effective layer produces for a day nobody was expected to
+  // attend. `non_operational` is what a Sunday or a calendar closure must read — before
+  // 20261122000011 restored the clause those dates were snapshotted as `no_checkin`.
+  | "non_operational"
+  | "not_required";
 
 export interface AttendanceRecordItem {
   id: string;

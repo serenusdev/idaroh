@@ -8,6 +8,7 @@ import { parseEventRef } from "@/lib/event-occurrence";
 import { ATTENDANCE_HISTORY } from "./data";
 import { AttendanceClassification, AttendanceRecordItem, CorrectionRequestPayload } from "./types";
 import { resolveCorrectionClassification } from "./classification";
+import { CORRECTABLE_STATUSES, EFFECTIVE_STATUS_LABELS } from "./labels";
 import { throwQueryError } from "@/lib/query-error";
 import { friendlyActionError } from "@/lib/action-error";
 
@@ -197,17 +198,8 @@ export async function getAttendanceHistoryAction(targetUserId?: string): Promise
       if (effectiveError) throw effectiveError;
       if (effectiveRows?.length) {
         const rawByDate = new Map((data as any[]).map((row) => [row.attendance_date, row]));
-        const labels: Record<string, string> = {
-          on_time: "Tepat Waktu",
-          grace: "Masa Toleransi",
-          late: "Terlambat",
-          excused: "Izin Resmi",
-          sick: "Sakit",
-          duty: "Tugas Luar",
-          no_checkin: "Belum Presensi",
-        };
         return (effectiveRows as any[])
-          .filter((row) => row.status in labels)
+          .filter((row) => row.status in EFFECTIVE_STATUS_LABELS)
           .map((row) => {
             const raw = rawByDate.get(row.attendance_date);
             const classification = row.status as AttendanceClassification;
@@ -221,9 +213,9 @@ export async function getAttendanceHistoryAction(targetUserId?: string): Promise
                 ? `${new Date(raw.checked_in_at).toLocaleTimeString("id-ID", { hour: "2-digit", minute: "2-digit", timeZone: "Asia/Jakarta" })} WIB`
                 : "—",
               classification,
-              label: labels[classification],
+              label: EFFECTIVE_STATUS_LABELS[classification],
               sessionTitle: "Operasional Santri Pagi",
-              canCorrect: classification === "late" || classification === "grace" || classification === "no_checkin",
+              canCorrect: CORRECTABLE_STATUSES.includes(classification),
             };
           });
       }
