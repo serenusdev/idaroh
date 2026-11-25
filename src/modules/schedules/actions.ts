@@ -774,16 +774,9 @@ export async function deleteEventAction(
   const seriesId = ref.eventId;
   try {
     const supabase = await createClient();
-    const { data: existing, error: readError } = await supabase
-      .from("events")
-      .select("id, title, audience_config")
-      .eq("id", seriesId)
-      .is("deleted_at", null)
-      .maybeSingle();
-    if (readError) throw readError;
-    if (!existing) return { success: false, message: "Agenda tidak ditemukan." };
-    // event_cancel owns the row and its ledger entry together; the old path wrote the
-    // audit row without an actor_id, so the delete could not be attributed.
+    // event_cancel owns the row and its ledger entry together; call it directly
+    // instead of pre-reading via RLS SELECT, which can hide team/role-scoped events
+    // from super_admin/pengurus in admin management views.
     const { data, error } = await supabase.rpc("event_cancel", {
       p_event_id: seriesId,
       p_status: "deleted",
@@ -795,7 +788,18 @@ export async function deleteEventAction(
       return { success: false, message: result.message || "Gagal menghapus agenda." };
     }
     try {
-      await notifyAudience(existing.audience_config || { scope: "all" }, { type: "EVENT_CANCELLED", title: `Agenda Dibatalkan: ${existing.title}`, body: "Agenda ini telah dibatalkan oleh administrator.", url: "/jadwal", referenceId: seriesId });
+      const { data: deletedEvent } = await supabase
+        .from("events")
+        .select("title, audience_config")
+        .eq("id", seriesId)
+        .maybeSingle();
+      await notifyAudience(deletedEvent?.audience_config || { scope: "all" }, {
+        type: "EVENT_CANCELLED",
+        title: `Agenda Dibatalkan: ${deletedEvent?.title || "Agenda"}`,
+        body: "Agenda ini telah dibatalkan oleh administrator.",
+        url: "/jadwal",
+        referenceId: seriesId,
+      });
     } catch (pushError) {
       console.error("Event cancellation saved but push delivery failed:", pushError);
     }

@@ -274,6 +274,8 @@ export default function AdminJadwalPage() {
     if (!confirm(`Hapus agenda "${title}" dari jadwal?`)) return;
     const res = await deleteEventAction(id);
     if (res.success) {
+      invalidateCache(`admin:events:${currentUser.id}`);
+      invalidateCache("events:");
       setFeedbackNotice({ type: "success", message: res.message });
       eventsQuery.refresh();
     } else {
@@ -295,6 +297,8 @@ export default function AdminJadwalPage() {
     const res = await setEventOccurrenceCancelledAction(evt.id, !restore);
     setOccurrenceBusyId(null);
     if (res.success) {
+      invalidateCache(`admin:events:${currentUser.id}`);
+      invalidateCache("events:");
       setFeedbackNotice({ type: "success", message: res.message });
       eventsQuery.refresh();
     } else {
