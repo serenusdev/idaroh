@@ -95,6 +95,9 @@ Tanpa replay ini, verifikasi yang tersedia adalah guard statis di `src/__tests__
      to_regprocedure('public.review_attendance_correction(uuid, text, text)')           IS NULL     AS correction3_gone,
      to_regprocedure('public.review_report(uuid, integer, text, text, text)')           IS NOT NULL AS review5,
      to_regprocedure('public.review_report(uuid, text, text)')                          IS NULL     AS review3_gone,
+     -- CRON-DAY + DEAD-RPC (20261122000012/13): wrapper publik tersedia, RPC mati hilang.
+     to_regprocedure('public.is_operational_day(date)')                                 IS NOT NULL AS day_guard,
+     to_regprocedure('public.report_submit(uuid, uuid)')                                IS NULL     AS dead_submit_gone,
      (SELECT count(*) FROM supabase_migrations.schema_migrations) AS applied_count;
    ```
    Semua boolean harus `true`. `NOTIFY pgrst` sudah disertakan di migrasi; bila PostgREST belum segar, reload API dari Dashboard.
@@ -109,9 +112,11 @@ Tanpa replay ini, verifikasi yang tersedia adalah guard statis di `src/__tests__
    tidak disentuh ulang), dan menulis jumlah baris yang diperbaiki ke `RAISE NOTICE`. Batas atasnya tanggal hari
    itu; jalankan per bulan bila rentangnya panjang. Verifikasi:
    `SELECT count(*) FROM attendance_effective WHERE EXTRACT(DOW FROM attendance_date) = 0 AND status <> 'non_operational';` → `0`.
-   Catatan jumlah file: sejak §2 ditulis, backlog Gelombang 2–3 menambah migrasi `20261122000001..11`, sehingga
-   daftar `--dry-run` berisi **33 file** sejak `20261105000002` (bukan 22). Cocokkan terhadap
+   Catatan jumlah file: sejak §2 ditulis, backlog Gelombang 2–3 menambah migrasi `20261122000001..13`, sehingga
+   daftar `--dry-run` berisi **35 file** sejak `20261105000002` (bukan 22). Cocokkan terhadap
    `ls supabase/migrations | awk -F_ '$1>=20261105000002' | wc -l`, bukan ke angka lama di dokumen ini.
+   `20261122000012`/`13` tidak butuh langkah operator sendiri: penjaga hari hanya dibaca rute cron (ikut deploy
+   aplikasi) dan `report_submit` tidak dipanggil kode produksi mana pun.
 4. Merge cabang ke `main` → Vercel deploy otomatis. Pastikan commit deploy = merge commit cabang ini.
 5. **Smoke test produksi** (pakai akun super_admin ber-MFA; jangan buat akun test permanen):
    - `/login`: widget Turnstile muncul (tidak ada error CSP di console browser), login sukses → MFA challenge jalan.
@@ -125,7 +130,7 @@ Tanpa replay ini, verifikasi yang tersedia adalah guard statis di `src/__tests__
 ## 5. Rollback
 
 - **Aplikasi**: redeploy commit produksi sebelumnya (`4e66ce2`) dari Vercel.
-- **Database**: migrasi bersifat forward-fix; jangan menurunkan skema secara otomatis. Rollback manual hanya untuk `20261118000001` via `supabase/rollback/20261118000001_report_review_command_idempotency_down.sql` — hanya jika aplikasi juga diturunkan ke versi pra-idempotensi (urutan manual ada di header file itu). `20261121000001` tidak perlu di-rollback (hanya DROP + assert; menjalankan ulang kode lama di atas skema baru tidak dijamin — kembali ke §5 aplikasi). `20261122000011` punya rollback di `supabase/rollback/20261122000011_attendance_temporal_rules_down.sql` (memulihkan pre-image `attendance_check_in`/`refresh_attendance_effective`/`save_report` dan menghapus helper + trigger kalender); jangan jalankan kecuali aplikasi juga diturunkan — rollback ini mengembalikan cacat Ahad dan reparasi datanya sengaja tidak dibatalkan.
+- **Database**: migrasi bersifat forward-fix; jangan menurunkan skema secara otomatis. Rollback manual hanya untuk `20261118000001` via `supabase/rollback/20261118000001_report_review_command_idempotency_down.sql` — hanya jika aplikasi juga diturunkan ke versi pra-idempotensi (urutan manual ada di header file itu). `20261121000001` tidak perlu di-rollback (hanya DROP + assert; menjalankan ulang kode lama di atas skema baru tidak dijamin — kembali ke §5 aplikasi). `20261122000011` punya rollback di `supabase/rollback/20261122000011_attendance_temporal_rules_down.sql` (memulihkan pre-image `attendance_check_in`/`refresh_attendance_effective`/`save_report` dan menghapus helper + trigger kalender); jangan jalankan kecuali aplikasi juga diturunkan — rollback ini mengembalikan cacat Ahad dan reparasi datanya sengaja tidak dibatalkan. `20261122000012` hanya menambah wrapper `public.is_operational_day(date)`; rollback-nya (`..._down.sql`) menghapus wrapper itu saja dan sengaja **tidak** menyentuh `app.is_operational_day` milik `20261122000011` — tanpa wrapper, rute cron gagal-baca → 500, bukan mengirim pengingat ke hari Ahad. `20261122000013` DROP `app.`/`public.report_submit(uuid, uuid)`; rollback-nya menancapkan kembali pre-image dari `20261101000004` **tanpa GRANT**, jadi fungsi itu kembali ada tetapi tetap tak terpanggil — tidak ada dampak data.
 - Jika push migrasi gagal di tengah: tiap file bertransaksi sendiri (`BEGIN/COMMIT`); catat file yang gagal, perbaiki penyebab (biasanya §2c/§2d belum dibereskan), lalu `supabase db push --remote` lagi — file yang sudah sukses tidak diulang.
 
 ## 6. Bukti yang dicatat

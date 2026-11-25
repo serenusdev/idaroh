@@ -16,6 +16,8 @@ let dueError: Error | null;
 let scheduleRows: { job_key: string; time_wib: string; days_of_week: number[]; enabled: boolean }[];
 let scheduleError: Error | null;
 let snapshotError: Error | null;
+let operationalDay: boolean | null;
+let dayError: Error | null;
 let profilesError: Error | null;
 let profiles: { id: string; attendance_reminder_enabled: boolean; status: string; member_type: string }[];
 let missingAttendance: { user_id: string }[];
@@ -72,9 +74,15 @@ beforeEach(() => {
     { job_key: "report_reminder", time_wib: "21:00", days_of_week: [1, 2, 3, 4, 5, 6], enabled: true },
   ];
   snapshotError = null; profilesError = null; profileSelects = [];
+  operationalDay = true; dayError = null;
   profiles = [{ id: "user-1", attendance_reminder_enabled: true, status: "active", member_type: "santri" }];
   missingAttendance = [{ user_id: "user-1" }]; attendance = []; reports = []; exceptions = [];
-  mocks.admin.mockReturnValue({ from: query, rpc: vi.fn(async () => ({ data: null, error: snapshotError })) });
+  mocks.admin.mockReturnValue({
+    from: query,
+    rpc: vi.fn(async (fn: string) => (
+      fn === "is_operational_day" ? { data: operationalDay, error: dayError } : { data: null, error: snapshotError }
+    )),
+  });
   mocks.jakarta.mockReturnValue({ dateStr: "2026-11-12", hours: 12, minutes: 0 });
   mocks.drain.mockReset(); mocks.send.mockReset();
   mocks.drain.mockImplementation(async () => { events.push("drain"); return { sent: 0, removed: 0, skipped: true }; });
@@ -127,6 +135,34 @@ describe("notification cron outbox integration", () => {
     mocks.jakarta.mockReturnValue({ dateStr: "2026-11-12", hours: 8, minutes: 15 });
     expect((await GET(request())).status).toBe(200);
     expect(mocks.send.mock.calls.map(([, message]) => message.type)).toEqual(["ATTENDANCE_REMINDER"]);
+  });
+
+  it("holds the attendance reminder on a non-operational day but not the report reminder", async () => {
+    // An admin selected Sunday in the weekday picker, and the day is a calendar closure: only the
+    // database day rule knows the difference, which is why the cron asks instead of filtering rows.
+    mocks.jakarta.mockReturnValue({ dateStr: "2026-11-24", hours: 7, minutes: 30 });
+    scheduleRows[0].days_of_week = [0, 1, 2, 3, 4, 5, 6];
+    scheduleRows[1].days_of_week = [0, 1, 2, 3, 4, 5, 6];
+    scheduleRows[1].time_wib = "07:30";
+    operationalDay = false;
+    expect((await GET(request())).status).toBe(200);
+    expect(mocks.send.mock.calls.map(([, message]) => message.type)).toEqual(["REPORT_DEADLINE_REMINDER"]);
+    expect(claimed.has("attendance-reminder:2026-11-24")).toBe(false);
+  });
+
+  it("treats an absent day answer as not operational rather than defaulting to sending", async () => {
+    mocks.jakarta.mockReturnValue({ dateStr: "2026-11-23", hours: 7, minutes: 30 });
+    operationalDay = null;
+    expect((await GET(request())).status).toBe(200);
+    expect(mocks.send).not.toHaveBeenCalled();
+  });
+
+  it("fails rather than guessing the calendar when the day guard cannot be read", async () => {
+    mocks.jakarta.mockReturnValue({ dateStr: "2026-11-23", hours: 7, minutes: 30 });
+    dayError = new Error("day guard unavailable");
+    expect((await GET(request())).status).toBe(500);
+    expect(mocks.send).not.toHaveBeenCalled();
+    expect(claimed.size).toBe(0);
   });
 
   it("skips disabled schedules, unselected weekdays and missing rows", async () => {

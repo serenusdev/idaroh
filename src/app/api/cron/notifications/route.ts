@@ -73,7 +73,12 @@ export async function GET(request: Request) {
       const row = schedules.get(key);
       return row ? isCronJobDue({ timeWib: row.time_wib, daysOfWeek: row.days_of_week, enabled: row.enabled }, jakarta) : false;
     };
-    const sendAttendanceReminder = due("attendance_reminder");
+    // §3.3: pengingat presensi tidak boleh keluar pada hari non-operasional. Snapshot sudah
+    // menyembunyikan hari itu selama refresh berhasil, tetapi jalur fallback di bawah dan jadwal
+    // admin yang memilih "Min" tidak, jadi aturan hari ditanyakan ke database (20261122000012).
+    const { data: operationalToday, error: dayError } = await admin.rpc("is_operational_day", { p_date: today });
+    if (dayError) throw dayError;
+    const sendAttendanceReminder = due("attendance_reminder") && operationalToday === true;
     const sendReportReminder = due("report_reminder");
     const { error: snapshotError } = await admin.rpc("refresh_attendance_effective", { p_date: today });
     if (snapshotError) console.error("Attendance effective snapshot failed:", snapshotError);
