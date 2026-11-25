@@ -36,7 +36,12 @@ export default function AdminPeoplePage() {
   };
 
   if (loading) return <div className="min-h-[360px] grid place-items-center"><LoadingSpinner size="lg" /></div>;
-  if (!["super_admin", "pengurus"].includes(user.role)) return <UnauthorizedState requiredRole="Super Admin / Pengurus" />;
+  // PPL-01: §3.7 grants yayasan team.member.manage / team.coordinator.set /
+  // reviewer.assign, and a grant can live in roles[] instead of the primary role.
+  const heldRoles = new Set<string>([user.role, ...(user.roles || [])].filter(Boolean) as string[]);
+  if (!["super_admin", "yayasan", "pengurus"].some((role) => heldRoles.has(role))) {
+    return <UnauthorizedState requiredRole="Super Admin / Yayasan / Pengurus" />;
+  }
 
   const submitMember = async (event: React.FormEvent) => {
     event.preventDefault();

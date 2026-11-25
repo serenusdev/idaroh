@@ -1,9 +1,9 @@
 /**
  * Tests for:
- *  SEC-02 — resetUserSessionAction hierarchy guard
+ *  SEC-02 — resetUserSessionAction super_admin-only guard (PERMISSIONS.md §3.1)
  *  SEC-04 — uploadTaskAttachmentAction MIME allowlist
  *  FUNC-05 — createManualAccountAction duplicate email check
- *  FUNC-06 — getAttendanceHistoryAction scoped per targetUserId
+ *  FUNC-06 — getAttendanceHistoryAction scoped through RLS, not by rank
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -17,23 +17,17 @@ const mocks = vi.hoisted(() => ({
   // Supabase chain tracks .eq() calls to detect which userId was scoped
   profileData: null as Record<string, unknown> | null,
   profileError: null as Error | null,
+  // Session-client reads: which tables were touched and with which predicates
+  sessionReads: [] as string[],
+  sessionEqCalls: [] as Array<{ table: string; column: string; value: unknown }>,
+  sessionRows: {} as Record<string, unknown[]>,
   requireRole: vi.fn(),
   requireAuthUser: vi.fn(),
-  getHighestRole: vi.fn((user: { role: string }) => user.role),
-  ROLE_PRIORITY: {
-    santri: 1,
-    koordinator: 2,
-    pengurus: 3,
-    yayasan: 4,
-    super_admin: 5,
-  } as Record<string, number>,
 }));
 
 vi.mock("@/lib/auth/guards", () => ({
   requireRole: mocks.requireRole,
   requireAuthUser: mocks.requireAuthUser,
-  getHighestRole: mocks.getHighestRole,
-  ROLE_PRIORITY: mocks.ROLE_PRIORITY,
   getJakartaTime: vi.fn(() => ({
     timeFormatted: "07:30:00",
     dateFormatted: "2026-11-01",
@@ -71,8 +65,25 @@ vi.mock("@/lib/supabase/admin", () => ({
   }),
 }));
 
+// The session client is what attendance reads now go through, so the stub has to record the
+// predicates the action builds — that is the only scoping left in TypeScript.
 vi.mock("@/lib/supabase/server", () => ({
-  createClient: vi.fn(),
+  createClient: async () => ({
+    from: (table: string) => {
+      mocks.sessionReads.push(table);
+      const chain: Record<string, unknown> = {};
+      for (const method of ["select", "order", "limit"]) {
+        chain[method] = (..._args: unknown[]) => chain;
+      }
+      chain.eq = (column: string, value: unknown) => {
+        mocks.sessionEqCalls.push({ table, column, value });
+        return chain;
+      };
+      chain.then = (resolve: (v: unknown) => unknown) =>
+        Promise.resolve({ data: mocks.sessionRows[table] ?? [], error: null }).then(resolve);
+      return chain;
+    },
+  }),
 }));
 
 vi.mock("@/lib/fcm", () => ({
@@ -82,7 +93,11 @@ vi.mock("@/lib/fcm", () => ({
 // ---------------------------------------------------------------------------
 // Imports (after mocks are hoisted)
 // ---------------------------------------------------------------------------
-import { resetUserSessionAction, createManualAccountAction } from "@/modules/iam/actions";
+import {
+  createManualAccountAction,
+  resetUserSessionAction,
+  revokeDeviceTokenAction,
+} from "@/modules/iam/actions";
 import { uploadTaskAttachmentAction } from "@/modules/operations/actions";
 import { getAttendanceHistoryAction } from "@/modules/attendance/actions";
 
@@ -112,9 +127,11 @@ beforeEach(() => {
   vi.stubEnv("VITEST", "true");
   mocks.profileData = null;
   mocks.profileError = null;
+  mocks.sessionReads.length = 0;
+  mocks.sessionEqCalls.length = 0;
+  mocks.sessionRows = {};
   mocks.requireRole.mockReset();
   mocks.requireAuthUser.mockReset();
-  mocks.getHighestRole.mockImplementation((user: { role: string }) => user.role);
 });
 
 afterEach(() => {
@@ -122,9 +139,9 @@ afterEach(() => {
 });
 
 // ===========================================================================
-// SEC-02 — resetUserSessionAction hierarchy guard
+// SEC-02 — resetUserSessionAction super_admin-only guard (§3.1)
 // ===========================================================================
-describe("SEC-02 resetUserSessionAction hierarchy guard", () => {
+describe("SEC-02 resetUserSessionAction is a super_admin command", () => {
   it("rejects empty userId regardless of caller role", async () => {
     mocks.requireRole.mockResolvedValue(makeUser("super_admin"));
     const result = await resetUserSessionAction("");
@@ -132,43 +149,32 @@ describe("SEC-02 resetUserSessionAction hierarchy guard", () => {
     expect(result.message).toContain("User ID tidak valid");
   });
 
-  it("super_admin can reset any user (including pengurus)", async () => {
+  it("super_admin can reset any user", async () => {
     mocks.requireRole.mockResolvedValue(makeUser("super_admin"));
-    const result = await resetUserSessionAction("mock-reset-pengurus-target");
+    const result = await resetUserSessionAction("usr-pengurus-target");
     expect(result.success).toBe(true);
     expect(result.message).toContain("berhasil dicabut");
+    expect(mocks.requireRole).toHaveBeenCalledWith(["super_admin"]);
   });
 
-  it("super_admin can reset a santri", async () => {
+  // ROLE-SYNC: the caller is refused before any lookup, so the target's rank never enters the
+  // decision — no profiles read, no hierarchy comparison in TypeScript.
+  it("asks the guard for super_admin alone, for every caller", async () => {
+    const setUser = makeUser("pengurus", ["pengurus"]);
+    mocks.requireRole.mockImplementation(async (allowed: string[]) => {
+      if (!allowed.includes("pengurus")) {
+        throw new Error(`FORBIDDEN: Anda tidak memiliki izin (${allowed.join(", ")}).`);
+      }
+      return setUser;
+    });
+    await expect(resetUserSessionAction("usr-superadmin-target")).rejects.toThrow("FORBIDDEN");
+    expect(mocks.requireRole).toHaveBeenCalledWith(["super_admin"]);
+  });
+
+  it("revokeDeviceTokenAction is guarded by the same single role", async () => {
     mocks.requireRole.mockResolvedValue(makeUser("super_admin"));
-    const result = await resetUserSessionAction("mock-reset-santri-target");
-    expect(result.success).toBe(true);
-  });
-
-  it("pengurus is blocked from resetting another pengurus (hierarchy forbidden)", async () => {
-    mocks.requireRole.mockResolvedValue(makeUser("pengurus", ["pengurus"]));
-    const result = await resetUserSessionAction("mock-reset-forbidden-hierarchy");
-    expect(result.success).toBe(false);
-    expect(result.message).toContain("hierarki setara atau lebih tinggi");
-  });
-
-  it("pengurus is blocked from resetting a yayasan account (hierarchy forbidden)", async () => {
-    mocks.requireRole.mockResolvedValue(makeUser("pengurus", ["pengurus"]));
-    const result = await resetUserSessionAction("mock-reset-forbidden-hierarchy");
-    expect(result.success).toBe(false);
-    expect(result.message).toContain("hierarki setara atau lebih tinggi");
-  });
-
-  it("pengurus can reset a santri", async () => {
-    mocks.requireRole.mockResolvedValue(makeUser("pengurus", ["pengurus"]));
-    // Not forbidden-hierarchy → passes VITEST path
-    const result = await resetUserSessionAction("mock-reset-santri-001");
-    expect(result.success).toBe(true);
-  });
-
-  it("koordinator is rejected by requireRole (not in allowed list)", async () => {
-    mocks.requireRole.mockRejectedValue(new Error("FORBIDDEN: koordinator not allowed"));
-    await expect(resetUserSessionAction("any-user")).rejects.toThrow("FORBIDDEN");
+    await revokeDeviceTokenAction("dev-1");
+    expect(mocks.requireRole).toHaveBeenCalledWith(["super_admin"]);
   });
 });
 
@@ -268,50 +274,64 @@ describe("FUNC-05 createManualAccountAction duplicate email guard", () => {
 });
 
 // ===========================================================================
-// FUNC-06 — getAttendanceHistoryAction scoped per targetUserId
+// FUNC-06 — getAttendanceHistoryAction scoped through RLS (ROLE-SYNC)
 // ===========================================================================
-describe("FUNC-06 getAttendanceHistoryAction user scope", () => {
-  it("santri always sees their own data, targetUserId is ignored", async () => {
-    mocks.requireAuthUser.mockResolvedValue(makeUser("santri", ["santri"], "santri-001"));
-    // Even with a targetUserId, santri is scoped to self — returns [] from mock (no rows)
-    const result = await getAttendanceHistoryAction("other-user-999");
-    expect(Array.isArray(result)).toBe(true);
-  });
+describe("FUNC-06 getAttendanceHistoryAction scoping", () => {
+  const scopedIds = () =>
+    mocks.sessionEqCalls
+      .filter((call) => call.table === "attendance_records" && call.column === "user_id")
+      .map((call) => call.value);
 
-  it("koordinator always sees their own data", async () => {
-    mocks.requireAuthUser.mockResolvedValue(makeUser("koordinator", ["koordinator"], "koordinator-001"));
-    const result = await getAttendanceHistoryAction("other-user-999");
-    expect(Array.isArray(result)).toBe(true);
-  });
-
-  it("admin without targetUserId returns empty array", async () => {
-    mocks.requireAuthUser.mockResolvedValue(makeUser("super_admin", ["super_admin"]));
-    const result = await getAttendanceHistoryAction(undefined);
+  it("reads with the caller's session so the policies decide visibility", async () => {
+    mocks.requireAuthUser.mockResolvedValue(makeUser("pengurus", ["pengurus"], "usr-pengurus"));
+    const result = await getAttendanceHistoryAction("usr-santri-target");
     expect(result).toEqual([]);
+    expect(mocks.sessionReads).toContain("attendance_records");
+    expect(scopedIds()).toEqual(["usr-santri-target"]);
   });
 
-  it("admin with valid targetUserId gets data for that user (mock returns [])", async () => {
-    mocks.requireAuthUser.mockResolvedValue(makeUser("super_admin", ["super_admin"]));
-    // Mock Supabase maybeSingle returns a santri profile (lower hierarchy)
-    mocks.profileData = { member_type: "Santri Digitalpreneur" };
-    const result = await getAttendanceHistoryAction("santri-target-001");
-    // With mock supabase returning empty arrays, we get []
-    expect(Array.isArray(result)).toBe(true);
+  it("falls back to the caller's own id when no target is given", async () => {
+    mocks.requireAuthUser.mockResolvedValue(makeUser("santri", ["santri"], "usr-santri"));
+    await getAttendanceHistoryAction();
+    expect(scopedIds()).toEqual(["usr-santri"]);
   });
 
-  it("pengurus trying to view another pengurus returns empty array (silent scope guard)", async () => {
-    mocks.requireAuthUser.mockResolvedValue(makeUser("pengurus", ["pengurus"]));
-    // Target is also pengurus — same priority, guard returns []
-    mocks.profileData = { member_type: "pengurus" };
-    const result = await getAttendanceHistoryAction("pengurus-target-001");
-    expect(result).toEqual([]);
+  // The rank check is gone from TypeScript, so nothing here can tell an out-of-scope target
+  // from an in-scope one any more — app.can_view_attendance_of() does, and a santri asking for
+  // a peer simply gets zero rows back. See supabase/tests/role_sync_attendance_scope.sql.
+  it("passes an out-of-scope target through instead of rewriting it to self", async () => {
+    mocks.requireAuthUser.mockResolvedValue(makeUser("santri", ["santri"], "usr-santri"));
+    await getAttendanceHistoryAction("usr-other-santri");
+    expect(scopedIds()).toEqual(["usr-other-santri"]);
   });
 
-  it("super_admin trying to view another super_admin returns empty array (silent scope guard)", async () => {
-    mocks.requireAuthUser.mockResolvedValue(makeUser("super_admin", ["super_admin"]));
-    // Target is also super_admin — same priority, guard returns []
-    mocks.profileData = { member_type: "super_admin" };
-    const result = await getAttendanceHistoryAction("superadmin-target-001");
-    expect(result).toEqual([]);
+  it("never asks for profiles or user_roles to decide the scope", async () => {
+    mocks.requireAuthUser.mockResolvedValue(makeUser("super_admin", ["super_admin"], "usr-admin"));
+    await getAttendanceHistoryAction("usr-admin-peer");
+    expect(mocks.sessionReads).not.toContain("profiles");
+    expect(mocks.sessionReads).not.toContain("user_roles");
+  });
+
+  it("returns rows for an equal-rank target instead of the old silent empty array", async () => {
+    mocks.requireAuthUser.mockResolvedValue(makeUser("super_admin", ["super_admin"], "usr-admin"));
+    mocks.sessionRows = {
+      attendance_records: [
+        {
+          id: "att-1",
+          attendance_date: "2026-11-20",
+          checked_in_at: "2026-11-20T00:30:00.000Z",
+          classification: "on_time",
+        },
+      ],
+    };
+    const result = await getAttendanceHistoryAction("usr-admin-peer");
+    expect(result).toHaveLength(1);
+    expect(result[0].dateStr).toBe("2026-11-20");
+  });
+
+  it("a koordinator is no longer special-cased back to their own rows", async () => {
+    mocks.requireAuthUser.mockResolvedValue(makeUser("koordinator", ["koordinator"], "usr-koord"));
+    await getAttendanceHistoryAction("usr-team-santri");
+    expect(scopedIds()).toEqual(["usr-team-santri"]);
   });
 });

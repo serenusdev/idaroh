@@ -9,35 +9,76 @@ import { formatRelativeTimeId } from "@/lib/utils";
 import { INITIAL_AUDIT_LOGS } from "./data";
 import { throwQueryError } from "@/lib/query-error";
 import { isDateOnly, isNonEmptyString, isTimeOnly, isPlainRecord } from "@/lib/input-validation";
+import {
+  EXPORT_ROLES,
+  exportRolesFor,
+  holdsRole,
+  isExportCategory,
+  validateExportFilters,
+  type ExportFilterInput,
+} from "@/lib/export-policy";
 import { AuditLogItem } from "./types";
 
 /**
  * Server Action: Export Audited Report (BR-ADM-08)
  * Strictly records export action in compliance with audit trail.
+ *
+ * PERMISSIONS.md §3.8: `analytics.export` belongs to yayasan and pengurus only
+ * (super_admin denied), and the request is only honoured for datasets the
+ * caller may read. The validated date range is persisted so the download
+ * endpoint replays exactly this scope instead of dumping the institution.
  */
 export async function exportAuditedDataAction(
   exportType: "csv" | "pdf",
   category: string,
-  requesterName?: string
+  requesterName?: string,
+  filters?: ExportFilterInput
 ): Promise<{ success: boolean; message: string; exportId: string; downloadUrl?: string }> {
   void requesterName;
-  const admin = await requireRole(["super_admin", "yayasan", "pengurus"]);
+  const admin = await requireRole([...EXPORT_ROLES]);
   const effectiveRequester = admin.full_name;
   const exportId = randomUUID();
-  if (!category.trim()) {
-    return { success: false, message: "Kategori ekspor wajib dipilih.", exportId };
+  const trimmedCategory = (category || "").trim();
+  if (!isExportCategory(trimmedCategory)) {
+    return { success: false, message: "Kategori ekspor tidak dikenal.", exportId };
   }
+  if (exportType !== "csv" && exportType !== "pdf") {
+    return { success: false, message: "Format ekspor tidak dikenal.", exportId };
+  }
+  const parsedFilters = validateExportFilters(filters);
+  if (!parsedFilters.ok) {
+    return { success: false, message: parsedFilters.message, exportId };
+  }
+  if (!holdsRole(admin, exportRolesFor(trimmedCategory))) {
+    return {
+      success: false,
+      message: "Log audit hanya dapat diekspor oleh Yayasan.",
+      exportId,
+    };
+  }
+  const { dateFrom, dateTo } = parsedFilters.value;
   try {
     const supabase = createAdminClient();
-    const exportPayload = { exportId, userId: admin.id, exportType, category: category.trim() };
+    const exportPayload = {
+      exportId,
+      userId: admin.id,
+      exportType,
+      category: trimmedCategory,
+      dateFrom,
+      dateTo,
+    };
     const hash = createHash("sha256").update(JSON.stringify(exportPayload)).digest("hex");
     // 1. Record export log
     const { error: exportError } = await supabase.from("export_logs").insert({
       id: exportId,
       user_id: admin.id,
       export_type: exportType,
-      category: category.trim(),
-      filter_criteria: { requested_by: effectiveRequester },
+      category: trimmedCategory,
+      filter_criteria: {
+        requested_by: effectiveRequester,
+        date_from: dateFrom,
+        date_to: dateTo,
+      },
       row_count: 0,
     });
     if (exportError) throw exportError;
@@ -48,8 +89,8 @@ export async function exportAuditedDataAction(
       actor_id: admin.id,
       actor_name: effectiveRequester,
       target_id: exportId,
-      target_label: `Ekspor ${category.toUpperCase()} (${exportType.toUpperCase()})`,
-      action_detail: `Unduhan rekap data operasional diotorisasi dan dicatat untuk kepatuhan ISO/IEC 27001.`,
+      target_label: `Ekspor ${trimmedCategory.toUpperCase()} (${exportType.toUpperCase()})`,
+      action_detail: `Unduhan rekap data operasional diotorisasi dan dicatat untuk kepatuhan ISO/IEC 27001. Rentang: ${dateFrom || "awal"} s.d. ${dateTo || "sekarang"} WIB.`,
       hash: `sha256:${hash}`,
     });
     if (auditError) throw auditError;
@@ -60,7 +101,7 @@ export async function exportAuditedDataAction(
 
   return {
     success: true,
-    message: `Ekspor data ${category.toUpperCase()} (${exportType.toUpperCase()}) oleh ${effectiveRequester} berhasil dicatat pada audit log.`,
+    message: `Ekspor data ${trimmedCategory.toUpperCase()} (${exportType.toUpperCase()}) oleh ${effectiveRequester} berhasil dicatat pada audit log.`,
     exportId,
     downloadUrl: `/api/exports/${exportId}.${exportType}`,
   };
@@ -74,7 +115,8 @@ export async function queryAuditLogsAction(
   scope: string = "Semua Tim (Organisasi)",
   page = 1
 ): Promise<{ success: boolean; logs: AuditLogItem[]; hasMore: boolean; page: number }> {
-  await requireRole(["super_admin", "yayasan", "pengurus"]);
+  // PERMISSIONS.md §3.8: admin.audit.read denies pengurus.
+  await requireRole(["super_admin", "yayasan"]);
   try {
     const supabase = createAdminClient();
     const pageSize = 50;
@@ -153,7 +195,8 @@ export async function queryAuditLogsAction(
 }
 
 export async function getAuditChainStatusAction(): Promise<{ valid: boolean; checked: number; message: string }> {
-  await requireRole(["super_admin", "yayasan", "pengurus"]);
+  // app.verify_audit_chain() enforces the same §3.8 reader set in the database.
+  await requireRole(["super_admin", "yayasan"]);
   if (process.env.VITEST) return { valid: true, checked: 0, message: "Audit chain test fixture valid." };
   try {
     const supabase = await createClient();
@@ -333,13 +376,21 @@ export interface AdminDashboardMetrics {
   approvedReports: number;
   pendingAccountRequests: number;
   activeTasks: number;
+  systemHealth?: {
+    activeUsersCount: number;
+    pendingOutbox: number;
+    failedCronRuns: number;
+  };
 }
 
 /**
- * Server Action: Query high-level operational counts for Admin Overview Dashboard
+ * Server Action: Query high-level operational counts for Admin Overview Dashboard.
+ * Decision D3: super_admin (without pengurus/yayasan) receives technical/system
+ * health aggregates only, without operational santri KPIs or PII.
  */
 export async function getAdminDashboardStatsAction(): Promise<AdminDashboardMetrics> {
-  await requireRole(["super_admin", "yayasan", "pengurus"]);
+  const user = await requireRole(["super_admin", "yayasan", "pengurus"]);
+  const isOperationalDashboardRole = holdsRole(user, ["pengurus", "yayasan"]);
   const result: AdminDashboardMetrics = {
     totalSantri: 0,
     todayCheckedIn: 0,
@@ -352,6 +403,35 @@ export async function getAdminDashboardStatsAction(): Promise<AdminDashboardMetr
 
   try {
     const supabase = createAdminClient();
+
+    if (holdsRole(user, ["super_admin"])) {
+      const [
+        { count: activeUsersCount, error: usersError },
+        { count: pendingOutboxCount, error: outboxError },
+        { count: failedCronCount, error: cronError },
+        { count: reqCount, error: reqError },
+      ] = await Promise.all([
+        supabase.from("profiles").select("id", { count: "exact", head: true }).eq("status", "active"),
+        supabase.from("notification_outbox").select("id", { count: "exact", head: true }).eq("status", "pending"),
+        supabase.from("cron_job_runs").select("id", { count: "exact", head: true }).eq("status", "failed"),
+        supabase.from("account_requests").select("*", { count: "exact", head: true }).eq("status", "pending"),
+      ]);
+      if (usersError) throw usersError;
+      if (outboxError) throw outboxError;
+      if (cronError) throw cronError;
+      if (reqError) throw reqError;
+      result.pendingAccountRequests = reqCount || 0;
+      result.systemHealth = {
+        activeUsersCount: activeUsersCount || 0,
+        pendingOutbox: pendingOutboxCount || 0,
+        failedCronRuns: failedCronCount || 0,
+      };
+    }
+
+    if (!isOperationalDashboardRole) {
+      return result;
+    }
+
     const today = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Jakarta" }).format(new Date());
 
     // 1. Total santri
@@ -383,15 +463,7 @@ export async function getAdminDashboardStatsAction(): Promise<AdminDashboardMetr
     result.pendingReports = pendingReportCount || 0;
     result.approvedReports = approvedReportCount || 0;
 
-    // 4. Pending account requests
-    const { count: reqCount, error: reqError } = await supabase
-      .from("account_requests")
-      .select("*", { count: "exact", head: true })
-      .eq("status", "pending");
-    if (reqError) throw reqError;
-    result.pendingAccountRequests = reqCount || 0;
-
-    // 5. Active tasks
+    // 4. Active tasks
     const { count: taskCount, error: taskError } = await supabase
       .from("tasks")
       .select("id", { count: "exact", head: true })

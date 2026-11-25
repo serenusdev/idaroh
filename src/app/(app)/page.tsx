@@ -12,6 +12,8 @@ import {
 } from "@/modules/analytics/actions";
 import { getEventsAction, getAnnouncementsAction } from "@/modules/schedules/actions";
 import { useIdentity } from "@/components/auth/identity-context";
+import { holdsRole } from "@/lib/export-policy";
+import { IAM_MUTATION_ROLES } from "@/lib/iam-policy";
 import { useCachedData } from "@/hooks/use-cached-data";
 import { invalidateCache } from "@/lib/data-cache";
 import type { ScheduleEventItem, AnnouncementItem } from "@/modules/schedules/types";
@@ -28,11 +30,15 @@ export default function BerandaPage() {
 
   // Live configs & data — stale-while-revalidate: kunjungan ulang langsung
   // menampilkan data terakhir sambil menyegarkan di latar belakang.
-  const isSupervisor = ["super_admin", "yayasan", "pengurus"].includes(currentUser.role);
+  const isOperationalSupervisor = holdsRole(currentUser, ["yayasan", "pengurus"]);
+  const isSupervisor = holdsRole(currentUser, ["super_admin", "yayasan", "pengurus"]);
+  // §3.1: only super_admin may read the registration queue or decide on it, so the approval
+  // shortcut stays out of the yayasan/pengurus dashboard instead of ending in "Unauthorized".
+  const canDecideIam = holdsRole(currentUser, IAM_MUTATION_ROLES);
   const policyQuery = useCachedData("policy:active", getActivePolicyAction);
   const eventsQuery = useCachedData(`events:${currentUser.id}`, getEventsAction);
   const announcementsQuery = useCachedData(`announcements:${currentUser.id}`, getAnnouncementsAction);
-  const statsQuery = useCachedData(isSupervisor ? "admin:dashboard-stats" : null, getAdminDashboardStatsAction);
+  const statsQuery = useCachedData(isSupervisor ? `admin:dashboard-stats:${currentUser.id}` : null, getAdminDashboardStatsAction);
 
   const policy = policyQuery.data ?? null;
   const events: ScheduleEventItem[] = eventsQuery.data ?? [];
@@ -268,6 +274,8 @@ export default function BerandaPage() {
           </div>
 
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-3.5">
+            {isOperationalSupervisor && (
+            <>
             {/* Presensi Hari Ini */}
             <div className="bg-card p-4 rounded-xl border border-border shadow-xs space-y-2">
               <div className="flex items-center justify-between">
@@ -308,8 +316,11 @@ export default function BerandaPage() {
                 <span className="material-symbols-outlined text-[13px]">arrow_forward</span>
               </Link>
             </div>
+            </>
+            )}
 
-            {/* Pendaftar Akun Baru (IAM) */}
+            {/* Pendaftar Akun Baru (IAM) — super_admin only */}
+            {canDecideIam && (
             <div className="bg-card p-4 rounded-xl border border-border shadow-xs space-y-2">
               <div className="flex items-center justify-between">
                 <span className="text-xs text-muted-foreground font-medium">Pengajuan Akun</span>
@@ -325,12 +336,44 @@ export default function BerandaPage() {
                 href="/admin/users"
                 className="text-[11px] text-primary hover:underline flex items-center gap-0.5 pt-1"
               >
-                <span>Kelola Pengguna IAM</span>
+                <span>Kelola Antrean Akun</span>
                 <span className="material-symbols-outlined text-[13px]">arrow_forward</span>
               </Link>
             </div>
+            )}
 
-            {/* Tugas & Proyek Aktif */}
+            {/* Kesehatan Sistem (D3) — super_admin */}
+            {canDecideIam && adminStats?.systemHealth && (
+            <>
+              <div className="bg-card p-4 rounded-xl border border-border shadow-xs space-y-2">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs text-muted-foreground font-medium">Antrean Outbox</span>
+                  <span className="material-symbols-outlined text-primary text-[20px]">notifications_active</span>
+                </div>
+                <div className="flex items-baseline gap-2">
+                  <span className="font-headline-sm text-2xl font-bold text-on-surface">
+                    {adminStats.systemHealth.pendingOutbox}
+                  </span>
+                  <span className="text-xs text-muted-foreground">menunggu kirim</span>
+                </div>
+              </div>
+              <div className="bg-card p-4 rounded-xl border border-border shadow-xs space-y-2">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs text-muted-foreground font-medium">Cron Gagal</span>
+                  <span className="material-symbols-outlined text-tertiary text-[20px]">schedule</span>
+                </div>
+                <div className="flex items-baseline gap-2">
+                  <span className="font-headline-sm text-2xl font-bold text-on-surface">
+                    {adminStats.systemHealth.failedCronRuns}
+                  </span>
+                  <span className="text-xs text-muted-foreground">eksekusi gagal</span>
+                </div>
+              </div>
+            </>
+            )}
+
+            {/* Tugas & Proyek Aktif — operasional non-SA */}
+            {isOperationalSupervisor && (
             <div className="bg-card p-4 rounded-xl border border-border shadow-xs space-y-2">
               <div className="flex items-center justify-between">
                 <span className="text-xs text-muted-foreground font-medium">Tugas &amp; Proyek</span>
@@ -350,6 +393,7 @@ export default function BerandaPage() {
                 <span className="material-symbols-outlined text-[13px]">arrow_forward</span>
               </Link>
             </div>
+            )}
           </div>
         </section>
 
@@ -415,7 +459,7 @@ export default function BerandaPage() {
               </div>
             </Link>
 
-            {/* Action 4: Kelola Pengguna IAM */}
+            {/* Action 4: the console is readable below super_admin; only the approval wording fits §3.1 */}
             <Link
               href="/admin/users"
               className="p-4 bg-card rounded-xl border border-border hover:border-primary/50 text-left transition-all space-y-2 shadow-2xs hover:shadow-xs group"
@@ -428,7 +472,7 @@ export default function BerandaPage() {
                   Kelola Pengguna IAM
                 </p>
                 <p className="text-xs text-muted-foreground mt-0.5">
-                  Persetujuan akun baru &amp; hak akses
+                  {canDecideIam ? "Persetujuan akun baru & hak akses" : "Direktori akun & peran aktif"}
                 </p>
               </div>
             </Link>

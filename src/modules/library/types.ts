@@ -53,3 +53,13 @@ export interface ResourceRevisionItem {
   changedBy?: string | null;
 }
 
+export interface ResourceVisibilityRules {
+  roleKeys: string[];
+  teamIds: string[];
+}
+
+export interface ResourceRuleOptions {
+  roles: Array<{ key: string; name: string }>;
+  teams: Array<{ id: string; name: string }>;
+}
+

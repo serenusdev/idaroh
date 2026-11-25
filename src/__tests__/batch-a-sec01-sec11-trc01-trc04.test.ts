@@ -35,14 +35,6 @@ const mocks = vi.hoisted(() => ({
   requireRole: vi.fn(),
   requireAuthUser: vi.fn(),
   drainPush: vi.fn(async () => ({ sent: 0, removed: 0, skipped: false })),
-  getHighestRole: vi.fn((user: { role: string }) => user.role),
-  ROLE_PRIORITY: {
-    santri: 1,
-    koordinator: 2,
-    pengurus: 3,
-    yayasan: 4,
-    super_admin: 5,
-  } as Record<string, number>,
   // fetch mock for Turnstile validation
   fetchMock: vi.fn(),
   // Insert results for email_outbox
@@ -55,8 +47,6 @@ const mocks = vi.hoisted(() => ({
 vi.mock("@/lib/auth/guards", () => ({
   requireRole: mocks.requireRole,
   requireAuthUser: mocks.requireAuthUser,
-  getHighestRole: mocks.getHighestRole,
-  ROLE_PRIORITY: mocks.ROLE_PRIORITY,
   getJakartaTime: vi.fn(() => ({
     timeFormatted: "07:30:00",
     dateFormatted: "2026-11-13",
@@ -262,7 +252,6 @@ beforeEach(() => {
   mocks.requireAuthUser.mockReset();
   mocks.drainPush.mockClear();
   mocks.drainPush.mockImplementation(async () => ({ sent: 0, removed: 0, skipped: false }));
-  mocks.getHighestRole.mockImplementation((user: { role: string }) => user.role);
   mocks.requireRole.mockResolvedValue(makeAdminUser());
   vi.unstubAllEnvs();
   vi.stubEnv("VITEST", "true");
@@ -316,12 +305,17 @@ describe("SEC-01 + FUNC-04 + SEC-05 — adminUpdateUserAction", () => {
     expect(result.message).toContain("berhasil diperbarui");
   });
 
-  it("blocks hierarchy elevation: target equal or higher", async () => {
-    const result = await adminUpdateUserAction("mock-test-forbidden-hierarchy", {
+  // ROLE-SYNC removed the equal-or-higher-rank branch: §3.1 reserves iam.account.suspend and
+  // iam.role.assign for super_admin, and the last-active-super_admin invariant is owned by the
+  // admin_update_user RPC (see supabase/tests/role_sync_iam_commands.sql). TypeScript has no
+  // hierarchy left to compare, so the pin here is the guard list itself.
+  it("authorises by the super_admin set rather than a rank comparison", async () => {
+    mocks.requireRole.mockClear();
+    const result = await adminUpdateUserAction("mock-test-santri", {
       fullName: "Target Higher",
     });
-    expect(result.success).toBe(false);
-    expect(result.message).toContain("hierarki");
+    expect(result.success).toBe(true);
+    expect(mocks.requireRole).toHaveBeenCalledWith(["super_admin"]);
   });
 
   describe("SEC-05: session_revoked_at on suspend — RPC path", () => {

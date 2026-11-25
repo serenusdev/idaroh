@@ -52,16 +52,24 @@ describe("Stage 8 — People & Teams (PRD-07)", () => {
   });
 
   it("allows updating non-structural bio per BR-PPL-10", async () => {
+    // §3.7 people.profile.update_self: the test identity is usr-santri-001, so that is the
+    // only id this action accepts.
     const res = await updatePersonalBioAction(
-      "usr-salman",
+      "usr-santri-001",
       "Santri Backend Developer & Penggiat open-source."
     );
     expect(res.success).toBe(true);
     expect(res.message).toContain("berhasil diperbarui");
   });
 
+  it("refuses to write the bio of another account per BR-PPL-10", async () => {
+    await expect(updatePersonalBioAction("usr-salman", "Bio orang lain")).rejects.toThrow(
+      "FORBIDDEN"
+    );
+  });
+
   it("rejects bio longer than 500 characters and invalid user id (TRC-26)", async () => {
-    const tooLong = await updatePersonalBioAction("usr-salman", "x".repeat(501));
+    const tooLong = await updatePersonalBioAction("usr-santri-001", "x".repeat(501));
     expect(tooLong.success).toBe(false);
     expect(tooLong.message).toContain("500");
 

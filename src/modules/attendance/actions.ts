@@ -3,11 +3,12 @@
 
 import { createAdminClient } from "@/lib/supabase/admin";
 import { createClient } from "@/lib/supabase/server";
-import { requireAuthUser, getHighestRole, ROLE_PRIORITY, getJakartaTime } from "@/lib/auth/guards";
-import { UserRole } from "@/lib/auth/types";
+import { requireAuthUser, getJakartaTime } from "@/lib/auth/guards";
+import { parseEventRef } from "@/lib/event-occurrence";
 import { ATTENDANCE_HISTORY } from "./data";
 import { AttendanceClassification, AttendanceRecordItem, CorrectionRequestPayload } from "./types";
 import { resolveCorrectionClassification } from "./classification";
+import { CORRECTABLE_STATUSES, EFFECTIVE_STATUS_LABELS } from "./labels";
 import { throwQueryError } from "@/lib/query-error";
 import { friendlyActionError } from "@/lib/action-error";
 
@@ -27,11 +28,16 @@ export async function assertEventNotCancelled(
   eventId: string
 ): Promise<{ success: false; message: string } | null> {
   if (process.env.VITEST) return null;
+  // The schedule list hands over `<uuid>:<WIB date>` for one day of a recurring agenda, and
+  // Postgres refuses to compare that string with a uuid column (22P02). Splitting it here keeps
+  // the guard honest about the series and about the single day SCH-01 can cancel (SCH-03).
+  const ref = parseEventRef(eventId);
+  if (!ref) return { success: false, message: "ID agenda tidak valid." };
   const supabase = createAdminClient();
   const { data: event, error } = await supabase
     .from("events")
     .select("id, status")
-    .eq("id", eventId)
+    .eq("id", ref.eventId)
     .maybeSingle();
   if (error) throw error;
   if (!event) return null; // No linked event — allow
@@ -40,6 +46,21 @@ export async function assertEventNotCancelled(
       success: false,
       message: "Agenda ini telah dibatalkan. Pembuatan absensi baru tidak diizinkan.",
     };
+  }
+  if (ref.occurrenceDate) {
+    const { data: exception, error: exceptionError } = await supabase
+      .from("event_occurrence_exceptions")
+      .select("event_id")
+      .eq("event_id", ref.eventId)
+      .eq("occurrence_date", ref.occurrenceDate)
+      .maybeSingle();
+    if (exceptionError) throw exceptionError;
+    if (exception) {
+      return {
+        success: false,
+        message: "Agenda ini telah dibatalkan pada tanggal tersebut. Pembuatan absensi baru tidak diizinkan.",
+      };
+    }
   }
   return null;
 }
@@ -144,57 +165,15 @@ export async function checkInAttendanceAction(): Promise<CheckinResult> {
 }
 
 /**
- * Local role normalizer for attendance scope guard (FUNC-06).
- * Maps profile.member_type strings to canonical UserRole keys.
- */
-function normalizeAttendanceRole(value: string | null | undefined): UserRole | null {
-  const s = (value || "").trim().toLowerCase();
-  if (s.includes("super_admin") || s.includes("super admin")) return "super_admin";
-  if (s.includes("yayasan")) return "yayasan";
-  if (s.includes("pengurus")) return "pengurus";
-  if (s.includes("koordinator")) return "koordinator";
-  if (s.includes("santri")) return "santri";
-  return null;
-}
-
-/**
- * Server Action: Query live attendance history from Supabase
- * @param targetUserId Optional. Required when caller is pengurus/yayasan/super_admin.
- *                     Santri/koordinator always see their own data; this param is ignored for them.
+ * Server Action: Query live attendance history through the member's own session so the
+ * attendance.record.read scope (PERMISSIONS.md §3.3) is decided by RLS, not by a rank table.
+ * @param targetUserId Optional. Rows outside the caller's scope come back empty.
  */
 export async function getAttendanceHistoryAction(targetUserId?: string): Promise<AttendanceRecordItem[]> {
   try {
     const user = await requireAuthUser();
-    const supabase = createAdminClient();
-    const callerRole = getHighestRole(user);
-
-    // Determine effective user ID to scope queries
-    let effectiveUserId: string;
-    if (["santri", "koordinator"].includes(callerRole)) {
-      // Santri/koordinator always see only their own records; ignore targetUserId
-      effectiveUserId = user.id;
-    } else {
-      // Pengurus, yayasan, super_admin must supply targetUserId
-      if (!targetUserId) {
-        return [];
-      }
-      // FUNC-06: Silent hierarchy guard — prevents enumerating records of equals/superiors
-      const { data: targetProfile, error: profileError } = await supabase
-        .from("profiles")
-        .select("member_type")
-        .eq("id", targetUserId)
-        .maybeSingle();
-      if (profileError) throw profileError;
-      if (!targetProfile) return [];
-      const targetRole = normalizeAttendanceRole(targetProfile.member_type);
-      if (
-        targetRole &&
-        ROLE_PRIORITY[targetRole] >= ROLE_PRIORITY[callerRole]
-      ) {
-        return []; // silent scope guard — do not reveal existence
-      }
-      effectiveUserId = targetUserId;
-    }
+    const supabase = await createClient();
+    const effectiveUserId = targetUserId || user.id;
 
     let query = supabase
       .from("attendance_records")
@@ -202,7 +181,6 @@ export async function getAttendanceHistoryAction(targetUserId?: string): Promise
       .order("attendance_date", { ascending: false })
       .limit(30);
 
-    // Scope query to the effective user (always per-user after FUNC-06 guard above)
     query = query.eq("user_id", effectiveUserId);
 
     const { data, error } = await query;
@@ -220,17 +198,8 @@ export async function getAttendanceHistoryAction(targetUserId?: string): Promise
       if (effectiveError) throw effectiveError;
       if (effectiveRows?.length) {
         const rawByDate = new Map((data as any[]).map((row) => [row.attendance_date, row]));
-        const labels: Record<string, string> = {
-          on_time: "Tepat Waktu",
-          grace: "Masa Toleransi",
-          late: "Terlambat",
-          excused: "Izin Resmi",
-          sick: "Sakit",
-          duty: "Tugas Luar",
-          no_checkin: "Belum Presensi",
-        };
         return (effectiveRows as any[])
-          .filter((row) => row.status in labels)
+          .filter((row) => row.status in EFFECTIVE_STATUS_LABELS)
           .map((row) => {
             const raw = rawByDate.get(row.attendance_date);
             const classification = row.status as AttendanceClassification;
@@ -244,9 +213,9 @@ export async function getAttendanceHistoryAction(targetUserId?: string): Promise
                 ? `${new Date(raw.checked_in_at).toLocaleTimeString("id-ID", { hour: "2-digit", minute: "2-digit", timeZone: "Asia/Jakarta" })} WIB`
                 : "—",
               classification,
-              label: labels[classification],
+              label: EFFECTIVE_STATUS_LABELS[classification],
               sessionTitle: "Operasional Santri Pagi",
-              canCorrect: classification === "late" || classification === "grace" || classification === "no_checkin",
+              canCorrect: CORRECTABLE_STATUSES.includes(classification),
             };
           });
       }

@@ -262,7 +262,7 @@ export async function importMembersCsvAction(
   fileName: string,
   csv: string
 ): Promise<MemberImportResult> {
-  const adminUser = await requireRole(["super_admin", "pengurus"]);
+  const adminUser = await requireRole(["super_admin"]);
   if (!isNonEmptyString(fileName, 255) || typeof csv !== "string" || csv.length > 5_000_000) {
     return { success: false, message: "Nama file atau isi CSV tidak valid.", totalRows: 0, importedRows: 0, rejectedRows: 0, errors: [] };
   }
@@ -327,9 +327,9 @@ export async function importMembersCsvAction(
     full_name: String(item.full_name),
     email: String(item.email).toLowerCase(),
     phone_number: String(item.phone_number || "-"),
-    role_requested: String(item.member_type || "santri"),
+    role_requested: "santri",
     team_requested: item.team_name ? String(item.team_name) : null,
-    notes: `Impor CSV batch ${batchId}. Attendance: ${String(item.attendance_required || "true")}; Report: ${String(item.report_required || "true")}.`,
+    notes: `Impor CSV batch ${batchId}. Kategori: ${String(item.member_type || "santri")}; Attendance: ${String(item.attendance_required || "true")}; Report: ${String(item.report_required || "true")}.`,
     status: "pending",
   })));
   if (insertError) {

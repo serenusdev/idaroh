@@ -40,8 +40,26 @@ describe("pending migration inventory", () => {
     expect(pendingMigrations).toContain("20261121000001_reconcile_rpc_overloads.sql");
   });
 
-  it("places the reconciliation migration last in the replay order", () => {
-    expect(pendingMigrations[pendingMigrations.length - 1]).toBe("20261121000001_reconcile_rpc_overloads.sql");
+  it("places the reconciliation migration before the follow-up remediations", () => {
+    const index = pendingMigrations.indexOf("20261121000001_reconcile_rpc_overloads.sql");
+    expect(index).toBeGreaterThanOrEqual(0);
+    expect(pendingMigrations.slice(index + 1)).toEqual([
+      "20261122000001_report_save_wib_is_late.sql",
+      "20261122000002_report_rls_review_scope.sql",
+      "20261122000003_audit_read_scope_and_import_administration.sql",
+      "20261122000004_task_command_scope_alignment.sql",
+      "20261122000005_resource_visibility_rules.sql",
+      "20261122000006_event_occurrence_cancellation.sql",
+      "20261122000007_team_command_rpcs_and_resource_upsert.sql",
+      "20261122000008_event_command_scope.sql",
+      "20261122000009_recurring_conflict_and_ics.sql",
+      "20261122000010_role_sync_ustadz_and_matrix.sql",
+      "20261122000011_attendance_temporal_rules.sql",
+      "20261122000012_attendance_reminder_day_guard.sql",
+      "20261122000013_drop_dead_report_submit.sql",
+      "20261122000014_announcement_command_scope.sql",
+      "20261122000015_task_command_scope_rpcs.sql",
+    ]);
   });
 });
 

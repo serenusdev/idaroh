@@ -1,26 +1,23 @@
 import { NextResponse } from "next/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { hashCalendarToken } from "@/lib/fcm";
+import { throwQueryError } from "@/lib/query-error";
+import {
+  FEED_HORIZON_DAYS,
+  dayOffsetFromBase,
+  escapeIcalText,
+  formatIcalInstant,
+  foldIcalLine,
+  icalWeekday,
+  occurrenceInstant,
+  pushVEvent,
+  recurrenceWindow,
+  wibDayKey,
+} from "@/lib/ical";
 
 export const dynamic = "force-dynamic";
 
-/**
- * Format Date to RFC 5545 iCalendar UTC string: YYYYMMDDTHHMMSSZ
- */
-function formatIcalDate(date: Date): string {
-  return date.toISOString().replace(/[-:]/g, "").split(".")[0] + "Z";
-}
-
-/**
- * Escape special characters per RFC 5545
- */
-function escapeIcalText(text: string): string {
-  return text
-    .replace(/\\/g, "\\\\")
-    .replace(/;/g, "\\;")
-    .replace(/,/g, "\\,")
-    .replace(/\n/g, "\\n");
-}
+const DAY_MS = 24 * 60 * 60 * 1000;
 
 /**
  * GET /api/calendar/feed
@@ -79,21 +76,24 @@ export async function GET(request: Request) {
       .is("deleted_at", null)
       .order("starts_at", { ascending: true });
 
-    if (error) {
-      console.error("Gagal mengambil events untuk iCal:", error);
-    }
+    // A calendar client caches what it is given, so a failed read has to be an HTTP error:
+    // an empty-but-valid feed is stored as "the pondok has no agenda".
+    if (error) throwQueryError("calendarFeed.events", error);
 
     const now = new Date();
-    const lines: string[] = [
-      "BEGIN:VCALENDAR",
-      "VERSION:2.0",
-      "PRODID:-//Pondok Quran Abdurrahman bin Auf//Pondok OS//ID",
-      "CALSCALE:GREGORIAN",
-      "METHOD:PUBLISH",
-      "X-WR-CALNAME:Agenda & Kajian Pondok OS",
-      "X-WR-TIMEZONE:Asia/Jakarta",
-      "X-WR-CALDESC:Jadwal kegiatan santri, kajian kitab, dan operasional Pondok Quran Abdurrahman bin Auf",
+    const prologue: Array<[string, string]> = [
+      ["VERSION", "2.0"],
+      ["PRODID", "-//Pondok Quran Abdurrahman bin Auf//Pondok OS//ID"],
+      ["CALSCALE", "GREGORIAN"],
+      ["METHOD", "PUBLISH"],
+      ["X-WR-CALNAME", "Agenda & Kajian Pondok OS"],
+      ["X-WR-TIMEZONE", "Asia/Jakarta"],
+      ["X-WR-CALDESC", "Jadwal kegiatan santri, kajian kitab, dan operasional Pondok Quran Abdurrahman bin Auf"],
     ];
+    const lines: string[] = ["BEGIN:VCALENDAR"];
+    for (const [name, value] of prologue) {
+      lines.push(foldIcalLine(`${name}:${value}`));
+    }
 
     const visibleEvents = (events || []).filter((event: { audience_config?: Record<string, unknown>; team_id?: string | null }) => {
       const config = event.audience_config || { scope: "all" };
@@ -103,27 +103,87 @@ export async function GET(request: Request) {
       return !event.team_id || event.team_id === owner.team_name || ownerTeamKeys.has(event.team_id);
     });
 
+    const recurringIds = visibleEvents
+      .filter((event: { recurrence_rule?: string | null }) => (event.recurrence_rule || "none") !== "none")
+      .map((event: { id: string }) => event.id);
+    // An unknown cancellation would publish a called-off day as an appointment, so this read
+    // is as fatal as the events read above.
+    const { data: exceptions, error: exceptionError } = recurringIds.length
+      ? await supabase
+          .from("event_occurrence_exceptions")
+          .select("event_id, occurrence_date")
+          .in("event_id", recurringIds)
+      : { data: [] as Array<{ event_id: string; occurrence_date: string }> };
+    if (exceptionError) throwQueryError("calendarFeed.occurrenceExceptions", exceptionError);
+
+    const cancelledDays = new Map<string, string[]>();
+    for (const row of (exceptions || []) as Array<{ event_id: string; occurrence_date: string }>) {
+      const existing = cancelledDays.get(row.event_id) || [];
+      existing.push(String(row.occurrence_date).slice(0, 10));
+      cancelledDays.set(row.event_id, existing);
+    }
+
+    const windowFrom = new Date(now.getTime() - DAY_MS);
+    const windowTo = new Date(now.getTime() + FEED_HORIZON_DAYS * DAY_MS);
+
     if (visibleEvents.length > 0) {
       for (const event of visibleEvents) {
         const start = new Date(event.starts_at);
         const end = new Date(event.ends_at);
+        const rule = event.recurrence_rule || "none";
+        const window = recurrenceWindow(
+          start,
+          rule,
+          event.recurrence_until ? new Date(event.recurrence_until) : null,
+          windowFrom,
+          windowTo,
+        );
+        // A series that has no occurrence left inside the published window would otherwise be
+        // projected from its base date forever by the client.
+        if (window.stepDays > 0 && window.count === 0) continue;
 
-        lines.push("BEGIN:VEVENT");
-        lines.push(`UID:${event.id}@pondok.os`);
-        lines.push(`DTSTAMP:${formatIcalDate(now)}`);
-        lines.push(`DTSTART:${formatIcalDate(start)}`);
-        lines.push(`DTEND:${formatIcalDate(end)}`);
-        lines.push(`SUMMARY:${escapeIcalText(event.title)}`);
+        const exdates = window.stepDays > 0
+          ? (cancelledDays.get(event.id) || [])
+              .map((day) => dayOffsetFromBase(wibDayKey(start), day))
+              .filter(
+                (offset) =>
+                  Number.isFinite(offset) &&
+                  offset % window.stepDays === 0 &&
+                  offset >= window.firstOffset &&
+                  offset <= window.lastOffset,
+              )
+              .map((offset) => formatIcalInstant(occurrenceInstant(start, offset)))
+              .sort()
+          : [];
+        if (window.stepDays > 0 && exdates.length >= window.count) continue;
 
+        const properties: Array<[string, string]> = [
+          ["UID", `${event.id}@pondok.os`],
+          ["DTSTAMP", formatIcalInstant(now)],
+          ["DTSTART", formatIcalInstant(start)],
+          ["DTEND", formatIcalInstant(end)],
+          ["SUMMARY", escapeIcalText(event.title)],
+        ];
         if (event.description) {
-          lines.push(`DESCRIPTION:${escapeIcalText(event.description)}`);
+          properties.push(["DESCRIPTION", escapeIcalText(event.description)]);
         }
         if (event.location) {
-          lines.push(`LOCATION:${escapeIcalText(event.location)}`);
+          properties.push(["LOCATION", escapeIcalText(event.location)]);
         }
-
-        lines.push("STATUS:CONFIRMED");
-        lines.push("END:VEVENT");
+        if (window.stepDays > 0) {
+          const byday = rule === "weekly" ? `;BYDAY=${icalWeekday(start)}` : "";
+          properties.push([
+            "RRULE",
+            `FREQ=${rule === "weekly" ? "WEEKLY" : "DAILY"}${byday};UNTIL=${formatIcalInstant(
+              occurrenceInstant(start, window.lastOffset),
+            )}`,
+          ]);
+          if (exdates.length > 0) {
+            properties.push(["EXDATE", exdates.join(",")]);
+          }
+        }
+        properties.push(["STATUS", "CONFIRMED"]);
+        pushVEvent(lines, properties);
       }
     }
 

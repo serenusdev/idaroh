@@ -54,27 +54,6 @@ export async function requireRole(allowedRoles: UserRole[], options?: AuthGuardO
   return user;
 }
 
-export const ROLE_PRIORITY: Record<UserRole, number> = {
-  santri: 1,
-  koordinator: 2,
-  pengurus: 3,
-  yayasan: 4,
-  super_admin: 5,
-};
-
-export function hasMinimumRole(user: UserProfile, minimumRole: UserRole): boolean {
-  return (user.roles || [user.role]).some(
-    (role) => ROLE_PRIORITY[role] >= ROLE_PRIORITY[minimumRole]
-  );
-}
-
-export function getHighestRole(user: UserProfile): UserRole {
-  return (user.roles || [user.role]).reduce(
-    (highest, role) => (ROLE_PRIORITY[role] > ROLE_PRIORITY[highest] ? role : highest),
-    user.role
-  );
-}
-
 /**
  * Robust timezone helper that calculates accurate Asia/Jakarta (WIB, UTC+7)
  * regardless of hosting server timezone (e.g. UTC on Vercel).

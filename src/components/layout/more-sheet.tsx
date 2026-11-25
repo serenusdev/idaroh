@@ -7,6 +7,14 @@ import { Avatar } from "@/components/ui/avatar";
 import { useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 import { cleanupPushNotifications } from "@/lib/notifications";
+import { AUDIT_READ_ROLES, holdsRole } from "@/lib/export-policy";
+import { IAM_MUTATION_ROLES } from "@/lib/iam-policy";
+import { holdsTaskRole, TASK_READ_ROLES } from "@/lib/task-policy";
+import {
+  AGENDA_MANAGER_ROLES,
+  AGENDA_WRITE_ROLES,
+  holdsScheduleRole,
+} from "@/lib/schedule-policy";
 
 interface MoreSheetProps {
   isOpen: boolean;
@@ -59,10 +67,16 @@ export function MoreSheet({ isOpen, onClose, user }: MoreSheetProps) {
     router.refresh();
   };
 
-  const isAdminOrPengurus =
-    user.role === "super_admin" ||
-    user.role === "yayasan" ||
-    user.role === "pengurus";
+  // §2 rule 8: evaluated over user.roles[], not only the primary role, so a multi-role
+  // account is never left without a link the server would accept.
+  const isAdminOrPengurus = holdsScheduleRole(user, AGENDA_MANAGER_ROLES);
+  // §3.1: yayasan and pengurus keep the read-only member console; the approval wording below is
+  // reserved for the role that can actually decide.
+  const canDecideIam = holdsRole(user, IAM_MUTATION_ROLES);
+  const canWriteAgenda = holdsScheduleRole(user, AGENDA_WRITE_ROLES);
+
+  // §3.5: every role except super_admin has a task read scope.
+  const canViewTasks = holdsTaskRole(user, TASK_READ_ROLES);
 
   return (
     <div className="fixed inset-0 z-50 md:hidden flex flex-col justify-end">
@@ -140,6 +154,7 @@ export function MoreSheet({ isOpen, onClose, user }: MoreSheetProps) {
             </Link>
           )}
 
+          {canViewTasks && (
           <Link
             href="/tugas"
             onClick={onClose}
@@ -157,6 +172,7 @@ export function MoreSheet({ isOpen, onClose, user }: MoreSheetProps) {
               </span>
             </div>
           </Link>
+          )}
 
           <Link
             href="/jadwal"
@@ -175,6 +191,28 @@ export function MoreSheet({ isOpen, onClose, user }: MoreSheetProps) {
               </span>
             </div>
           </Link>
+
+          {/* §3.6: a koordinator runs the agenda page for its own teams but holds none of
+              the other administrative links, so it sits outside the admin group. */}
+          {canWriteAgenda && !isAdminOrPengurus && (
+            <Link
+              href="/admin/jadwal"
+              onClick={onClose}
+              className="flex items-center gap-3 px-3 py-2.5 rounded-xl text-on-surface hover:bg-accent/40 active:bg-accent transition-colors"
+            >
+              <span className="material-symbols-outlined text-primary text-[22px]">
+                edit_calendar
+              </span>
+              <div className="flex-1">
+                <span className="font-label-md text-label-md block">
+                  Kelola Jadwal Agenda
+                </span>
+                <span className="font-body-sm text-[11px] text-muted-foreground block">
+                  Agenda untuk tim yang Anda koordinatori
+                </span>
+              </div>
+            </Link>
+          )}
 
           <Link
             href="/resources"
@@ -231,7 +269,7 @@ export function MoreSheet({ isOpen, onClose, user }: MoreSheetProps) {
                     Kelola Pengguna IAM
                   </span>
                   <span className="font-body-sm text-[11px] text-muted-foreground block">
-                    Persetujuan akun &amp; manajemen peran
+                    {canDecideIam ? "Persetujuan akun & manajemen peran" : "Direktori akun & peran aktif"}
                   </span>
                 </div>
               </Link>
@@ -266,6 +304,7 @@ export function MoreSheet({ isOpen, onClose, user }: MoreSheetProps) {
                 </div>
               </Link>
 
+              {holdsRole(user, AUDIT_READ_ROLES) && (
               <Link
                 href="/admin/audit"
                 onClick={onClose}
@@ -283,6 +322,7 @@ export function MoreSheet({ isOpen, onClose, user }: MoreSheetProps) {
                   </span>
                 </div>
               </Link>
+              )}
 
               <Link
                 href="/admin/kehadiran"

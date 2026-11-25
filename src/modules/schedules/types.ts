@@ -39,6 +39,11 @@ export interface ScheduleEventItem {
   audienceConfig?: AudienceConfig;
   recurrenceRule?: string;
   recurrenceUntil?: string;
+  /** For a recurring agenda the events row this list row was expanded from. */
+  baseEventId?: string;
+  /** WIB calendar date of this occurrence, the key of an exception row. */
+  occurrenceDate?: string;
+  cancelledOccurrence?: boolean;
 }
 
 export interface AnnouncementItem {

@@ -3,7 +3,14 @@
 
 import { createAdminClient } from "@/lib/supabase/admin";
 import { createClient } from "@/lib/supabase/server";
-import { hasMinimumRole, requireAuthUser } from "@/lib/auth/guards";
+import { requireAuthUser } from "@/lib/auth/guards";
+import {
+  holdsTaskRole,
+  TASK_OVERSIGHT_ROLES,
+  TASK_PROJECT_ROLES,
+  TASK_READ_ROLES,
+  TASK_REVIEW_ROLES,
+} from "@/lib/task-policy";
 import { sendPushToUsers } from "@/lib/fcm";
 import { isNonEmptyString, isPlainRecord } from "@/lib/input-validation";
 import { throwQueryError } from "@/lib/query-error";
@@ -36,41 +43,12 @@ export interface ProjectPayload {
   status?: ProjectItem["status"];
 }
 
-async function canAccessTaskForUser(
-  supabase: ReturnType<typeof createAdminClient>,
-  user: { id: string; role: string; roles?: string[] },
-  taskId: string
-) {
-  const { data: task, error } = await supabase
-    .from("tasks")
-    .select("id, created_by, team_id, visibility, task_assignees(user_id, unassigned_at)")
-    .eq("id", taskId)
-    .is("deleted_at", null)
-    .maybeSingle();
-  if (error) throw error;
-  if (!task) return false;
-  const roles = user.roles || [user.role];
-  if (roles.some((role) => ["super_admin", "yayasan", "pengurus"].includes(role))) return true;
-  if (task.created_by === user.id || (task.task_assignees || []).some((item: any) => item.user_id === user.id && !item.unassigned_at)) return true;
-  if (task.visibility === "private") return false;
-  if (task.visibility === "organization") return true;
-  if (!task.team_id) return false;
-  const { data: memberships, error: membershipError } = await supabase
-    .from("team_members")
-    .select("team_id, teams(id, name, slug)")
-    .eq("user_id", user.id)
-    .is("valid_to", null);
-  if (membershipError) throw membershipError;
-  return (memberships || []).some((item: any) =>
-    task.team_id === item.team_id || task.team_id === item.teams?.id || task.team_id === item.teams?.name || task.team_id === item.teams?.slug
-  );
-}
-
 /**
  * Server Action: Query all live tasks from Supabase
  */
 export async function getTasksAction(): Promise<TaskItem[]> {
   const user = await requireAuthUser();
+  if (!holdsTaskRole(user, TASK_READ_ROLES)) return [];
   try {
     const supabase = createAdminClient();
     const { data: tasks, error } = await supabase
@@ -83,7 +61,7 @@ export async function getTasksAction(): Promise<TaskItem[]> {
     if (tasks) {
       if (tasks.length === 0) return [];
       let visibleTasks = tasks as any[];
-      if (!(user.roles || [user.role]).some((role) => ["super_admin", "yayasan", "pengurus"].includes(role))) {
+      if (!holdsTaskRole(user, TASK_OVERSIGHT_ROLES)) {
         const { data: memberships } = await supabase.from("team_members").select("team_id, teams(id, name, slug)").eq("user_id", user.id).is("valid_to", null);
         const teamIds = new Set((memberships || []).flatMap((item: any) => [item.team_id, item.teams?.id, item.teams?.name, item.teams?.slug]));
         visibleTasks = visibleTasks.filter((task: any) =>
@@ -157,6 +135,7 @@ export async function getTasksAction(): Promise<TaskItem[]> {
  */
 export async function getProjectsAction(): Promise<ProjectItem[]> {
   const user = await requireAuthUser();
+  if (!holdsTaskRole(user, TASK_READ_ROLES)) return [];
   try {
     const supabase = createAdminClient();
     const { data: projects, error } = await supabase
@@ -167,7 +146,7 @@ export async function getProjectsAction(): Promise<ProjectItem[]> {
 
     if (!error && projects) {
       if (projects.length === 0) return [];
-      const elevated = (user.roles || [user.role]).some((role) => ["super_admin", "yayasan", "pengurus"].includes(role));
+      const elevated = holdsTaskRole(user, TASK_OVERSIGHT_ROLES);
       let visibleProjects = projects as any[];
       if (!elevated) {
         const { data: memberships, error: membershipError } = await supabase
@@ -226,31 +205,26 @@ export async function getProjectsAction(): Promise<ProjectItem[]> {
 
 export async function createProjectAction(payload: ProjectPayload): Promise<TaskActionResult<{ projectId: string }>> {
   const user = await requireAuthUser();
-  if (!hasMinimumRole(user, "koordinator")) return { success: false, message: "Hanya koordinator atau pengurus yang dapat membuat proyek." };
+  if (!holdsTaskRole(user, TASK_PROJECT_ROLES)) {
+    return { success: false, message: "Hanya koordinator, pengurus, atau yayasan yang dapat membuat proyek." };
+  }
   if (!isPlainRecord(payload) || !isNonEmptyString(payload.name, 120)) return { success: false, message: "Nama proyek wajib diisi dan maksimal 120 karakter." };
   const name = payload.name.trim();
   if (process.env.VITEST) return { success: true, message: "Proyek berhasil dibuat.", data: { projectId: `project-${Date.now()}` } };
   try {
-    const supabase = createAdminClient();
-    const { data, error } = await supabase.from("projects").insert({
-      name,
-      description: payload.description?.trim() || null,
-      team_id: payload.teamName?.trim() || null,
-      status: payload.status || "planned",
-      owner_id: user.id,
-      created_by: user.id,
-    }).select("id").single();
-    if (error) throw error;
-    const { error: auditError } = await supabase.from("audit_logs").insert({
-      event_name: "task.project_created",
-      actor_id: user.id,
-      actor_name: user.full_name,
-      target_id: data.id,
-      target_label: name,
-      action_detail: "Proyek operasional dibuat.",
+    const supabase = await createClient();
+    const { data, error } = await supabase.rpc("project_upsert", {
+      p_project_id: null,
+      p_name: name,
+      p_description: payload.description?.trim() || null,
+      p_team_id: payload.teamName?.trim() || null,
+      p_status: payload.status || "planned",
     });
-    if (auditError) throw auditError;
-    return { success: true, message: `Proyek "${name}" berhasil dibuat.`, data: { projectId: data.id } };
+    if (error) throw error;
+    if (!data?.success || !data.project_id) {
+      return { success: false, message: data?.message || "Gagal membuat proyek." };
+    }
+    return { success: true, message: `Proyek "${name}" berhasil dibuat.`, data: { projectId: data.project_id } };
   } catch (error) {
     console.error("Failed to create project:", error);
     return { success: false, message: "Gagal membuat proyek." };
@@ -259,19 +233,23 @@ export async function createProjectAction(payload: ProjectPayload): Promise<Task
 
 export async function updateProjectAction(projectId: string, payload: ProjectPayload): Promise<TaskActionResult> {
   const user = await requireAuthUser();
+  if (!holdsTaskRole(user, TASK_PROJECT_ROLES)) {
+    return { success: false, message: "Anda tidak memiliki akses mengubah proyek ini." };
+  }
   if (!isNonEmptyString(projectId, 100) || !isPlainRecord(payload) || !isNonEmptyString(payload.name, 120)) return { success: false, message: "ID dan nama proyek wajib diisi dengan format yang valid." };
   const name = payload.name.trim();
   if (process.env.VITEST) return { success: true, message: "Proyek berhasil diperbarui." };
   try {
-    const supabase = createAdminClient();
-    const { data: project, error: projectError } = await supabase.from("projects").select("id, name, owner_id, created_by").eq("id", projectId).is("archived_at", null).maybeSingle();
-    if (projectError) throw projectError;
-    if (!project) return { success: false, message: "Proyek tidak ditemukan." };
-    if (!hasMinimumRole(user, "koordinator") && project.owner_id !== user.id && project.created_by !== user.id) return { success: false, message: "Anda tidak memiliki akses mengubah proyek ini." };
-    const { error } = await supabase.from("projects").update({ name, description: payload.description?.trim() || null, team_id: payload.teamName?.trim() || null, status: payload.status || "active", updated_at: new Date().toISOString() }).eq("id", projectId).is("archived_at", null);
+    const supabase = await createClient();
+    const { data, error } = await supabase.rpc("project_upsert", {
+      p_project_id: projectId,
+      p_name: name,
+      p_description: payload.description?.trim() || null,
+      p_team_id: payload.teamName?.trim() || null,
+      p_status: payload.status || "active",
+    });
     if (error) throw error;
-    const { error: auditError } = await supabase.from("audit_logs").insert({ event_name: "task.project_updated", actor_id: user.id, actor_name: user.full_name, target_id: projectId, target_label: name, action_detail: "Detail proyek diperbarui." });
-    if (auditError) throw auditError;
+    if (!data?.success) return { success: false, message: data?.message || "Gagal memperbarui proyek." };
     return { success: true, message: `Proyek "${name}" berhasil diperbarui.` };
   } catch (error) {
     console.error("Failed to update project:", error);
@@ -281,19 +259,17 @@ export async function updateProjectAction(projectId: string, payload: ProjectPay
 
 export async function archiveProjectAction(projectId: string): Promise<TaskActionResult> {
   const user = await requireAuthUser();
+  if (!holdsTaskRole(user, TASK_PROJECT_ROLES)) {
+    return { success: false, message: "Anda tidak memiliki akses mengarsipkan proyek ini." };
+  }
   if (!projectId) return { success: false, message: "ID proyek tidak valid." };
   if (process.env.VITEST) return { success: true, message: "Proyek berhasil diarsipkan." };
   try {
-    const supabase = createAdminClient();
-    const { data: project, error: projectError } = await supabase.from("projects").select("id, name, owner_id, created_by").eq("id", projectId).is("archived_at", null).maybeSingle();
-    if (projectError) throw projectError;
-    if (!project) return { success: false, message: "Proyek tidak ditemukan." };
-    if (!hasMinimumRole(user, "koordinator") && project.owner_id !== user.id && project.created_by !== user.id) return { success: false, message: "Anda tidak memiliki akses mengarsipkan proyek ini." };
-    const { error } = await supabase.from("projects").update({ status: "archived", archived_at: new Date().toISOString(), updated_at: new Date().toISOString() }).eq("id", projectId).is("archived_at", null);
+    const supabase = await createClient();
+    const { data, error } = await supabase.rpc("project_archive", { p_project_id: projectId });
     if (error) throw error;
-    const { error: auditError } = await supabase.from("audit_logs").insert({ event_name: "task.project_archived", actor_id: user.id, actor_name: user.full_name, target_id: projectId, target_label: project.name, action_detail: "Proyek diarsipkan tanpa menghapus task dan riwayat." });
-    if (auditError) throw auditError;
-    return { success: true, message: `Proyek "${project.name}" berhasil diarsipkan.` };
+    if (!data?.success) return { success: false, message: data?.message || "Gagal mengarsipkan proyek." };
+    return { success: true, message: `Proyek "${data.name || ""}" berhasil diarsipkan.` };
   } catch (error) {
     console.error("Failed to archive project:", error);
     return { success: false, message: "Gagal mengarsipkan proyek." };
@@ -369,6 +345,9 @@ export async function toggleChecklistItemAction(
   done: boolean
 ): Promise<{ success: boolean; message: string }> {
   const user = await requireAuthUser();
+  if (!holdsTaskRole(user, TASK_READ_ROLES)) {
+    return { success: false, message: "Anda tidak memiliki akses ke checklist tugas ini." };
+  }
   if (process.env.VITEST) {
     return {
       success: true,
@@ -376,21 +355,16 @@ export async function toggleChecklistItemAction(
     };
   }
   try {
-    const supabase = createAdminClient();
-    if (!(await canAccessTaskForUser(supabase, user, taskId))) {
-      return { success: false, message: "Anda tidak memiliki akses ke checklist tugas ini." };
-    }
-    const { data: item, error: itemError } = await supabase
-      .from("task_checklist_items")
-      .update({ done })
-      .eq("id", checklistId)
-      .eq("task_id", taskId)
-      .select("id")
-      .maybeSingle();
-    if (itemError) throw itemError;
-    if (!item) return { success: false, message: "Item checklist tidak ditemukan." };
-    const { error: auditError } = await supabase.from("audit_logs").insert({ event_name: "task.checklist_toggled", actor_id: user.id, actor_name: user.full_name, target_id: taskId, target_label: checklistId, action_detail: `Checklist ditandai ${done ? "selesai" : "belum selesai"}.` });
-    if (auditError) throw auditError;
+    const supabase = await createClient();
+    const { data, error } = await supabase.rpc("task_checklist_mutate", {
+      p_task_id: taskId,
+      p_action: "toggle",
+      p_checklist_id: checklistId,
+      p_text: null,
+      p_done: done,
+    });
+    if (error) throw error;
+    if (!data?.success) return { success: false, message: data?.message || "Gagal memperbarui checklist tugas." };
   } catch (err) {
     console.error("Failed to update checklist:", err);
     return { success: false, message: "Gagal memperbarui checklist tugas." };
@@ -403,18 +377,24 @@ export async function toggleChecklistItemAction(
 
 export async function addChecklistItemAction(taskId: string, text: string): Promise<TaskActionResult<{ itemId: string }>> {
   const user = await requireAuthUser();
+  if (!holdsTaskRole(user, TASK_READ_ROLES)) {
+    return { success: false, message: "Anda tidak memiliki akses ke checklist tugas ini." };
+  }
   const cleanText = text.trim();
   if (!taskId || !cleanText) return { success: false, message: "Tugas dan teks checklist wajib diisi." };
   if (process.env.VITEST) return { success: true, message: "Checklist ditambahkan.", data: { itemId: `check-${Date.now()}` } };
   try {
-    const supabase = createAdminClient();
-    if (!(await canAccessTaskForUser(supabase, user, taskId))) return { success: false, message: "Anda tidak memiliki akses ke checklist tugas ini." };
-    const { data: last } = await supabase.from("task_checklist_items").select("sort_order").eq("task_id", taskId).order("sort_order", { ascending: false }).limit(1).maybeSingle();
-    const { data, error } = await supabase.from("task_checklist_items").insert({ task_id: taskId, text: cleanText, sort_order: Number(last?.sort_order || 0) + 1 }).select("id").single();
+    const supabase = await createClient();
+    const { data, error } = await supabase.rpc("task_checklist_mutate", {
+      p_task_id: taskId,
+      p_action: "add",
+      p_checklist_id: null,
+      p_text: cleanText,
+      p_done: false,
+    });
     if (error) throw error;
-    const { error: auditError } = await supabase.from("audit_logs").insert({ event_name: "task.checklist_created", actor_id: user.id, actor_name: user.full_name, target_id: taskId, target_label: cleanText, action_detail: "Item checklist ditambahkan." });
-    if (auditError) throw auditError;
-    return { success: true, message: "Checklist berhasil ditambahkan.", data: { itemId: data.id } };
+    if (!data?.success || !data.item_id) return { success: false, message: data?.message || "Gagal menambahkan checklist." };
+    return { success: true, message: "Checklist berhasil ditambahkan.", data: { itemId: data.item_id } };
   } catch (error) {
     console.error("Failed to add checklist item:", error);
     return { success: false, message: "Gagal menambahkan checklist." };
@@ -423,19 +403,23 @@ export async function addChecklistItemAction(taskId: string, text: string): Prom
 
 export async function updateChecklistItemAction(taskId: string, checklistId: string, text: string): Promise<TaskActionResult> {
   const user = await requireAuthUser();
+  if (!holdsTaskRole(user, TASK_READ_ROLES)) {
+    return { success: false, message: "Anda tidak memiliki akses ke checklist tugas ini." };
+  }
   const cleanText = text.trim();
   if (!taskId || !checklistId || !cleanText) return { success: false, message: "Checklist tidak valid." };
   if (process.env.VITEST) return { success: true, message: "Checklist diperbarui." };
   try {
-    const supabase = createAdminClient();
-    if (!(await canAccessTaskForUser(supabase, user, taskId))) return { success: false, message: "Anda tidak memiliki akses ke checklist tugas ini." };
-    const { data, error } = await supabase.from("task_checklist_items").update({ text: cleanText }).eq("id", checklistId).eq("task_id", taskId).select("id").maybeSingle();
+    const supabase = await createClient();
+    const { data, error } = await supabase.rpc("task_checklist_mutate", {
+      p_task_id: taskId,
+      p_action: "update",
+      p_checklist_id: checklistId,
+      p_text: cleanText,
+      p_done: false,
+    });
     if (error) throw error;
-    if (data) {
-      const { error: auditError } = await supabase.from("audit_logs").insert({ event_name: "task.checklist_updated", actor_id: user.id, actor_name: user.full_name, target_id: taskId, target_label: checklistId, action_detail: "Item checklist diperbarui." });
-      if (auditError) throw auditError;
-    }
-    return data ? { success: true, message: "Checklist berhasil diperbarui." } : { success: false, message: "Checklist tidak ditemukan." };
+    return data?.success ? { success: true, message: "Checklist berhasil diperbarui." } : { success: false, message: data?.message || "Checklist tidak ditemukan." };
   } catch (error) {
     console.error("Failed to update checklist item:", error);
     return { success: false, message: "Gagal memperbarui checklist." };
@@ -444,18 +428,22 @@ export async function updateChecklistItemAction(taskId: string, checklistId: str
 
 export async function deleteChecklistItemAction(taskId: string, checklistId: string): Promise<TaskActionResult> {
   const user = await requireAuthUser();
+  if (!holdsTaskRole(user, TASK_READ_ROLES)) {
+    return { success: false, message: "Anda tidak memiliki akses ke checklist tugas ini." };
+  }
   if (!taskId || !checklistId) return { success: false, message: "Checklist tidak valid." };
   if (process.env.VITEST) return { success: true, message: "Checklist dihapus." };
   try {
-    const supabase = createAdminClient();
-    if (!(await canAccessTaskForUser(supabase, user, taskId))) return { success: false, message: "Anda tidak memiliki akses ke checklist tugas ini." };
-    const { data, error } = await supabase.from("task_checklist_items").delete().eq("id", checklistId).eq("task_id", taskId).select("id").maybeSingle();
+    const supabase = await createClient();
+    const { data, error } = await supabase.rpc("task_checklist_mutate", {
+      p_task_id: taskId,
+      p_action: "delete",
+      p_checklist_id: checklistId,
+      p_text: null,
+      p_done: false,
+    });
     if (error) throw error;
-    if (data) {
-      const { error: auditError } = await supabase.from("audit_logs").insert({ event_name: "task.checklist_deleted", actor_id: user.id, actor_name: user.full_name, target_id: taskId, target_label: checklistId, action_detail: "Item checklist dihapus." });
-      if (auditError) throw auditError;
-    }
-    return data ? { success: true, message: "Checklist berhasil dihapus." } : { success: false, message: "Checklist tidak ditemukan." };
+    return data?.success ? { success: true, message: "Checklist berhasil dihapus." } : { success: false, message: data?.message || "Checklist tidak ditemukan." };
   } catch (error) {
     console.error("Failed to delete checklist item:", error);
     return { success: false, message: "Gagal menghapus checklist." };
@@ -532,28 +520,24 @@ export async function updateTaskAction(
 ): Promise<{ success: boolean; message: string; taskId?: string }> {
   if (!isNonEmptyString(taskId, 100) || !isPlainRecord(payload) || !isNonEmptyString(payload.title, 200)) return { success: false, message: "ID dan judul tugas wajib diisi dengan format yang valid." };
   const user = await requireAuthUser();
+  if (!holdsTaskRole(user, TASK_READ_ROLES)) return { success: false, message: "Peran Anda tidak memiliki akses mengubah tugas." };
   if (process.env.VITEST) return { success: true, message: "Tugas berhasil diperbarui.", taskId };
   try {
-    const supabase = createAdminClient();
-    const { data: task, error: taskError } = await supabase.from("tasks").select("id, title, created_by").eq("id", taskId).is("deleted_at", null).maybeSingle();
-    if (taskError) throw taskError;
-    if (!task) return { success: false, message: "Tugas tidak ditemukan." };
-    if (task.created_by !== user.id && !hasMinimumRole(user, "pengurus")) return { success: false, message: "Hanya pembuat tugas atau pengurus yang dapat mengubah tugas." };
     const dueDate = payload.dueDateIso || payload.dueDateStr || null;
     if (dueDate && !/^\d{4}-\d{2}-\d{2}$/.test(dueDate)) return { success: false, message: "Format tenggat tugas tidak valid." };
-    const { error } = await supabase.from("tasks").update({
-      title: payload.title.trim(),
-      description: payload.description?.trim() || "",
-      project_id: payload.projectId ? payload.projectId : null,
-      priority: payload.priority,
-      requires_review: payload.requiresReview,
-      due_date: dueDate,
-      visibility: payload.visibility || "team",
-      updated_at: new Date().toISOString(),
-    }).eq("id", taskId).is("deleted_at", null);
+    const supabase = await createClient();
+    const { data, error } = await supabase.rpc("task_update", {
+      p_task_id: taskId,
+      p_title: payload.title.trim(),
+      p_description: payload.description?.trim() || "",
+      p_priority: payload.priority,
+      p_requires_review: payload.requiresReview,
+      p_project_id: payload.projectId ? payload.projectId : null,
+      p_due_date: dueDate,
+      p_visibility: payload.visibility || "team",
+    });
     if (error) throw error;
-    const { error: auditError } = await supabase.from("audit_logs").insert({ event_name: "task.updated", actor_id: user.id, actor_name: user.full_name, target_id: taskId, target_label: payload.title.trim(), action_detail: "Detail tugas diperbarui." });
-    if (auditError) throw auditError;
+    if (!data?.success) return { success: false, message: data?.message || "Gagal memperbarui tugas." };
     return { success: true, message: `Tugas "${payload.title.trim()}" berhasil diperbarui.`, taskId };
   } catch (error) {
     console.error("Failed to update task:", error);
@@ -563,18 +547,14 @@ export async function updateTaskAction(
 
 export async function deleteTaskAction(taskId: string): Promise<{ success: boolean; message: string }> {
   const user = await requireAuthUser();
+  if (!holdsTaskRole(user, TASK_READ_ROLES)) return { success: false, message: "Peran Anda tidak memiliki akses mengarsipkan tugas." };
   if (!taskId) return { success: false, message: "ID tugas tidak valid." };
   if (process.env.VITEST) return { success: true, message: "Tugas berhasil diarsipkan." };
   try {
-    const supabase = createAdminClient();
-    const { data: task, error: taskError } = await supabase.from("tasks").select("id, title, created_by").eq("id", taskId).is("deleted_at", null).maybeSingle();
-    if (taskError) throw taskError;
-    if (!task) return { success: false, message: "Tugas tidak ditemukan." };
-    if (task.created_by !== user.id && !hasMinimumRole(user, "pengurus")) return { success: false, message: "Hanya pembuat tugas atau pengurus yang dapat mengarsipkan tugas." };
-    const { error } = await supabase.from("tasks").update({ deleted_at: new Date().toISOString(), updated_at: new Date().toISOString() }).eq("id", taskId).is("deleted_at", null);
+    const supabase = await createClient();
+    const { data, error } = await supabase.rpc("task_archive", { p_task_id: taskId });
     if (error) throw error;
-    const { error: auditError } = await supabase.from("audit_logs").insert({ event_name: "task.archived", actor_id: user.id, actor_name: user.full_name, target_id: taskId, target_label: task.title, action_detail: "Tugas diarsipkan secara soft-delete." });
-    if (auditError) throw auditError;
+    if (!data?.success) return { success: false, message: data?.message || "Gagal mengarsipkan tugas." };
     return { success: true, message: "Tugas berhasil diarsipkan." };
   } catch (error) {
     console.error("Failed to archive task:", error);
@@ -584,13 +564,17 @@ export async function deleteTaskAction(taskId: string): Promise<{ success: boole
 
 /**
  * Server Action: Assign Reviewer to Task (TRC-22)
- * Only the task creator or an operator/super_admin can assign a reviewer.
+ * Only the task creator, team coordinator, or oversight role (pengurus/yayasan) can assign a
+ * reviewer. The platform super-admin role holds no task permission at all.
  */
 export async function assignReviewerToTaskAction(
   taskId: string,
   reviewerId: string
 ): Promise<TaskActionResult> {
   const user = await requireAuthUser();
+  if (!holdsTaskRole(user, TASK_READ_ROLES)) {
+    return { success: false, message: "Peran Anda tidak memiliki akses menetapkan reviewer." };
+  }
   if (!isNonEmptyString(taskId, 100) || !isNonEmptyString(reviewerId, 100)) {
     return { success: false, message: "ID tugas dan reviewer wajib diisi." };
   }
@@ -598,53 +582,27 @@ export async function assignReviewerToTaskAction(
     return { success: true, message: "Reviewer berhasil ditetapkan." };
   }
   try {
-    const supabase = createAdminClient();
-    const { data: task, error: taskError } = await supabase
-      .from("tasks")
-      .select("id, title, created_by")
-      .eq("id", taskId)
-      .is("deleted_at", null)
-      .maybeSingle();
-    if (taskError) throw taskError;
-    if (!task) return { success: false, message: "Tugas tidak ditemukan." };
-    if (task.created_by !== user.id && !hasMinimumRole(user, "pengurus")) {
-      return { success: false, message: "Hanya pembuat tugas atau operator yang dapat menetapkan reviewer." };
-    }
-    const { data: reviewer, error: reviewerError } = await supabase
-      .from("profiles")
-      .select("id, full_name")
-      .eq("id", reviewerId)
-      .eq("status", "active")
-      .maybeSingle();
-    if (reviewerError) throw reviewerError;
-    if (!reviewer) return { success: false, message: "Reviewer tidak ditemukan atau tidak aktif." };
-    const { error } = await supabase
-      .from("tasks")
-      .update({ reviewer_id: reviewerId, updated_at: new Date().toISOString() })
-      .eq("id", taskId)
-      .is("deleted_at", null);
-    if (error) throw error;
-    const { error: auditError } = await supabase.from("audit_logs").insert({
-      event_name: "task.reviewer_assigned",
-      actor_id: user.id,
-      actor_name: user.full_name,
-      target_id: taskId,
-      target_label: task.title,
-      action_detail: `Reviewer ditetapkan: ${reviewer.full_name}`,
+    const supabase = await createClient();
+    const { data, error } = await supabase.rpc("task_assign_reviewer", {
+      p_task_id: taskId,
+      p_reviewer_id: reviewerId,
     });
-    if (auditError) throw auditError;
+    if (error) throw error;
+    if (!data?.success) return { success: false, message: data?.message || "Gagal menetapkan reviewer." };
+    const adminClient = createAdminClient();
+    const { data: task } = await adminClient.from("tasks").select("title").eq("id", taskId).maybeSingle();
     try {
       await sendPushToUsers([reviewerId], {
         type: "TASK_REVIEW_REQUESTED",
         title: "Anda Ditunjuk sebagai Reviewer",
-        body: `Mohon tinjau tugas: ${task.title}`,
+        body: `Mohon tinjau tugas: ${task?.title || "Tugas"}`,
         url: `/tugas?task=${taskId}`,
         referenceId: taskId,
       });
     } catch (pushError) {
       console.error("Reviewer assigned but push delivery failed:", pushError);
     }
-    return { success: true, message: `Reviewer "${reviewer.full_name}" berhasil ditetapkan untuk tugas ini.` };
+    return { success: true, message: `Reviewer "${data.reviewer_name || "Anggota"}" berhasil ditetapkan untuk tugas ini.` };
   } catch (error) {
     console.error("Failed to assign reviewer:", error);
     return { success: false, message: "Gagal menetapkan reviewer." };
@@ -670,8 +628,8 @@ export async function submitTaskReviewAction(
   if (!cleanNote) return { success: false, message: "Catatan review wajib diisi." };
 
   if (process.env.VITEST) {
-    // In VITEST: elevated roles (super_admin etc.) can always submit reviews
-    // to allow testing the approval/rejection/comment paths.
+    // In VITEST the seams below exercise the decision branches only; the real
+    // authority check lives in app.task_transition and runs against the database.
     return { success: true, message: `Review "${decision}" berhasil dikirimkan.` };
   }
 
@@ -679,14 +637,27 @@ export async function submitTaskReviewAction(
     const supabase = createAdminClient();
     const { data: task, error: taskError } = await supabase
       .from("tasks")
-      .select("id, title, reviewer_id, status, requires_review")
+      .select("id, title, created_by, reviewer_id, status, requires_review")
       .eq("id", taskId)
       .is("deleted_at", null)
       .maybeSingle();
     if (taskError) throw taskError;
     if (!task) return { success: false, message: "Tugas tidak ditemukan." };
+    if (!holdsTaskRole(user, TASK_REVIEW_ROLES)) {
+      return { success: false, message: "Hanya koordinator atau pengurus yang dapat me-review tugas." };
+    }
     if (task.reviewer_id !== user.id) {
       return { success: false, message: "Hanya reviewer tugas yang dapat memberikan keputusan review." };
+    }
+    const { data: activeAssignees, error: assigneeError } = await supabase
+      .from("task_assignees")
+      .select("user_id")
+      .eq("task_id", taskId)
+      .is("unassigned_at", null);
+    if (assigneeError) throw assigneeError;
+    const assigneeIds = (activeAssignees || []).map((row: any) => row.user_id as string);
+    if (task.created_by === user.id || assigneeIds.includes(user.id)) {
+      return { success: false, message: "Dilarang self-review: reviewer bukan pembuat atau penanggung jawab tugas ini." };
     }
     if (task.status !== "in_review" && decision !== "comment") {
       return { success: false, message: "Tugas harus berstatus In Review sebelum dapat disetujui atau ditolak." };
@@ -698,12 +669,19 @@ export async function submitTaskReviewAction(
       null;
 
     if (newStatus) {
-      const { error } = await supabase
-        .from("tasks")
-        .update({ status: newStatus, updated_at: new Date().toISOString() })
-        .eq("id", taskId)
-        .is("deleted_at", null);
-      if (error) throw error;
+      // app.task_transition owns the matrix, the status history and the audit
+      // ledger for this row; a service-role write would skip all three.
+      const session = await createClient();
+      const { data: transition, error: transitionError } = await session.rpc("task_transition", {
+        p_task_id: taskId,
+        p_new_status: newStatus,
+        p_user_id: user.id,
+        p_note: cleanNote,
+      });
+      if (transitionError) throw transitionError;
+      if (!transition?.success) {
+        return { success: false, message: transition?.message || "Status tugas tidak berubah." };
+      }
     }
 
     const { error: auditError } = await supabase.from("audit_logs").insert({
@@ -732,6 +710,7 @@ export async function getAssignableMembersAction(
   teamId?: string
 ): Promise<{ id: string; name: string; role: string }[]> {
   const user = await requireAuthUser();
+  if (!holdsTaskRole(user, TASK_READ_ROLES)) return [];
 
   if (process.env.VITEST) {
     return [
@@ -742,7 +721,7 @@ export async function getAssignableMembersAction(
 
   try {
     const supabase = createAdminClient();
-    const elevated = hasMinimumRole(user, "pengurus");
+    const elevated = holdsTaskRole(user, TASK_OVERSIGHT_ROLES);
 
     if (elevated) {
       // Elevated roles can assign anyone active
@@ -772,9 +751,14 @@ export async function getAssignableMembersAction(
       .eq("user_id", user.id)
       .is("valid_to", null);
     if (membershipError) throw membershipError;
+    const callerTeamIds = new Set<string>((memberships || []).map((m: any) => m.team_id as string));
+    if (teamId && !elevated && !callerTeamIds.has(teamId)) {
+      console.warn("Anda bukan anggota tim tersebut.", teamId);
+      return [];
+    }
     const teamIds = teamId
       ? [teamId]
-      : (memberships || []).map((m: any) => m.team_id);
+      : Array.from(callerTeamIds);
     if (teamIds.length === 0) return [];
     const { data: members, error: membersError } = await supabase
       .from("team_members")

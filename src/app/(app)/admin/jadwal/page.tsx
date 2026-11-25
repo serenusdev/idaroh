@@ -13,14 +13,22 @@ import {
   createEventAction,
   updateEventAction,
   deleteEventAction,
+  setEventOccurrenceCancelledAction,
   publishAnnouncementAction,
   saveAnnouncementDraftAction,
   updateAnnouncementAction,
   deleteAnnouncementAction,
+  getEventAudienceOptionsAction,
 } from "@/modules/schedules/actions";
-import type { ScheduleEventItem, AnnouncementItem, AudienceConfig } from "@/modules/schedules/types";
+import type { ScheduleEventItem, AnnouncementItem } from "@/modules/schedules/types";
+import type { CreateEventPayload } from "@/modules/schedules/actions";
 import { useCachedData } from "@/hooks/use-cached-data";
 import { invalidateCache } from "@/lib/data-cache";
+import {
+  AGENDA_MANAGER_ROLES,
+  AGENDA_WRITE_ROLES,
+  holdsScheduleRole,
+} from "@/lib/schedule-policy";
 
 function toJakartaDateTimeLocal(value?: string) {
   if (!value) return "";
@@ -37,13 +45,119 @@ function toJakartaDateTimeLocal(value?: string) {
   return `${get("year")}-${get("month")}-${get("day")}T${get("hour")}:${get("minute")}`;
 }
 
+/**
+ * An edit form cannot express every audience the picker offers. This sentinel marks a stored
+ * scope the picker has no option for, so submitting keeps the stored value instead of widening
+ * it to the whole pondok (SCH-07). The server omits the key from the RPC payload when the
+ * audience is undefined, and app.event_upsert() only replaces an audience it was given.
+ */
+const KEEP_STORED_AUDIENCE = "__keep_stored_audience__";
+
+/**
+ * The audience an agenda may be addressed to (SCH-02).
+ *
+ * A manager picks the whole pondok or any team. A coordinator only picks a team it
+ * actively coordinates — the scopes §2 rule 1 forbids (an audience derived from
+ * profiles.member_type) are not offered at all, because app.can_write_event_audience()
+ * refuses them on the way in.
+ *
+ * ANN-CMD reuses the picker for announcements; only the noun changes, because the announcement
+ * surface §3.6 grants the same tiers as the agenda surface.
+ */
+function AudiencePicker({
+  tier,
+  teams,
+  value,
+  onChange,
+  subject = "agenda",
+}: {
+  tier: "manager" | "coordinator" | "none";
+  teams: { id: string; name: string }[];
+  value: string;
+  onChange: (teamId: string) => void;
+  subject?: string;
+}) {
+  if (tier === "none") {
+    return (
+      <p className="font-body-sm text-xs text-muted-foreground">
+        {subject === "agenda"
+          ? "Agenda hanya dapat ditandai untuk seluruh pondok oleh pengurus, yayasan, atau super admin."
+          : "Pengumuman hanya dapat diterbitkan untuk seluruh pondok oleh pengurus, yayasan, atau super admin."}
+      </p>
+    );
+  }
+  const keepsStoredAudience = value === KEEP_STORED_AUDIENCE;
+  return (
+    <div className="space-y-2">
+      <select
+        id={subject === "agenda" ? "event-audience" : "announcement-audience"}
+        name="audienceTeamId"
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        className="w-full h-11 px-3 rounded-xl border border-border bg-surface font-body-sm text-sm text-on-surface"
+      >
+        {keepsStoredAudience && (
+          <option value={KEEP_STORED_AUDIENCE}>Audiens tersimpan (tidak diubah)</option>
+        )}
+        {tier === "manager" && <option value="">Seluruh pondok</option>}
+        {teams.length === 0 && !keepsStoredAudience && (
+          <option value="" disabled>
+            Tidak ada tim yang dapat dipilih
+          </option>
+        )}
+        {teams.map((team) => (
+          <option key={team.id} value={team.id}>
+            Tim: {team.name}
+          </option>
+        ))}
+      </select>
+      {keepsStoredAudience && (
+        <p className="font-body-sm text-xs text-warning">
+          {subject === "agenda"
+            ? "Audiens agenda ini memakai konfigurasi lama (berbasis kategori anggota atau daftar"
+            : "Audiens pengumuman ini memakai konfigurasi lama (berbasis kategori anggota atau daftar"}{" "}
+          pengguna tertentu) dan tetap dipertahankan. Pilih seluruh pondok atau sebuah tim hanya
+          jika audiensnya memang ingin diganti.
+        </p>
+      )}
+      <p className="font-body-sm text-xs text-muted-foreground">
+        {tier === "manager"
+          ? "Pemirsa disimpan sebagai audiens pondok atau audiens tim; database yang menilai ulang hak Anda."
+          : subject === "agenda"
+            ? "Sebagai koordinator, agenda hanya dapat ditandai untuk tim yang Anda koordinatori."
+            : "Sebagai koordinator, pengumuman hanya dapat diterbitkan untuk tim yang Anda koordinatori."}
+      </p>
+    </div>
+  );
+}
+
+
 export default function AdminJadwalPage() {
   const { user: currentUser } = useIdentity();
   const [activeTab, setActiveTab] = React.useState<"agenda" | "pengumuman">("agenda");
 
+  // §3.6 grants schedule.event.* to the koordinator at scope own, while announcement.* and
+  // the per-day cancel (SCH-01) stay on the manager tier. Which agenda a caller may write
+  // is decided by the database; this only decides which surface is rendered and loaded.
+  const isAgendaManager = holdsScheduleRole(currentUser, AGENDA_MANAGER_ROLES);
+  const canManageEvents = holdsScheduleRole(currentUser, AGENDA_WRITE_ROLES);
+  const canManageAnnouncements = isAgendaManager;
+
   // Data states
-  const eventsQuery = useCachedData(`events:${currentUser.id}`, getEventsAction);
-  const announcementsQuery = useCachedData(`admin:announcements:${currentUser.id}`, getAdminAnnouncementsAction);
+  // `admin:events:` and not `events:`: this fetch keeps the cancelled days so the restore
+  // control has a row to act on, and the user surfaces share the plain key.
+  const eventsQuery = useCachedData(
+    canManageEvents ? `admin:events:${currentUser.id}` : null,
+    () => getEventsAction({ includeCancelledOccurrences: true }),
+  );
+  const announcementsQuery = useCachedData(
+    canManageAnnouncements ? `admin:announcements:${currentUser.id}` : null,
+    getAdminAnnouncementsAction
+  );
+  const audienceQuery = useCachedData(
+    canManageEvents ? `event-audience:${currentUser.id}` : null,
+    getEventAudienceOptionsAction
+  );
   const events: ScheduleEventItem[] = eventsQuery.data ?? [];
   const announcements: AnnouncementItem[] = announcementsQuery.data ?? [];
   const isLoadingData = eventsQuery.isLoading || announcementsQuery.isLoading;
@@ -59,6 +173,7 @@ export default function AdminJadwalPage() {
   const [editingEventId, setEditingEventId] = React.useState<string | null>(null);
   const [editingAnnouncementId, setEditingAnnouncementId] = React.useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = React.useState(false);
+  const [occurrenceBusyId, setOccurrenceBusyId] = React.useState<string | null>(null);
 
   // Event form
   const [eventForm, setEventForm] = React.useState({
@@ -68,7 +183,9 @@ export default function AdminJadwalPage() {
     endsAt: "",
     location: "Lab Utama Pesantren",
     description: "",
-    audienceScope: "all" as "all" | "santri" | "pengurus" | "koordinator",
+    // "" means the whole pondok; any other value is a team id offered by
+    // getEventAudienceOptionsAction() for this session.
+    audienceTeamId: "",
     recurrenceRule: "none" as "none" | "daily" | "weekly",
     recurrenceUntil: "",
   });
@@ -79,7 +196,9 @@ export default function AdminJadwalPage() {
     bodyMarkdown: "",
     priority: "normal" as "normal" | "important",
     targetAudienceLabel: "Semua Santri & Tim",
-    audienceScope: "all" as "all" | "santri" | "pengurus" | "koordinator",
+    // Same convention as the agenda picker: "" is the whole pondok, a team id addresses one team,
+    // and the keep-sentinel carries an audience the picker cannot express (SCH-07, ANN-CMD).
+    audienceTeamId: "",
     status: "published" as "draft" | "published",
     scheduledFor: "",
     expiresAt: "",
@@ -90,32 +209,39 @@ export default function AdminJadwalPage() {
     invalidateCache("announcements:");
   };
 
-  const isAdminOrPengurus =
-    currentUser?.role === "super_admin" ||
-    currentUser?.role === "yayasan" ||
-    currentUser?.role === "pengurus";
+  const myTeamKeys = new Set(
+    (audienceQuery.data?.coordinated ?? []).flatMap((team) => [team.id, team.name])
+  );
+  const canEditEventRow = (evt: ScheduleEventItem) =>
+    isAgendaManager ||
+    Boolean(evt.groupName && myTeamKeys.has(evt.groupName)) ||
+    (evt.audienceConfig?.teamIds ?? []).some((teamId) => myTeamKeys.has(String(teamId)));
 
-  if (!isAdminOrPengurus) {
-    return <UnauthorizedState requiredRole="Super Admin / Pengurus / Yayasan" />;
+  if (!canManageEvents) {
+    return <UnauthorizedState requiredRole="Pengurus / Yayasan / Super Admin / Koordinator" />;
   }
 
   // Handle Event Submit
-  const audienceFromScope = (scope: "all" | "santri" | "pengurus" | "koordinator"): AudienceConfig =>
-    scope === "all" ? { scope: "all" } : { scope: "member_type", memberTypes: [scope] };
-
   const handleCreateEvent = async (e: React.FormEvent) => {
     e.preventDefault();
     setIsSubmitting(true);
     setFeedbackNotice(null);
 
-    const payload = {
+    const payload: CreateEventPayload = {
       title: eventForm.title,
       category: eventForm.category,
       startsAt: eventForm.startsAt,
       endsAt: eventForm.endsAt,
       location: eventForm.location,
       description: eventForm.description,
-      audienceConfig: audienceFromScope(eventForm.audienceScope),
+      // An event audience is always all|team now; the team id doubles as events.team_id
+      // so app.can_write_event_audience() can judge it against the caller's teams.
+      // Undefined is the "leave the stored audience alone" signal (SCH-07).
+      audienceConfig: eventForm.audienceTeamId === KEEP_STORED_AUDIENCE ? undefined
+        : eventForm.audienceTeamId ? { scope: "team", teamIds: [eventForm.audienceTeamId] }
+        : { scope: "all" },
+      teamId: eventForm.audienceTeamId === KEEP_STORED_AUDIENCE ? undefined
+        : eventForm.audienceTeamId || undefined,
       recurrenceRule: eventForm.recurrenceRule,
       recurrenceUntil: eventForm.recurrenceUntil || undefined,
     };
@@ -133,7 +259,7 @@ export default function AdminJadwalPage() {
         endsAt: "",
         location: "Lab Utama Pesantren",
         description: "",
-        audienceScope: "all",
+        audienceTeamId: "",
         recurrenceRule: "none",
         recurrenceUntil: "",
       });
@@ -155,8 +281,46 @@ export default function AdminJadwalPage() {
     }
   };
 
+  // SCH-01: one day of a recurring agenda can be cancelled without touching the
+  // rest of the series. The row keeps its own id as the list key and the series id
+  // in baseEventId, so only the day-level write uses the composite reference.
+  const handleToggleOccurrence = async (evt: ScheduleEventItem) => {
+    const restore = Boolean(evt.cancelledOccurrence);
+    const dayLabel = evt.dateStr || evt.occurrenceDate || "hari itu";
+    if (!confirm(restore
+      ? `Pulihkan agenda "${evt.title}" pada ${dayLabel}?`
+      : `Batalkan agenda "${evt.title}" hanya pada ${dayLabel}?`)) return;
+    setOccurrenceBusyId(evt.id);
+    setFeedbackNotice(null);
+    const res = await setEventOccurrenceCancelledAction(evt.id, !restore);
+    setOccurrenceBusyId(null);
+    if (res.success) {
+      setFeedbackNotice({ type: "success", message: res.message });
+      eventsQuery.refresh();
+    } else {
+      setFeedbackNotice({ type: "error", message: res.message });
+    }
+  };
+
+  // The stored audience may name a team by id, slug or display name; the picker is keyed
+  // by id, so the closest option is selected instead of silently dropping the value. A scope
+  // the picker cannot offer at all resolves to the keep-sentinel rather than to "" (SCH-07).
+  const audienceTeamValue = (evt: ScheduleEventItem) => {
+    const scope = evt.audienceConfig?.scope;
+    if (scope === undefined || scope === "all") return "";
+    if (scope !== "team") return KEEP_STORED_AUDIENCE;
+    const stored = String(evt.audienceConfig?.teamIds?.[0] ?? evt.groupName ?? "");
+    // A team-scoped agenda whose team cannot be resolved is kept as stored too: defaulting to
+    // "" would silently re-address the agenda to the whole pondok on an unrelated edit.
+    if (!stored) return KEEP_STORED_AUDIENCE;
+    const match = (audienceQuery.data?.teams ?? []).find(
+      (team) => team.id === stored || team.name === stored
+    );
+    return match ? match.id : stored;
+  };
+
   const handleEditEvent = (evt: ScheduleEventItem) => {
-    setEditingEventId(evt.id);
+    setEditingEventId(evt.baseEventId || evt.id);
     setEventForm({
       title: evt.title,
       category: evt.category,
@@ -164,11 +328,37 @@ export default function AdminJadwalPage() {
       endsAt: toJakartaDateTimeLocal(evt.endsAt),
       location: evt.location,
       description: evt.subNote || "",
-      audienceScope: evt.audienceConfig?.scope === "member_type" ? ((evt.audienceConfig.memberTypes?.[0] || "all") as typeof eventForm.audienceScope) : "all",
+      audienceTeamId: audienceTeamValue(evt),
       recurrenceRule: (evt.recurrenceRule || "none") as typeof eventForm.recurrenceRule,
       recurrenceUntil: evt.recurrenceUntil ? toJakartaDateTimeLocal(evt.recurrenceUntil) : "",
     });
     setIsEventModalOpen(true);
+  };
+
+  // ANN-CMD: the announcement composer offers the same audience shapes the RPC accepts. The row's
+  // team_id never reaches the client, so a stored team audience is matched from teamIds alone;
+  // anything else resolves to the keep-sentinel rather than silently widening to the pondok.
+  const announcementAudienceValue = (ann: AnnouncementItem) => {
+    const scope = ann.audienceConfig?.scope;
+    if (scope === undefined || scope === "all") return "";
+    if (scope !== "team") return KEEP_STORED_AUDIENCE;
+    const stored = String(ann.audienceConfig?.teamIds?.[0] ?? "");
+    if (!stored) return KEEP_STORED_AUDIENCE;
+    const match = (audienceQuery.data?.teams ?? []).find(
+      (team) => team.id === stored || team.name === stored
+    );
+    return match ? match.id : stored;
+  };
+
+  const emptyAnnouncementForm = {
+    title: "",
+    bodyMarkdown: "",
+    priority: "normal" as "normal" | "important",
+    targetAudienceLabel: "Semua Santri & Tim",
+    audienceTeamId: "",
+    status: "published" as "draft" | "published",
+    scheduledFor: "",
+    expiresAt: "",
   };
 
   // Handle Announcement Submit
@@ -182,7 +372,13 @@ export default function AdminJadwalPage() {
       bodyMarkdown: announcementForm.bodyMarkdown,
       priority: announcementForm.priority,
       targetAudienceLabel: announcementForm.targetAudienceLabel,
-      audienceConfig: audienceFromScope(announcementForm.audienceScope),
+      audienceConfig: announcementForm.audienceTeamId === KEEP_STORED_AUDIENCE ? undefined
+        : announcementForm.audienceTeamId ? { scope: "team" as const, teamIds: [announcementForm.audienceTeamId] }
+        : { scope: "all" as const },
+      // The team id is what app.can_write_announcement_audience() judges a coordinator against,
+      // so it travels beside the audience config rather than being derived from the label.
+      teamId: announcementForm.audienceTeamId === KEEP_STORED_AUDIENCE ? undefined
+        : announcementForm.audienceTeamId || undefined,
       status: announcementForm.status,
       scheduledFor: announcementForm.scheduledFor || undefined,
       expiresAt: announcementForm.expiresAt || undefined,
@@ -198,16 +394,7 @@ export default function AdminJadwalPage() {
       setFeedbackNotice({ type: "success", message: res.message });
       setIsAnnouncementModalOpen(false);
       setEditingAnnouncementId(null);
-      setAnnouncementForm({
-        title: "",
-        bodyMarkdown: "",
-        priority: "normal",
-        targetAudienceLabel: "Semua Santri & Tim",
-        audienceScope: "all",
-        status: "published",
-        scheduledFor: "",
-        expiresAt: "",
-      });
+      setAnnouncementForm(emptyAnnouncementForm);
       refreshAnnouncements();
     } else {
       setFeedbackNotice({ type: "error", message: res.message });
@@ -217,14 +404,14 @@ export default function AdminJadwalPage() {
   const handleEditAnnouncement = (ann: AnnouncementItem) => {
     setEditingAnnouncementId(ann.id);
     setAnnouncementForm({
+      ...emptyAnnouncementForm,
       title: ann.title,
       bodyMarkdown: ann.bodyMarkdown,
       priority: ann.priority,
       targetAudienceLabel: ann.targetAudienceLabel,
-      audienceScope: ann.audienceConfig?.scope === "member_type" ? ((ann.audienceConfig.memberTypes?.[0] || "all") as typeof announcementForm.audienceScope) : "all",
+      audienceTeamId: announcementAudienceValue(ann),
       status: ann.status === "draft" ? "draft" : "published",
       scheduledFor: ann.scheduledFor ? toJakartaDateTimeLocal(ann.scheduledFor) : "",
-      expiresAt: "",
     });
     setIsAnnouncementModalOpen(true);
   };
@@ -321,17 +508,19 @@ export default function AdminJadwalPage() {
           <span>Agenda Kegiatan ({events.length})</span>
         </button>
 
-        <button
-          onClick={() => setActiveTab("pengumuman")}
-          className={`pb-3 font-label-md text-sm flex items-center gap-2 border-b-2 transition-all ${
-            activeTab === "pengumuman"
-              ? "border-primary text-primary font-bold"
-              : "border-transparent text-muted-foreground hover:text-on-surface"
-          }`}
-        >
-          <span className="material-symbols-outlined text-[18px]">campaign</span>
-          <span>Siaran Pengumuman ({announcements.length})</span>
-        </button>
+        {canManageAnnouncements && (
+          <button
+            onClick={() => setActiveTab("pengumuman")}
+            className={`pb-3 font-label-md text-sm flex items-center gap-2 border-b-2 transition-all ${
+              activeTab === "pengumuman"
+                ? "border-primary text-primary font-bold"
+                : "border-transparent text-muted-foreground hover:text-on-surface"
+            }`}
+          >
+            <span className="material-symbols-outlined text-[18px]">campaign</span>
+            <span>Siaran Pengumuman ({announcements.length})</span>
+          </button>
+        )}
       </div>
 
       {/* Content Area */}
@@ -421,20 +610,42 @@ export default function AdminJadwalPage() {
                       <span>Lihat Tampilan Publik</span>
                       <span className="material-symbols-outlined text-[14px]">open_in_new</span>
                     </Link>
-                    <button
-                      onClick={() => handleEditEvent(evt)}
-                      className="h-8 px-2.5 rounded-lg text-primary hover:bg-primary/10 font-label-sm text-xs flex items-center gap-1 transition-colors"
-                    >
-                      <span className="material-symbols-outlined text-[16px]">edit</span>
-                      <span>Edit</span>
-                    </button>
-                    <button
-                      onClick={() => handleDeleteEvent(evt.id, evt.title)}
-                      className="h-8 px-2.5 rounded-lg text-error hover:bg-error/10 font-label-sm text-xs flex items-center gap-1 transition-colors"
-                    >
-                      <span className="material-symbols-outlined text-[16px]">delete</span>
-                      <span>Hapus</span>
-                    </button>
+                    {canEditEventRow(evt) && (
+                      <button
+                        onClick={() => handleEditEvent(evt)}
+                        className="h-8 px-2.5 rounded-lg text-primary hover:bg-primary/10 font-label-sm text-xs flex items-center gap-1 transition-colors"
+                      >
+                        <span className="material-symbols-outlined text-[16px]">edit</span>
+                        <span>Edit</span>
+                      </button>
+                    )}
+                    {/* A single-day cancel stays on the manager tier — app.event_occurrence_set()
+                        checks the same three roles that may broadcast announcements (§3.6). */}
+                    {evt.occurrenceDate && canManageAnnouncements && (
+                      <button
+                        onClick={() => handleToggleOccurrence(evt)}
+                        disabled={occurrenceBusyId === evt.id}
+                        className={`h-8 px-2.5 rounded-lg font-label-sm text-xs flex items-center gap-1 transition-colors disabled:opacity-50 ${
+                          evt.cancelledOccurrence
+                            ? "text-primary hover:bg-primary/10"
+                            : "text-error hover:bg-error/10"
+                        }`}
+                      >
+                        <span className="material-symbols-outlined text-[16px]">
+                          {evt.cancelledOccurrence ? "event_available" : "event_busy"}
+                        </span>
+                        <span>{evt.cancelledOccurrence ? "Pulihkan hari ini" : "Batalkan hari ini"}</span>
+                      </button>
+                    )}
+                    {canEditEventRow(evt) && (
+                      <button
+                        onClick={() => handleDeleteEvent(evt.baseEventId || evt.id, evt.title)}
+                        className="h-8 px-2.5 rounded-lg text-error hover:bg-error/10 font-label-sm text-xs flex items-center gap-1 transition-colors"
+                      >
+                        <span className="material-symbols-outlined text-[16px]">delete</span>
+                        <span>Hapus</span>
+                      </button>
+                    )}
                   </div>
                 </div>
               ))}
@@ -643,19 +854,20 @@ export default function AdminJadwalPage() {
 
               <div className="space-y-1">
                 <label htmlFor="event-audience" className="font-label-sm text-xs text-on-surface font-medium">
-                  Sasaran Peserta (granular)
+                  Sasaran Peserta
                 </label>
-                <select
-                  id="event-audience"
-                  value={eventForm.audienceScope}
-                  onChange={(e) => setEventForm({ ...eventForm, audienceScope: e.target.value as typeof eventForm.audienceScope })}
-                  className="w-full h-10 px-2 rounded-lg bg-surface-container-low text-on-surface text-sm border border-border focus:ring-2 focus:ring-primary focus:outline-none"
-                >
-                  <option value="all">Semua anggota aktif</option>
-                  <option value="santri">Santri saja</option>
-                  <option value="pengurus">Pengurus saja</option>
-                  <option value="koordinator">Koordinator saja</option>
-                </select>
+                {audienceQuery.isLoading ? (
+                  <p className="font-body-sm text-xs text-muted-foreground">
+                    Memuat pilihan audiens…
+                  </p>
+                ) : (
+                  <AudiencePicker
+                    tier={audienceQuery.data?.tier ?? "none"}
+                    teams={audienceQuery.data?.teams ?? []}
+                    value={eventForm.audienceTeamId}
+                    onChange={(teamId) => setEventForm({ ...eventForm, audienceTeamId: teamId })}
+                  />
+                )}
               </div>
 
               <div className="grid grid-cols-2 gap-3">
@@ -772,20 +984,16 @@ export default function AdminJadwalPage() {
               </div>
 
               <div className="space-y-1">
-                <label htmlFor="ann-audience" className="font-label-sm text-xs text-on-surface font-medium">
-                  Target Audiens Granular
+                <label htmlFor="announcement-audience" className="font-label-sm text-xs text-on-surface font-medium">
+                  Audiens
                 </label>
-                <select
-                  id="ann-audience"
-                  value={announcementForm.audienceScope}
-                  onChange={(e) => setAnnouncementForm({ ...announcementForm, audienceScope: e.target.value as typeof announcementForm.audienceScope })}
-                  className="w-full h-10 px-2 rounded-lg bg-surface-container-low text-on-surface text-sm border border-border focus:ring-2 focus:ring-primary focus:outline-none"
-                >
-                  <option value="all">Semua anggota aktif</option>
-                  <option value="santri">Santri saja</option>
-                  <option value="pengurus">Pengurus saja</option>
-                  <option value="koordinator">Koordinator saja</option>
-                </select>
+                <AudiencePicker
+                  subject="pengumuman"
+                  tier={audienceQuery.data?.tier ?? "none"}
+                  teams={audienceQuery.data?.teams ?? []}
+                  value={announcementForm.audienceTeamId}
+                  onChange={(teamId) => setAnnouncementForm({ ...announcementForm, audienceTeamId: teamId })}
+                />
               </div>
 
               <div className="grid grid-cols-2 gap-3">

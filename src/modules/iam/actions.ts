@@ -6,7 +6,7 @@ import { headers } from "next/headers";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { createClient } from "@/lib/supabase/server";
 import { getCurrentUserProfile } from "@/lib/auth/session";
-import { getHighestRole, requireAuthUser, requireRole, ROLE_PRIORITY } from "@/lib/auth/guards";
+import { requireAuthUser, requireRole } from "@/lib/auth/guards";
 import { UserProfile } from "@/lib/auth/types";
 import { mfaEvidenceFromFactors, type MfaEvidence } from "@/lib/auth/mfa-assurance";
 import { ManualAccountPayload } from "./types";
@@ -44,6 +44,28 @@ function normalizeRole(value: string | null | undefined): ValidRole | null {
   if (normalized.includes("koordinator")) return "koordinator";
   if (normalized.includes("santri")) return "santri";
   return VALID_ROLES.includes(normalized as ValidRole) ? (normalized as ValidRole) : null;
+}
+
+// PERMISSIONS.md §3.1: iam.role.assign is super_admin only and forbids self-escalation, so
+// the role an operator may hand out is a written-out set rather than "anything below me".
+// super_admin is granted by the dedicated elevation path, never from a user screen.
+const ASSIGNABLE_ROLES = ["santri", "koordinator", "pengurus", "yayasan"] as const;
+type AssignableRole = (typeof ASSIGNABLE_ROLES)[number];
+
+function resolveAssignableRole(value: string | null | undefined): AssignableRole | null {
+  const normalized = normalizeRole(value);
+  return normalized && (ASSIGNABLE_ROLES as readonly string[]).includes(normalized)
+    ? (normalized as AssignableRole)
+    : null;
+}
+
+// profiles.member_type is the descriptive category (§2 rule 1); its domain is the same list
+// the registration form offers, so a claim and a stored category never drift apart.
+const MEMBER_TYPES: readonly string[] = MEMBER_CATEGORIES.map((category) => category.value);
+
+function resolveMemberType(value: string): string | null {
+  const normalized = (value || "").trim().toLowerCase();
+  return (MEMBER_TYPES as readonly string[]).includes(normalized) ? normalized : null;
 }
 
 function validatePassword(password: string): string | null {
@@ -145,6 +167,8 @@ export interface ActiveUserItem {
   fullName: string;
   email: string;
   role: string;
+  roles: string[];
+  memberType: string | null;
   teamName: string;
   status: string;
   initials: string;
@@ -388,7 +412,7 @@ export async function submitAccountApplicationAction(payload: {
  * Server Action: Query pending account registration requests
  */
 export async function getAccountRequestsAction(): Promise<AccountRequestItem[]> {
-  await requireRole(["super_admin", "yayasan", "pengurus"]);
+  await requireRole(["super_admin"]);
   try {
     const supabase = createAdminClient();
     const { data, error } = await supabase
@@ -450,6 +474,24 @@ export async function getActiveUsersAction(): Promise<ActiveUserItem[]> {
       const { data: deviceRows } = userIds.length
         ? await supabase.from("device_tokens").select("id, user_id, platform, device_label, updated_at").in("user_id", userIds)
         : { data: [] as any[] };
+      // Roles come from user_roles only; profiles.member_type stays the descriptive category
+      // beside them (§2 rule 1).
+      const { data: roleRows } = userIds.length
+        ? await supabase
+            .from("user_roles")
+            .select("user_id, roles(key)")
+            .in("user_id", userIds)
+            .is("revoked_at", null)
+            .order("granted_at", { ascending: true })
+        : { data: [] as any[] };
+      const rolesByUser = new Map<string, string[]>();
+      for (const row of roleRows || []) {
+        const key = Array.isArray(row.roles) ? row.roles[0]?.key : row.roles?.key;
+        if (typeof key !== "string" || !VALID_ROLES.includes(key as ValidRole)) continue;
+        const held = rolesByUser.get(row.user_id) || [];
+        if (!held.includes(key)) held.push(key);
+        rolesByUser.set(row.user_id, held);
+      }
       const devicesByUser = new Map<string, any[]>();
       for (const device of deviceRows || []) {
         const devices = devicesByUser.get(device.user_id) || [];
@@ -477,12 +519,15 @@ export async function getActiveUsersAction(): Promise<ActiveUserItem[]> {
               .toUpperCase()
           : "U";
         const devices = devicesByUser.get(d.id) || [];
+        const heldRoles = rolesByUser.get(d.id) || [];
         const deviceLabels = Array.from(new Set(devices.map((device: any) => device.device_label || device.platform))).filter(Boolean);
         return {
           id: d.id,
           fullName: d.full_name,
           email: d.email,
-          role: d.member_type || "Santri",
+          role: heldRoles[0] || "santri",
+          roles: heldRoles,
+          memberType: d.member_type || null,
           teamName: d.team_name || "Sentra Santri",
           status: d.status || "active",
           initials,
@@ -523,12 +568,10 @@ export async function approveAccountApplicationAction(
 
   let outboxFailed = false;
   try {
-    const approver = await requireRole(["super_admin", "yayasan", "pengurus"]);
-    const approverRole = getHighestRole(approver);
-    const canonicalRole = normalizeRole(assignedRole);
-    if (!canonicalRole) return { success: false, message: "Peran tujuan tidak valid." };
-    if (ROLE_PRIORITY[canonicalRole] >= ROLE_PRIORITY[approverRole]) {
-      return { success: false, message: "Anda tidak dapat menetapkan peran setara atau lebih tinggi dari peran Anda." };
+    const approver = await requireRole(["super_admin"]);
+    const canonicalRole = resolveAssignableRole(assignedRole);
+    if (!canonicalRole) {
+      return { success: false, message: "Peran tujuan tidak valid: yang dapat ditetapkan dari antrean pendaftaran hanyalah santri, koordinator, pengurus, atau yayasan." };
     }
     if (process.env.VITEST) {
       return {
@@ -640,7 +683,7 @@ export async function rejectAccountApplicationAction(
 
   let outboxFailed = false;
   try {
-    const approver = await requireRole(["super_admin", "yayasan", "pengurus"]);
+    const approver = await requireRole(["super_admin"]);
     if (process.env.VITEST) {
       return { success: true, message: `Permohonan akun ${applicantId} telah ditolak dan dicatat ke log penolakan.` };
     }
@@ -714,15 +757,20 @@ export async function rejectAccountApplicationAction(
 export async function createManualAccountAction(
   payload: ManualAccountPayload
 ): Promise<ActionResult> {
-  const adminUser = await requireRole(["super_admin", "pengurus"]);
-  const adminRole = getHighestRole(adminUser);
+  const adminUser = await requireRole(["super_admin"]);
 
   if (!payload.fullName || !payload.email || !payload.phone) {
     return { success: false, message: "Semua bidang identitas wajib diisi." };
   }
-  const canonicalRole = normalizeRole(payload.role);
-  if (!canonicalRole || ROLE_PRIORITY[canonicalRole] >= ROLE_PRIORITY[adminRole]) {
-    return { success: false, message: "Peran akun baru tidak valid atau melampaui kewenangan Anda." };
+  const canonicalRole = resolveAssignableRole(payload.role);
+  if (!canonicalRole) {
+    return { success: false, message: "Peran akun baru tidak valid: hanya santri, koordinator, pengurus, atau yayasan yang dapat dibuat dari layar ini." };
+  }
+  // A category such as "ustadz" describes the person; it is not a role and never narrows or
+  // widens access (§2 rule 1).
+  const memberType = payload.memberType === undefined ? canonicalRole : resolveMemberType(payload.memberType);
+  if (!memberType) {
+    return { success: false, message: "Kategori anggota tidak valid." };
   }
   // FUNC-05: VITEST fast path — specific email triggers duplicate rejection for testing
   if (process.env.VITEST) {
@@ -767,7 +815,7 @@ export async function createManualAccountAction(
         full_name: payload.fullName.trim(),
         phone_number: payload.phone.trim(),
         status: "active",
-        member_type: canonicalRole,
+        member_type: memberType,
         team_name: payload.teamName,
         notes: payload.notes || "Dibuat langsung oleh Admin (Jalur B)",
       });
@@ -798,7 +846,7 @@ export async function createManualAccountAction(
       actor_name: adminUser.full_name,
       target_id: payload.email,
       target_label: payload.fullName,
-      action_detail: `Pembuatan akun manual Jalur B untuk peran ${canonicalRole} di tim ${payload.teamName}. Undangan email dikirim.`,
+      action_detail: `Pembuatan akun manual Jalur B untuk peran ${canonicalRole} (kategori ${memberType}) di tim ${payload.teamName}. Undangan email dikirim.`,
     });
     if (auditError) throw auditError;
 
@@ -824,8 +872,7 @@ export async function createManualAccountAction(
 export async function resetUserSessionAction(
   userId: string
 ): Promise<ActionResult> {
-  const adminUser = await requireRole(["super_admin", "pengurus"]);
-  const adminRole = getHighestRole(adminUser);
+  const adminUser = await requireRole(["super_admin"]);
 
   if (!userId) {
     return { success: false, message: "User ID tidak valid." };
@@ -833,32 +880,19 @@ export async function resetUserSessionAction(
 
   // Fast test-path for vitest isolated test runner (SEC-02)
   if (process.env.VITEST) {
-    if (userId.includes("mock-reset-forbidden-hierarchy")) {
-      return { success: false, message: "Anda tidak dapat mereset sesi akun dengan hierarki setara atau lebih tinggi." };
-    }
     return { success: true, message: `Seluruh sesi aktif dan perangkat push untuk ID pengguna ${userId} telah berhasil dicabut.` };
   }
 
   try {
     const supabase = createAdminClient();
 
-    // SEC-02: Verify caller has higher hierarchy than target before resetting sessions
     const { data: targetProfile, error: targetLookupError } = await supabase
       .from("profiles")
-      .select("id, full_name, member_type")
+      .select("id")
       .eq("id", userId)
       .maybeSingle();
     if (targetLookupError) throw targetLookupError;
     if (!targetProfile) return { success: false, message: "Pengguna tidak ditemukan." };
-
-    const targetRole = normalizeRole(targetProfile.member_type);
-    // super_admin (priority 5) can reset anyone; others must have strictly higher priority
-    if (targetRole && ROLE_PRIORITY[adminRole] !== 5 && ROLE_PRIORITY[targetRole] >= ROLE_PRIORITY[adminRole]) {
-      return {
-        success: false,
-        message: "Anda tidak dapat mereset sesi akun dengan hierarki setara atau lebih tinggi.",
-      };
-    }
 
     const { error: revokeError } = await supabase
       .from("profiles")
@@ -889,7 +923,7 @@ export async function resetUserSessionAction(
 }
 
 export async function revokeDeviceTokenAction(deviceId: string): Promise<ActionResult> {
-  const adminUser = await requireRole(["super_admin", "pengurus"]);
+  const adminUser = await requireRole(["super_admin"]);
   if (!deviceId) return { success: false, message: "ID perangkat tidak valid." };
   if (process.env.VITEST) return { success: true, message: "Perangkat berhasil dicabut." };
   try {
@@ -897,12 +931,9 @@ export async function revokeDeviceTokenAction(deviceId: string): Promise<ActionR
     const { data: device, error: lookupError } = await supabase.from("device_tokens").select("id, user_id, device_label, platform").eq("id", deviceId).maybeSingle();
     if (lookupError) throw lookupError;
     if (!device) return { success: false, message: "Perangkat tidak ditemukan." };
-    const { data: target, error: targetError } = await supabase.from("profiles").select("id, full_name, member_type").eq("id", device.user_id).maybeSingle();
+    const { data: target, error: targetError } = await supabase.from("profiles").select("id").eq("id", device.user_id).maybeSingle();
     if (targetError) throw targetError;
     if (!target) return { success: false, message: "Pemilik perangkat tidak ditemukan." };
-    if (normalizeRole(target.member_type) && ROLE_PRIORITY[normalizeRole(target.member_type)!] >= ROLE_PRIORITY[getHighestRole(adminUser)]) {
-      return { success: false, message: "Anda tidak dapat mencabut perangkat akun dengan hierarki setara atau lebih tinggi." };
-    }
     const { error } = await supabase.from("device_tokens").delete().eq("id", deviceId);
     if (error) throw error;
     const { error: auditError } = await supabase.from("audit_logs").insert({ event_name: "iam.device_revoked", actor_id: adminUser.id, actor_name: adminUser.full_name, target_id: device.user_id, target_label: device.device_label || device.platform, action_detail: "Satu token perangkat push dicabut." });
@@ -1204,6 +1235,9 @@ export async function adminUpdateUserAction(
     phoneNumber?: string;
     status?: string;
     teamName?: string;
+    // Granted role (user_roles) and descriptive category (profiles.member_type) travel in
+    // separate fields so a role change can no longer rewrite the category, or vice versa.
+    roleKey?: string;
     memberType?: string;
   }
 ): Promise<ActionResult> {
@@ -1225,79 +1259,34 @@ export async function adminUpdateUserAction(
     }
   }
 
+  let requestedRole: AssignableRole | null = null;
+  if (payload.roleKey !== undefined) {
+    requestedRole = resolveAssignableRole(payload.roleKey);
+    if (!requestedRole) {
+      return { success: false, message: "Peran baru tidak valid." };
+    }
+  }
+
+  let requestedMemberType: string | null = null;
+  if (payload.memberType !== undefined) {
+    requestedMemberType = resolveMemberType(payload.memberType);
+    if (!requestedMemberType) {
+      return { success: false, message: "Kategori anggota tidak valid." };
+    }
+  }
+
   try {
-    const adminUser = await requireRole(["super_admin", "yayasan", "pengurus"]);
-    const adminRole = getHighestRole(adminUser);
+    const adminUser = await requireRole(["super_admin"]);
     const supabase = createAdminClient();
 
     // Fast test-path for vitest isolated test runner
     if (process.env.VITEST && userId.startsWith("mock-test-")) {
-      if (userId.includes("forbidden-hierarchy")) {
-        return { success: false, message: "Anda tidak dapat mengubah akun dengan hierarki peran setara atau lebih tinggi." };
-      }
       return { success: true, message: "Profil pengguna berhasil diperbarui." };
     }
 
-    const { data: target, error: targetError } = await supabase
-      .from("profiles")
-      .select("id, member_type, status")
-      .eq("id", userId)
-      .maybeSingle();
-    if (targetError) throw targetError;
-    if (!target) return { success: false, message: "Pengguna tidak ditemukan." };
-
-    // Fetch authoritative active roles from user_roles instead of descriptive profiles.member_type (F-04)
-    const { data: targetRoleRows, error: roleLookupError } = await supabase
-      .from("user_roles")
-      .select("roles(key)")
-      .eq("user_id", userId)
-      .is("revoked_at", null);
-    if (roleLookupError) throw roleLookupError;
-
-    const activeRoleKeys: ValidRole[] = (targetRoleRows || [])
-      .map((r: any) => (Array.isArray(r.roles) ? r.roles[0]?.key : r.roles?.key))
-      .filter((r: unknown): r is ValidRole => typeof r === "string" && VALID_ROLES.includes(r as ValidRole));
-
-    const targetRole: ValidRole = activeRoleKeys.length > 0
-      ? activeRoleKeys.reduce<ValidRole>(
-          (highest: ValidRole, curr: ValidRole) => (ROLE_PRIORITY[curr] > ROLE_PRIORITY[highest] ? curr : highest),
-          "santri"
-        )
-      : (normalizeRole(target.member_type) || "santri");
-
-    if (ROLE_PRIORITY[targetRole] >= ROLE_PRIORITY[adminRole]) {
-      return {
-        success: false,
-        message: "Anda tidak dapat mengubah akun dengan hierarki peran setara atau lebih tinggi.",
-      };
-    }
-
-    const requestedRole = payload.memberType === undefined ? targetRole : normalizeRole(payload.memberType);
-    if (!requestedRole) {
-      return { success: false, message: "Peran baru tidak valid." };
-    }
-    if (ROLE_PRIORITY[requestedRole] >= ROLE_PRIORITY[adminRole]) {
-      return {
-        success: false,
-        message: "Anda tidak dapat memberikan peran dengan hierarki setara atau lebih tinggi dari Anda.",
-      };
-    }
-
-    // Verify target role exists in roles table before updating profiles (atomic consistency)
-    let roleRowId: string | null = null;
-    if (payload.memberType !== undefined && requestedRole !== targetRole) {
-      const { data: roleRow, error: roleError } = await supabase
-        .from("roles")
-        .select("id")
-        .eq("key", requestedRole)
-        .maybeSingle();
-      if (roleError) throw roleError;
-      if (!roleRow) return { success: false, message: "Role tujuan tidak ditemukan di database." };
-      roleRowId = roleRow.id;
-    }
-
     // SEC-01 + FUNC-04 + SEC-05: delegate to atomic RPC that also writes audit_log
-    // and sets session_revoked_at when status becomes 'suspended'.
+    // and sets session_revoked_at when status becomes 'suspended'. The RPC owns the actor
+    // check, the last-active-super_admin invariant, and the member_type domain.
     const { data: rpcResult, error: rpcError } = await supabase.rpc("admin_update_user", {
       p_target_user_id: userId,
       p_admin_id: adminUser.id,
@@ -1305,8 +1294,8 @@ export async function adminUpdateUserAction(
       p_phone_number: payload.phoneNumber !== undefined && payload.phoneNumber.trim() ? payload.phoneNumber.trim() : null,
       p_status: payload.status !== undefined ? payload.status : null,
       p_team_name: payload.teamName !== undefined ? payload.teamName.trim() : null,
-      p_new_role_key: roleRowId ? requestedRole : null,
-      p_old_role_id: roleRowId ?? null,
+      p_new_role_key: requestedRole,
+      p_member_type: requestedMemberType,
     });
 
     if (rpcError) throw rpcError;

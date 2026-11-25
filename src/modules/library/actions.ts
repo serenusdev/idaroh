@@ -2,14 +2,19 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
 import { createAdminClient } from "@/lib/supabase/admin";
+import { createClient } from "@/lib/supabase/server";
 import { requireAuthUser, requireRole } from "@/lib/auth/guards";
+import { RESOURCE_RULE_MANAGER_ROLES, isResourceId, resourceVisibilityFilter } from "@/lib/resource-policy";
 import { randomUUID } from "node:crypto";
 import { INITIAL_RESOURCES } from "./data";
-import { CategorySummary, ResourceAdminInput, ResourceItem, ResourceRevisionItem } from "./types";
+import { CategorySummary, ResourceAdminInput, ResourceItem, ResourceRevisionItem, ResourceRuleOptions, ResourceVisibilityRules } from "./types";
 import { throwQueryError } from "@/lib/query-error";
 import { isNonEmptyString } from "@/lib/input-validation";
 
 const RESOURCE_ADMIN_ROLES = ["super_admin", "yayasan", "pengurus"] as const;
+// PERMISSIONS.md §3.2: library.import.run is exclusive to super_admin, even
+// though the rest of the admin surface stays shared with yayasan/pengurus.
+const LIBRARY_IMPORT_ROLES = ["super_admin"] as const;
 
 function mapResourceRow(r: any, authorName: string): ResourceItem {
   const cat = r.resource_categories;
@@ -58,19 +63,38 @@ const RESOURCE_SELECT = `
   resource_tags (tags (name, slug))
 `;
 
-function visibilityFilter(role: string) {
-  return role === "super_admin" || role === "yayasan" || role === "pengurus"
-    ? "visibility.eq.internal,visibility.eq.restricted"
-    : "visibility.eq.internal";
+/**
+ * §3.2/D6: only resource_visibility_rules opens a restricted resource. The
+ * caller-scoped session runs the read so RLS and app.can_view_resource() make
+ * the decision; the admin client then fetches the embedded category/tag rows
+ * those restricted ids belong to.
+ *
+ * The session read stops at PostgREST's row cap, so past ~1000 granted
+ * restricted rows the list query hides the remainder rather than widening the
+ * grant; the library surface is orders of magnitude below that today.
+ */
+async function grantedRestrictedResourceIds(): Promise<string[]> {
+  const session = await createClient();
+  const { data, error } = await session
+    .from("resources")
+    .select("id")
+    .eq("visibility", "restricted");
+  if (error) throw error;
+  return (data || []).map((row: { id: string }) => row.id).filter(isResourceId);
 }
 
 export async function getCategoriesAction(): Promise<CategorySummary[]> {
   await requireAuthUser();
   try {
     const supabase = createAdminClient();
+    const grantedRestrictedIds = await grantedRestrictedResourceIds();
     const [categoriesResult, resourcesResult] = await Promise.all([
       supabase.from("resource_categories").select("id, name, slug, icon").order("sort_order", { ascending: true }),
-      supabase.from("resources").select("category_id").eq("status", "published"),
+      supabase
+        .from("resources")
+        .select("category_id")
+        .eq("status", "published")
+        .or(resourceVisibilityFilter(grantedRestrictedIds)),
     ]);
 
     if (categoriesResult.error) throw categoriesResult.error;
@@ -115,10 +139,12 @@ export async function getResourceStatsAction(): Promise<{
   await requireAuthUser();
   try {
     const supabase = createAdminClient();
+    const grantedRestrictedIds = await grantedRestrictedResourceIds();
     const { data, error } = await supabase
       .from("resources")
       .select("access_setup, how_to_use, workflow_examples, limitations_cautions, official_sources, documentation_status")
-      .eq("status", "published");
+      .eq("status", "published")
+      .or(resourceVisibilityFilter(grantedRestrictedIds));
 
     if (error) throw error;
 
@@ -163,15 +189,16 @@ export async function getResourcesAction(
   query: string = "",
   categorySlug: string = "all"
 ): Promise<ResourceItem[]> {
-  const user = await requireAuthUser();
+  await requireAuthUser();
   if (typeof query !== "string" || typeof categorySlug !== "string") return [];
   try {
     const supabase = createAdminClient();
+    const grantedRestrictedIds = await grantedRestrictedResourceIds();
     let dbQuery = supabase
       .from("resources")
       .select(RESOURCE_SELECT)
       .eq("status", "published")
-      .or(visibilityFilter(user.role))
+      .or(resourceVisibilityFilter(grantedRestrictedIds))
       .order("created_at", { ascending: false })
       .limit(100);
 
@@ -234,19 +261,20 @@ export async function getResourcesAction(
  * TRC-27: deep-link slug langsung ke DB (tanpa limit 100 getResourcesAction).
  */
 export async function getResourceBySlugAction(slug: string): Promise<ResourceItem | null> {
-  const user = await requireAuthUser();
+  await requireAuthUser();
   if (!isNonEmptyString(slug, 200)) return null;
   if (process.env.VITEST) {
     return INITIAL_RESOURCES.find((resource) => resource.slug === slug) || null;
   }
   try {
     const supabase = createAdminClient();
+    const grantedRestrictedIds = await grantedRestrictedResourceIds();
     const { data, error } = await supabase
       .from("resources")
       .select(RESOURCE_SELECT)
       .eq("status", "published")
       .eq("slug", slug)
-      .or(visibilityFilter(user.role))
+      .or(resourceVisibilityFilter(grantedRestrictedIds))
       .maybeSingle();
     if (error) throw error;
     if (!data) return null;
@@ -264,7 +292,7 @@ export async function toggleFavoriteAction(
   resourceId: string
 ): Promise<{ success: boolean; isFavorited: boolean }> {
   const user = await requireAuthUser();
-  if (!isNonEmptyString(resourceId, 100)) {
+  if (!isResourceId(resourceId)) {
     return { success: false, isFavorited: false };
   }
   if (process.env.VITEST) return { success: true, isFavorited: true };
@@ -286,6 +314,17 @@ export async function toggleFavoriteAction(
       if (error) throw error;
       return { success: true, isFavorited: false };
     }
+    // Adding a favourite is the one place a raw id could be probed, so the row
+    // has to be readable through the resources policy first (§3.2/D6). Removing
+    // a favourite stays open even after a grant is withdrawn.
+    const session = await createClient();
+    const { data: readable, error: readableError } = await session
+      .from("resources")
+      .select("id")
+      .eq("id", resourceId)
+      .maybeSingle();
+    if (readableError) throw readableError;
+    if (!readable) return { success: false, isFavorited: false };
     const { error } = await supabase.from("resource_favorites").insert({
       user_id: user.id,
       resource_id: resourceId,
@@ -320,42 +359,28 @@ function normalizeResourceInput(payload: ResourceAdminInput): ResourceAdminInput
   };
 }
 
-function resourceRow(input: ResourceAdminInput, userId: string) {
+/**
+ * LIB-03: the payload app.resource_upsert reads. Actor ids and timestamps are
+ * deliberately absent — the RPC derives them from the session and the database
+ * clock, so a client can no longer stamp its own UTC date on a resource row.
+ */
+function resourceUpsertPayload(input: ResourceAdminInput) {
   return {
-    legacy_record_id: input.legacyRecordId || null,
+    legacy_record_id: input.legacyRecordId,
     name: input.name,
     slug: input.slug,
     description: input.description,
     category_id: input.categoryId,
     official_url: input.officialUrl,
-    visibility: input.visibility,
-    status: input.status,
     access_setup: input.accessSetup,
     how_to_use: input.howToUse,
     workflow_examples: input.workflowExamples,
     limitations_cautions: input.limitationsCautions,
     official_sources: input.officialSources,
     documentation_status: input.documentationStatus,
-    archived_at: input.status === "archived" ? new Date().toISOString() : null,
-    updated_by: userId,
-    updated_at: new Date().toISOString(),
+    visibility: input.visibility,
+    status: input.status,
   };
-}
-
-async function syncResourceTags(supabase: ReturnType<typeof createAdminClient>, resourceId: string, names: string[]) {
-  const normalized = names.map((name) => ({
-    name,
-    slug: name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, ""),
-  })).filter((tag) => tag.slug);
-  const { error: deleteError } = await supabase.from("resource_tags").delete().eq("resource_id", resourceId);
-  if (deleteError) throw deleteError;
-  if (!normalized.length) return;
-  const { error: upsertError } = await supabase.from("tags").upsert(normalized, { onConflict: "slug" });
-  if (upsertError) throw upsertError;
-  const { data: tags, error: tagsError } = await supabase.from("tags").select("id, slug").in("slug", normalized.map((tag) => tag.slug));
-  if (tagsError) throw tagsError;
-  const { error: linkError } = await supabase.from("resource_tags").insert((tags || []).map((tag: { id: string }) => ({ resource_id: resourceId, tag_id: tag.id })));
-  if (linkError) throw linkError;
 }
 
 function toResourceAdminInput(row: any, tags: string[] = []): ResourceAdminInput {
@@ -403,33 +428,30 @@ export async function saveResourceAction(
   payload: ResourceAdminInput,
   changeNote = "Pembaruan Resource Library"
 ): Promise<{ success: boolean; message: string; id?: string }> {
-  const user = await requireRole([...RESOURCE_ADMIN_ROLES]);
+  await requireRole([...RESOURCE_ADMIN_ROLES]);
   const input = normalizeResourceInput(payload);
   if (!input.name || !input.slug || !input.description) return { success: false, message: "Nama, slug, dan deskripsi wajib diisi." };
-  const supabase = createAdminClient();
+  if (process.env.VITEST) {
+    return { success: true, message: resourceId ? "Resource berhasil diperbarui." : "Resource berhasil dibuat.", id: resourceId ?? undefined };
+  }
   try {
-    let id = resourceId;
-    if (resourceId) {
-      const { error } = await supabase.from("resources").update(resourceRow(input, user.id)).eq("id", resourceId);
-      if (error) throw error;
-    } else {
-      const { data, error } = await supabase.from("resources").insert({ ...resourceRow(input, user.id), created_by: user.id }).select("id").single();
-      if (error) throw error;
-      id = data.id;
-    }
-    await syncResourceTags(supabase, id!, input.tags);
-    const { data: saved, error: savedError } = await supabase.from("resources").select("*").eq("id", id!).single();
-    if (savedError) throw savedError;
-    const { data: latest } = await supabase.from("resource_revisions").select("revision_no").eq("resource_id", id!).order("revision_no", { ascending: false }).limit(1).maybeSingle();
-    const { error: revisionError } = await supabase.from("resource_revisions").insert({
-      resource_id: id,
-      revision_no: Number(latest?.revision_no || 0) + 1,
-      snapshot: saved,
-      changed_by: user.id,
-      change_note: changeNote.trim() || "Pembaruan Resource Library",
+    // LIB-03 / LIB-08: resource row, tag book, revision and audit row are one
+    // statement set inside app.resource_upsert, run as the caller's session so
+    // auth.uid() is real and a half-written save cannot survive.
+    const supabase = await createClient();
+    const { data, error } = await supabase.rpc("resource_upsert", {
+      p_resource_id: resourceId,
+      p_row: resourceUpsertPayload(input),
+      p_tag_names: input.tags,
+      p_change_note: changeNote,
     });
-    if (revisionError) throw revisionError;
-    return { success: true, message: resourceId ? "Resource berhasil diperbarui." : "Resource berhasil dibuat.", id: id! };
+    if (error) throw error;
+    if (!data?.success) return { success: false, message: data?.message || "Gagal menyimpan resource." };
+    return {
+      success: true,
+      message: data?.message || (resourceId ? "Resource berhasil diperbarui." : "Resource berhasil dibuat."),
+      id: typeof data?.id === "string" ? data.id : (resourceId ?? undefined),
+    };
   } catch (error: any) {
     console.error("Failed to save resource:", error);
     return { success: false, message: error?.message || "Gagal menyimpan resource." };
@@ -442,6 +464,67 @@ export async function setResourceArchiveAction(resourceId: string, archived: boo
   const { error } = await supabase.from("resources").update({ status: archived ? "archived" : "draft", archived_at: archived ? new Date().toISOString() : null, updated_by: user.id, updated_at: new Date().toISOString() }).eq("id", resourceId);
   if (error) return { success: false, message: "Gagal mengubah status resource." };
   return { success: true, message: archived ? "Resource diarsipkan tanpa menghapus riwayat." : "Resource dikembalikan sebagai draft." };
+}
+
+/**
+ * §3.2 / D6: the rule book behind a restricted resource, readable by the same
+ * roles that may change it.
+ */
+export async function getResourceVisibilityRulesAction(
+  resourceId: string
+): Promise<ResourceVisibilityRules | null> {
+  await requireRole([...RESOURCE_RULE_MANAGER_ROLES]);
+  if (!isResourceId(resourceId)) return null;
+  const supabase = createAdminClient();
+  const { data, error } = await supabase
+    .from("resource_visibility_rules")
+    .select("role_key, team_id")
+    .eq("resource_id", resourceId)
+    .order("created_at", { ascending: true });
+  if (error) throw error;
+  return {
+    roleKeys: (data || []).map((row: { role_key: string | null }) => row.role_key).filter((key: string | null): key is string => Boolean(key)),
+    teamIds: (data || []).map((row: { team_id: string | null }) => row.team_id).filter(isResourceId),
+  };
+}
+
+export async function getResourceRuleOptionsAction(): Promise<ResourceRuleOptions> {
+  await requireRole([...RESOURCE_RULE_MANAGER_ROLES]);
+  const supabase = createAdminClient();
+  const [rolesResult, teamsResult] = await Promise.all([
+    supabase.from("roles").select("key, name").order("key", { ascending: true }),
+    supabase.from("teams").select("id, name").eq("status", "active").order("name", { ascending: true }),
+  ]);
+  if (rolesResult.error) throw rolesResult.error;
+  if (teamsResult.error) throw teamsResult.error;
+  return {
+    roles: (rolesResult.data || []).map((row: { key: string; name: string }) => ({ key: row.key, name: row.name })),
+    teams: (teamsResult.data || []).map((row: { id: string; name: string }) => ({ id: row.id, name: row.name })),
+  };
+}
+
+export async function setResourceVisibilityRulesAction(
+  resourceId: string,
+  roleKeys: string[],
+  teamIds: string[]
+): Promise<{ success: boolean; message: string }> {
+  await requireRole([...RESOURCE_RULE_MANAGER_ROLES]);
+  if (!isResourceId(resourceId)) return { success: false, message: "Resource tidak ditemukan." };
+  // app.resource_rule_set() owns the validation, the delete/insert pair and the
+  // audit row, so the write travels on the caller's own session instead of a
+  // service-role shortcut around it.
+  const session = await createClient();
+  const { data, error } = await session.rpc("resource_rule_set", {
+    p_resource_id: resourceId,
+    p_role_keys: (roleKeys || []).filter((key) => isNonEmptyString(key, 40)),
+    p_team_ids: (teamIds || []).filter(isResourceId),
+  });
+  if (error) throw error;
+  const result = data as { success?: boolean; message?: string } | null;
+  return {
+    success: Boolean(result?.success),
+    message: result?.message || "Aturan visibilitas resource tidak tersimpan.",
+  };
 }
 
 export async function getResourceRevisionsAction(resourceId: string): Promise<ResourceRevisionItem[]> {
@@ -496,7 +579,7 @@ export interface ResourceImportResult {
 }
 
 export async function importResourcesCsvAction(fileName: string, csv: string): Promise<ResourceImportResult> {
-  const user = await requireRole([...RESOURCE_ADMIN_ROLES]);
+  const user = await requireRole([...LIBRARY_IMPORT_ROLES]);
   const rows = parseResourceCsv(csv.replace(/^\uFEFF/, ""));
   if (rows.length < 2) return { success: false, message: "CSV resource harus memiliki header dan minimal satu baris.", totalRows: 0, importedRows: 0, rejectedRows: 0, errors: [] };
   const headers = rows[0].map((header) => header.toLowerCase().trim().replace(/\s+/g, "_"));
@@ -508,6 +591,7 @@ export async function importResourcesCsvAction(fileName: string, csv: string): P
   if (process.env.VITEST) return { success: true, message: `${items.length} resource lolos validasi.`, totalRows: items.length, importedRows: items.length, rejectedRows: 0, errors: [] };
 
   const supabase = createAdminClient();
+  const session = await createClient();
   const batchId = randomUUID();
   const errors: string[] = [];
   let importedRows = 0;
@@ -537,26 +621,24 @@ export async function importResourcesCsvAction(fileName: string, csv: string): P
     });
     if (!input.name || !input.slug || !input.description) { errors.push(`Baris ${rowNo}: name, slug, dan description wajib diisi.`); continue; }
     try {
+      // The batch ledger and the id lookup stay on the service-role client: an
+      // import has to see rows RLS hides from the caller (drafts, restricted
+      // without a rule) to update rather than duplicate them. Every write goes
+      // through the caller's session so app.resource_upsert can guard, audit and
+      // roll the row back with its tags and revision (LIB-03 / LIB-08).
       const lookup = input.legacyRecordId
         ? supabase.from("resources").select("id").eq("legacy_record_id", input.legacyRecordId).maybeSingle()
         : supabase.from("resources").select("id").eq("slug", input.slug).maybeSingle();
       const { data: existing, error: lookupError } = await lookup;
       if (lookupError) throw lookupError;
-      let resourceId = existing?.id;
-      if (resourceId) {
-        const { error } = await supabase.from("resources").update(resourceRow(input, user.id)).eq("id", resourceId);
-        if (error) throw error;
-      } else {
-        const { data: inserted, error } = await supabase.from("resources").insert({ ...resourceRow(input, user.id), created_by: user.id }).select("id").single();
-        if (error) throw error;
-        resourceId = inserted.id;
-      }
-      await syncResourceTags(supabase, resourceId, input.tags);
-      const { data: saved, error: savedError } = await supabase.from("resources").select("*").eq("id", resourceId).single();
-      if (savedError) throw savedError;
-      const { data: latest } = await supabase.from("resource_revisions").select("revision_no").eq("resource_id", resourceId).order("revision_no", { ascending: false }).limit(1).maybeSingle();
-      const { error: revisionError } = await supabase.from("resource_revisions").insert({ resource_id: resourceId, revision_no: Number(latest?.revision_no || 0) + 1, snapshot: saved, changed_by: user.id, change_note: `Impor CSV batch ${batchId}` });
-      if (revisionError) throw revisionError;
+      const { data, error } = await session.rpc("resource_upsert", {
+        p_resource_id: existing?.id ?? null,
+        p_row: resourceUpsertPayload(input),
+        p_tag_names: input.tags,
+        p_change_note: `Impor CSV batch ${batchId}`,
+      });
+      if (error) throw error;
+      if (!data?.success) throw new Error(data?.message || "baris gagal disimpan");
       importedRows += 1;
     } catch (error: any) {
       errors.push(`Baris ${rowNo}: ${error?.message || "gagal disimpan"}`);

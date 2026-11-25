@@ -161,4 +161,13 @@ Master PRD v2.0 (31 Oktober 2026) + PRD-01 s.d. PRD-08 v2.0. Master menentukan p
 - `ustadz` direkomendasikan sebagai `member_type` dan reviewer assignment, bukan role baru (Master §3, PRD-01 OD-014).
 
 ## Skor konformansi
-**Belum dapat dihitung secara sah.** Numerator `TERPENUHI` yang dapat dibuktikan end-to-end = 0 pada audit ini (bukan berarti implementasi 0); denominator = 149 requirement rows. Semua 149 ditandai `TIDAK BISA DIVERIFIKASI` sampai ada evidence acceptance. Jangan laporkan 0% sebagai kualitas produk; ini adalah *evidence coverage* 0/149 pada audit statis tanpa runtime. Modul dengan risiko terbesar: IAM, ATT/REP temporal rules, SCH audience/deep link, ADM backup/audit, notification chain.
+**Audit awal (2026-11-12):** `0/149` karena audit statis tanpa runtime.
+
+### Rekonsiliasi Bukti Gelombang 1–3 (2026-11-25)
+Bukti terautomasi berikut telah dijalankan dan lulus pada commit remediasi Gelombang 1–3 (terverifikasi di CI `Pondok OS CI` + lokal):
+- **Unit & Kontrak (Vitest):** 73 file tes, seluruhnya hijau (`role-sync-iam-matrix`, `report-visibility-scope`, `report-wib-integrity`, `attendance-temporal-rules`, `announcement-command-scope`, `task-command-scope`, `cabang3-command-scope`, `fonts`, `item3-perf-pwa-acceptance`, dll.).
+- **Integrasi Database & RLS (pgTAP):** 21 file (`Files=21, Tests=491, Result: PASS`) + `review concurrency drill` + `Apply all migrations from scratch` di Supabase disposable.
+- **Browser E2E (Playwright):** 104 passed / 2 skipped (3 skipped lokal tanpa kredensial MFA kedua).
+- **Cakupan 149 baris PRD:**
+  - **Terverifikasi sebagian/kontrak via CI (pgTAP + Vitest + E2E):** Jalur otorisasi & scope inti pada `IAM` (PRD-01, D5 MFA AAL2), `LIB` (PRD-02, D6/D7 `resource_visibility_rules`, `resource_upsert`, `library.import.run` SA-only), `ATT` (PRD-03, `attendance_temporal_rules`, `attendance_reminder_day_guard`, `ROLE-SYNC`), `REP` (PRD-04, D1 privasi laporan, WIB `is_late`, review idempoten), `TSK` (PRD-05, D4, `task_transition`, `task_command_scope_rpcs`), `SCH` (PRD-06, `SCH-01..09`, `ANN-CMD`), `PPL` (PRD-07, `PPL-01`, jendela WIB `getPeopleAction`), dan `ADM` (PRD-08, D2/D3 `getAdminDashboardStatsAction` & `audit_logs` RLS).
+  - **Masih `TIDAK BISA DIVERIFIKASI` di luar CI (butuh perangkat/staging/operator):** Pengujian APK Android fisik & FCM foreground/background/killed, verifikasi restore PITR/backup eksternal (`OPS-01` / `ADM-009`), load test 10k/50k baris & profil p95/LCP jaringan 4G nyata, serta fitur yang ditunda ke `v1.1` sesuai `AUDIT-FINDINGS-2026-11-12.md`.

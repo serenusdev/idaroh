@@ -7,6 +7,7 @@ import { Modal } from "@/components/ui/modal";
 import { useIdentity } from "@/components/auth/identity-context";
 import { useCachedData } from "@/hooks/use-cached-data";
 import { invalidateCache } from "@/lib/data-cache";
+import { AUDIT_EXPORT_ROLES, EXPORT_ROLES } from "@/lib/export-policy";
 import {
   exportAuditedDataAction,
   queryAuditLogsAction,
@@ -30,7 +31,7 @@ export default function AdminAuditPage() {
   const chainQuery = useCachedData("admin:audit-chain", getAuditChainStatusAction);
   const pendingQuery = useCachedData("admin:pending-policies", getPendingPolicySettingsAction);
   const logsQuery = useCachedData(`admin:audit-logs:${scope}:${searchLogQuery}:${auditPage}`, () => queryAuditLogsAction(searchLogQuery, scope, auditPage));
-  const statsQuery = useCachedData("admin:dashboard-stats", getAdminDashboardStatsAction);
+  const statsQuery = useCachedData(`admin:dashboard-stats:${currentUser.id}`, getAdminDashboardStatsAction);
 
   const policy = policyQuery.data ?? null;
   const auditChain = chainQuery.data ?? null;
@@ -56,6 +57,8 @@ export default function AdminAuditPage() {
   const [isPolicyModalOpen, setIsPolicyModalOpen] = React.useState(false);
   const [exportFormat, setExportFormat] = React.useState<"csv" | "pdf">("csv");
   const [exportCategory, setExportCategory] = React.useState("presensi_laporan");
+  const [exportDateFrom, setExportDateFrom] = React.useState("");
+  const [exportDateTo, setExportDateTo] = React.useState("");
   const [isExporting, setIsExporting] = React.useState(false);
 
   const [approveTargetId, setApproveTargetId] = React.useState<string | null>(null);
@@ -98,14 +101,20 @@ export default function AdminAuditPage() {
     void statsQuery.refresh();
   };
 
-  const isAdminOrPengurus =
-    currentUser?.role === "super_admin" ||
-    currentUser?.role === "yayasan" ||
-    currentUser?.role === "pengurus";
+  // PERMISSIONS.md §3.8: admin.audit.read is yayasan/super_admin only and names
+  // pengurus as explicitly denied, so the union of held roles decides, not the
+  // primary role. analytics.export in turn excludes super_admin, and the audit
+  // dataset follows admin.audit.read. The server action and download route
+  // enforce the same sets; the UI only mirrors them.
+  const heldRoles = new Set<string>([currentUser?.role, ...(currentUser?.roles || [])].filter(Boolean) as string[]);
+  const canReadAuditLogs = heldRoles.has("super_admin") || heldRoles.has("yayasan");
 
-  if (!isAdminOrPengurus) {
-    return <UnauthorizedState requiredRole="Super Admin / Pengurus / Yayasan" />;
+  if (!canReadAuditLogs) {
+    return <UnauthorizedState requiredRole="Super Admin / Yayasan" />;
   }
+
+  const canExport = EXPORT_ROLES.some((role) => heldRoles.has(role));
+  const canExportAuditLogs = AUDIT_EXPORT_ROLES.some((role) => heldRoles.has(role));
 
   // Handle Log search
   const handleSearchLogs = (q: string) => {
@@ -118,15 +127,16 @@ export default function AdminAuditPage() {
     e.preventDefault();
     setIsExporting(true);
     try {
-      const res = await exportAuditedDataAction(
-        exportFormat,
-        exportCategory,
-        "Super Admin"
-      );
+      const res = await exportAuditedDataAction(exportFormat, exportCategory, undefined, {
+        dateFrom: exportDateFrom || null,
+        dateTo: exportDateTo || null,
+      });
       if (res.success) {
         setToastMessage(res.message);
         setIsExportDialogOpen(false);
         if (res.downloadUrl) window.location.assign(res.downloadUrl);
+      } else {
+        setToastMessage(res.message);
       }
     } catch {
       setToastMessage("Terjadi kesalahan saat memproses ekspor data.");
@@ -596,14 +606,16 @@ export default function AdminAuditPage() {
 
           {/* Operational Bottom Actions */}
           <div className="flex flex-col gap-2.5 pt-1">
-            <button
-              type="button"
-              onClick={() => setIsExportDialogOpen(true)}
-              className="w-full h-11 bg-primary hover:bg-primary-container text-on-primary rounded-xl font-label-md text-xs font-semibold flex items-center justify-center gap-2 shadow-xs transition-all"
-            >
-              <span className="material-symbols-outlined text-[18px]">download</span>
-              <span>Ekspor Rekap Beraudit (CSV / PDF)</span>
-            </button>
+            {canExport && (
+              <button
+                type="button"
+                onClick={() => setIsExportDialogOpen(true)}
+                className="w-full h-11 bg-primary hover:bg-primary-container text-on-primary rounded-xl font-label-md text-xs font-semibold flex items-center justify-center gap-2 shadow-xs transition-all"
+              >
+                <span className="material-symbols-outlined text-[18px]">download</span>
+                <span>Ekspor Rekap Beraudit (CSV / PDF)</span>
+              </button>
+            )}
 
             <button
               type="button"
@@ -816,9 +828,41 @@ export default function AdminAuditPage() {
                 >
                   <option value="presensi_laporan">Presensi &amp; Laporan Harian Terpadu</option>
                   <option value="tugas_proyek">Rekap Tugas &amp; Proyek Sentra</option>
-                  <option value="audit_logs">Log Audit ISO/IEC 27001 Lengkap</option>
+                  {canExportAuditLogs && (
+                    <option value="audit_logs">Log Audit ISO/IEC 27001 Lengkap</option>
+                  )}
                 </select>
               </div>
+
+              <div className="grid grid-cols-2 gap-2">
+                <div className="space-y-1">
+                  <label htmlFor="export-date-from" className="text-xs font-semibold text-on-surface block">
+                    Tanggal Awal (WIB)
+                  </label>
+                  <input
+                    id="export-date-from"
+                    type="date"
+                    value={exportDateFrom}
+                    onChange={(e) => setExportDateFrom(e.target.value)}
+                    className="w-full h-9 px-2.5 rounded-lg bg-surface-container-low border border-border text-xs focus:outline-none focus:ring-1 focus:ring-primary"
+                  />
+                </div>
+                <div className="space-y-1">
+                  <label htmlFor="export-date-to" className="text-xs font-semibold text-on-surface block">
+                    Tanggal Akhir (WIB)
+                  </label>
+                  <input
+                    id="export-date-to"
+                    type="date"
+                    value={exportDateTo}
+                    onChange={(e) => setExportDateTo(e.target.value)}
+                    className="w-full h-9 px-2.5 rounded-lg bg-surface-container-low border border-border text-xs focus:outline-none focus:ring-1 focus:ring-primary"
+                  />
+                </div>
+              </div>
+              <p className="text-[11px] text-muted-foreground leading-relaxed">
+                Kosongkan rentang tanggal untuk mengekspor seluruh periode yang dapat Anda akses.
+              </p>
 
               <div className="space-y-1">
                 <span id="export-format-label" className="text-xs font-semibold text-on-surface block">
