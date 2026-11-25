@@ -98,6 +98,20 @@ Tanpa replay ini, verifikasi yang tersedia adalah guard statis di `src/__tests__
      (SELECT count(*) FROM supabase_migrations.schema_migrations) AS applied_count;
    ```
    Semua boolean harus `true`. `NOTIFY pgrst` sudah disertakan di migrasi; bila PostgREST belum segar, reload API dari Dashboard.
+3b. **Backfill lapisan efektif untuk hari non-operasional (TEMPORAL).** `20261122000011` sudah memperbaiki
+    tanggal di dalam rentang `non_operational_dates`, tetapi tidak menyentuh Ahad historis sebelum tanggal
+    penutupan pertama kali dicatat. Setelah migrasi masuk, panggil sekali sebagai `service_role` (bukan dari
+    browser):
+   ```sql
+   SELECT public.backfill_non_operational_effective('2026-01-01', now()::date);
+   ```
+   Fungsi ini khusus `service_role`, berjangka pendek, idempoten (baris yang sudah `non_operational`/`calendar`
+   tidak disentuh ulang), dan menulis jumlah baris yang diperbaiki ke `RAISE NOTICE`. Batas atasnya tanggal hari
+   itu; jalankan per bulan bila rentangnya panjang. Verifikasi:
+   `SELECT count(*) FROM attendance_effective WHERE EXTRACT(DOW FROM attendance_date) = 0 AND status <> 'non_operational';` → `0`.
+   Catatan jumlah file: sejak §2 ditulis, backlog Gelombang 2–3 menambah migrasi `20261122000001..11`, sehingga
+   daftar `--dry-run` berisi **33 file** sejak `20261105000002` (bukan 22). Cocokkan terhadap
+   `ls supabase/migrations | awk -F_ '$1>=20261105000002' | wc -l`, bukan ke angka lama di dokumen ini.
 4. Merge cabang ke `main` → Vercel deploy otomatis. Pastikan commit deploy = merge commit cabang ini.
 5. **Smoke test produksi** (pakai akun super_admin ber-MFA; jangan buat akun test permanen):
    - `/login`: widget Turnstile muncul (tidak ada error CSP di console browser), login sukses → MFA challenge jalan.
@@ -111,9 +125,9 @@ Tanpa replay ini, verifikasi yang tersedia adalah guard statis di `src/__tests__
 ## 5. Rollback
 
 - **Aplikasi**: redeploy commit produksi sebelumnya (`4e66ce2`) dari Vercel.
-- **Database**: migrasi bersifat forward-fix; jangan menurunkan skema secara otomatis. Rollback manual hanya untuk `20261118000001` via `supabase/rollback/20261118000001_report_review_command_idempotency_down.sql` — hanya jika aplikasi juga diturunkan ke versi pra-idempotensi (urutan manual ada di header file itu). `20261121000001` tidak perlu di-rollback (hanya DROP + assert; menjalankan ulang kode lama di atas skema baru tidak dijamin — kembali ke §5 aplikasi).
+- **Database**: migrasi bersifat forward-fix; jangan menurunkan skema secara otomatis. Rollback manual hanya untuk `20261118000001` via `supabase/rollback/20261118000001_report_review_command_idempotency_down.sql` — hanya jika aplikasi juga diturunkan ke versi pra-idempotensi (urutan manual ada di header file itu). `20261121000001` tidak perlu di-rollback (hanya DROP + assert; menjalankan ulang kode lama di atas skema baru tidak dijamin — kembali ke §5 aplikasi). `20261122000011` punya rollback di `supabase/rollback/20261122000011_attendance_temporal_rules_down.sql` (memulihkan pre-image `attendance_check_in`/`refresh_attendance_effective`/`save_report` dan menghapus helper + trigger kalender); jangan jalankan kecuali aplikasi juga diturunkan — rollback ini mengembalikan cacat Ahad dan reparasi datanya sengaja tidak dibatalkan.
 - Jika push migrasi gagal di tengah: tiap file bertransaksi sendiri (`BEGIN/COMMIT`); catat file yang gagal, perbaiki penyebab (biasanya §2c/§2d belum dibereskan), lalu `supabase db push --remote` lagi — file yang sudah sukses tidak diulang.
 
 ## 6. Bukti yang dicatat
 
-Isi dan simpan bersama release notes: hasil §2 (6 query), keluaran `supabase db push` (nama file yang diterapkan), assert §4.3 semua `true`, checklist smoke §4.5, dan (bila dijalankan) keluaran `supabase db reset` + `supabase test db` dari §3.
+Isi dan simpan bersama release notes: hasil §2 (6 query), keluaran `supabase db push` (nama file yang diterapkan), assert §4.3 semua `true`, keluaran `RAISE NOTICE` backfill §3b + query verifikasi Ahad-nya (harus `0`), checklist smoke §4.5, dan (bila dijalankan) keluaran `supabase db reset` + `supabase test db` dari §3.
