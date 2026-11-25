@@ -30,14 +30,15 @@ export default function BerandaPage() {
 
   // Live configs & data — stale-while-revalidate: kunjungan ulang langsung
   // menampilkan data terakhir sambil menyegarkan di latar belakang.
-  const isSupervisor = ["super_admin", "yayasan", "pengurus"].includes(currentUser.role);
+  const isOperationalSupervisor = holdsRole(currentUser, ["yayasan", "pengurus"]);
+  const isSupervisor = holdsRole(currentUser, ["super_admin", "yayasan", "pengurus"]);
   // §3.1: only super_admin may read the registration queue or decide on it, so the approval
   // shortcut stays out of the yayasan/pengurus dashboard instead of ending in "Unauthorized".
   const canDecideIam = holdsRole(currentUser, IAM_MUTATION_ROLES);
   const policyQuery = useCachedData("policy:active", getActivePolicyAction);
   const eventsQuery = useCachedData(`events:${currentUser.id}`, getEventsAction);
   const announcementsQuery = useCachedData(`announcements:${currentUser.id}`, getAnnouncementsAction);
-  const statsQuery = useCachedData(isSupervisor ? "admin:dashboard-stats" : null, getAdminDashboardStatsAction);
+  const statsQuery = useCachedData(isSupervisor ? `admin:dashboard-stats:${currentUser.id}` : null, getAdminDashboardStatsAction);
 
   const policy = policyQuery.data ?? null;
   const events: ScheduleEventItem[] = eventsQuery.data ?? [];
@@ -273,6 +274,8 @@ export default function BerandaPage() {
           </div>
 
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-3.5">
+            {isOperationalSupervisor && (
+            <>
             {/* Presensi Hari Ini */}
             <div className="bg-card p-4 rounded-xl border border-border shadow-xs space-y-2">
               <div className="flex items-center justify-between">
@@ -313,6 +316,8 @@ export default function BerandaPage() {
                 <span className="material-symbols-outlined text-[13px]">arrow_forward</span>
               </Link>
             </div>
+            </>
+            )}
 
             {/* Pendaftar Akun Baru (IAM) — super_admin only */}
             {canDecideIam && (
@@ -337,7 +342,38 @@ export default function BerandaPage() {
             </div>
             )}
 
-            {/* Tugas & Proyek Aktif */}
+            {/* Kesehatan Sistem (D3) — super_admin */}
+            {canDecideIam && adminStats?.systemHealth && (
+            <>
+              <div className="bg-card p-4 rounded-xl border border-border shadow-xs space-y-2">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs text-muted-foreground font-medium">Antrean Outbox</span>
+                  <span className="material-symbols-outlined text-primary text-[20px]">notifications_active</span>
+                </div>
+                <div className="flex items-baseline gap-2">
+                  <span className="font-headline-sm text-2xl font-bold text-on-surface">
+                    {adminStats.systemHealth.pendingOutbox}
+                  </span>
+                  <span className="text-xs text-muted-foreground">menunggu kirim</span>
+                </div>
+              </div>
+              <div className="bg-card p-4 rounded-xl border border-border shadow-xs space-y-2">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs text-muted-foreground font-medium">Cron Gagal</span>
+                  <span className="material-symbols-outlined text-tertiary text-[20px]">schedule</span>
+                </div>
+                <div className="flex items-baseline gap-2">
+                  <span className="font-headline-sm text-2xl font-bold text-on-surface">
+                    {adminStats.systemHealth.failedCronRuns}
+                  </span>
+                  <span className="text-xs text-muted-foreground">eksekusi gagal</span>
+                </div>
+              </div>
+            </>
+            )}
+
+            {/* Tugas & Proyek Aktif — operasional non-SA */}
+            {isOperationalSupervisor && (
             <div className="bg-card p-4 rounded-xl border border-border shadow-xs space-y-2">
               <div className="flex items-center justify-between">
                 <span className="text-xs text-muted-foreground font-medium">Tugas &amp; Proyek</span>
@@ -357,6 +393,7 @@ export default function BerandaPage() {
                 <span className="material-symbols-outlined text-[13px]">arrow_forward</span>
               </Link>
             </div>
+            )}
           </div>
         </section>
 

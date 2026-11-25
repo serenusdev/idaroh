@@ -31,7 +31,7 @@ export default function AdminAuditPage() {
   const chainQuery = useCachedData("admin:audit-chain", getAuditChainStatusAction);
   const pendingQuery = useCachedData("admin:pending-policies", getPendingPolicySettingsAction);
   const logsQuery = useCachedData(`admin:audit-logs:${scope}:${searchLogQuery}:${auditPage}`, () => queryAuditLogsAction(searchLogQuery, scope, auditPage));
-  const statsQuery = useCachedData("admin:dashboard-stats", getAdminDashboardStatsAction);
+  const statsQuery = useCachedData(`admin:dashboard-stats:${currentUser.id}`, getAdminDashboardStatsAction);
 
   const policy = policyQuery.data ?? null;
   const auditChain = chainQuery.data ?? null;

@@ -376,13 +376,21 @@ export interface AdminDashboardMetrics {
   approvedReports: number;
   pendingAccountRequests: number;
   activeTasks: number;
+  systemHealth?: {
+    activeUsersCount: number;
+    pendingOutbox: number;
+    failedCronRuns: number;
+  };
 }
 
 /**
- * Server Action: Query high-level operational counts for Admin Overview Dashboard
+ * Server Action: Query high-level operational counts for Admin Overview Dashboard.
+ * Decision D3: super_admin (without pengurus/yayasan) receives technical/system
+ * health aggregates only, without operational santri KPIs or PII.
  */
 export async function getAdminDashboardStatsAction(): Promise<AdminDashboardMetrics> {
-  await requireRole(["super_admin", "yayasan", "pengurus"]);
+  const user = await requireRole(["super_admin", "yayasan", "pengurus"]);
+  const isOperationalDashboardRole = holdsRole(user, ["pengurus", "yayasan"]);
   const result: AdminDashboardMetrics = {
     totalSantri: 0,
     todayCheckedIn: 0,
@@ -395,6 +403,35 @@ export async function getAdminDashboardStatsAction(): Promise<AdminDashboardMetr
 
   try {
     const supabase = createAdminClient();
+
+    if (holdsRole(user, ["super_admin"])) {
+      const [
+        { count: activeUsersCount, error: usersError },
+        { count: pendingOutboxCount, error: outboxError },
+        { count: failedCronCount, error: cronError },
+        { count: reqCount, error: reqError },
+      ] = await Promise.all([
+        supabase.from("profiles").select("id", { count: "exact", head: true }).eq("status", "active"),
+        supabase.from("notification_outbox").select("id", { count: "exact", head: true }).eq("status", "pending"),
+        supabase.from("cron_job_runs").select("id", { count: "exact", head: true }).eq("status", "failed"),
+        supabase.from("account_requests").select("*", { count: "exact", head: true }).eq("status", "pending"),
+      ]);
+      if (usersError) throw usersError;
+      if (outboxError) throw outboxError;
+      if (cronError) throw cronError;
+      if (reqError) throw reqError;
+      result.pendingAccountRequests = reqCount || 0;
+      result.systemHealth = {
+        activeUsersCount: activeUsersCount || 0,
+        pendingOutbox: pendingOutboxCount || 0,
+        failedCronRuns: failedCronCount || 0,
+      };
+    }
+
+    if (!isOperationalDashboardRole) {
+      return result;
+    }
+
     const today = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Jakarta" }).format(new Date());
 
     // 1. Total santri
@@ -426,15 +463,7 @@ export async function getAdminDashboardStatsAction(): Promise<AdminDashboardMetr
     result.pendingReports = pendingReportCount || 0;
     result.approvedReports = approvedReportCount || 0;
 
-    // 4. Pending account requests
-    const { count: reqCount, error: reqError } = await supabase
-      .from("account_requests")
-      .select("*", { count: "exact", head: true })
-      .eq("status", "pending");
-    if (reqError) throw reqError;
-    result.pendingAccountRequests = reqCount || 0;
-
-    // 5. Active tasks
+    // 4. Active tasks
     const { count: taskCount, error: taskError } = await supabase
       .from("tasks")
       .select("id", { count: "exact", head: true })

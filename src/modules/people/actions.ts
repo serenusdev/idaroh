@@ -27,13 +27,15 @@ export async function getPeopleAction(): Promise<PersonProfile[]> {
     if (error) throw error;
     if (profiles) {
       if (profiles.length === 0) return [];
+      const today = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Jakarta" }).format(new Date());
       const profileIds = profiles.map((profile: any) => profile.id);
       const { data: assignments, error: assignmentsError } = await supabase
         .from("reviewer_assignments")
         .select("reviewee_id, reviewer_id")
         .in("reviewee_id", profileIds)
         .eq("kind", "report")
-        .or(`valid_to.is.null,valid_to.gte.${new Date().toISOString().slice(0, 10)}`);
+        .lte("valid_from", today)
+        .or(`valid_to.is.null,valid_to.gte.${today}`);
       if (assignmentsError) throw assignmentsError;
       const reviewerIds = Array.from(new Set((assignments || []).map((a: any) => a.reviewer_id)));
       const { data: reviewers } = reviewerIds.length
@@ -44,9 +46,9 @@ export async function getPeopleAction(): Promise<PersonProfile[]> {
         .from("team_members")
         .select("user_id, team_id, team_role")
         .in("user_id", profileIds)
-        .is("valid_to", null);
+        .lte("valid_from", today)
+        .or(`valid_to.is.null,valid_to.gte.${today}`);
       if (membershipsError) throw membershipsError;
-      const today = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Jakarta" }).format(new Date());
       const { data: dutyRows, error: dutyError } = await supabase
         .from("attendance_duty_flags")
         .select("user_id, attendance_required, report_required, date_from, date_to, created_at")
@@ -78,13 +80,15 @@ export async function getPeopleAction(): Promise<PersonProfile[]> {
         membershipsByUser.set(membership.user_id, list);
       }
       let visibleProfiles = profiles as any[];
-      if (currentUser.role === "santri") {
-        visibleProfiles = visibleProfiles.filter((profile) => profile.id === currentUser.id);
-      } else if (currentUser.role === "koordinator") {
+      const heldRoles = new Set<string>([currentUser.role, ...(currentUser.roles || [])]);
+      const hasOrgDirectoryRole = ["pengurus", "yayasan", "super_admin"].some((r) => heldRoles.has(r));
+      if (!hasOrgDirectoryRole && heldRoles.has("koordinator")) {
         const ownTeams = new Set((membershipsByUser.get(currentUser.id) || []).map((item: any) => item.team_id));
         visibleProfiles = visibleProfiles.filter((profile) =>
           profile.id === currentUser.id || (membershipsByUser.get(profile.id) || []).some((item: any) => ownTeams.has(item.team_id))
         );
+      } else if (!hasOrgDirectoryRole) {
+        visibleProfiles = visibleProfiles.filter((profile) => profile.id === currentUser.id);
       }
 
       return visibleProfiles.map((p: any) => {

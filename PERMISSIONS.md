@@ -86,7 +86,7 @@ Legenda: **S** = `santri`, **K** = `koordinator`, **P** = `pengurus`, **Y** = `y
 >
 > **Catatan `LIB-03` / `LIB-08`:** satu kali simpan resource adalah satu transaksi di `app.resource_upsert(p_resource_id, p_row, p_tag_names, p_change_note)` pada tier `library.resource.create/update` (`P`/`Y`/`SA`): baris `resources`, buku tag (`tags` + `resource_tags`), appending `resource_revisions` (nomor dari `max(revision_no)+1` di bawah `FOR UPDATE` baris resource) dan baris `audit_logs` (`library.resource_saved`) — jalur simpan tidak lagi menulis `resources`/`tags`/`resource_revisions` dari aplikasi, sehingga `created_by`, `updated_by`, dan seluruh tanggal berasal dari sesi & jam database. Label `visibility`/`status` divalidasi terhadap enum katalog dan tabrakan `slug`/`legacy_record_id` ditolak dengan pesan, bukan nama constraint. Impor CSV (`library.import.run`, tetap eksklusif `super_admin`) memakai RPC yang sama per baris; hanya log batch `resource_import_batches` yang masih ditulis dengan klien service-role. **Selisih yang dilaporkan:** `setResourceArchiveAction` masih berupa `resources.update` tunggal tanpa revision dan tanpa audit — temuan terpisah, tidak diubah pada item ini.
 >
-> **Selisih `ROLE-SYNC` (2026-11-25), dilaporkan tidak diubah:** `importMembersCsvAction` (`src/modules/operations/actions.ts`) masih `requireRole(["super_admin", "pengurus"])` padahal baris `library.import.run` di atas eksklusif `super_admin`, dan kolom `member_type` pada CSV disalin ke `account_requests.role_requested` — kategori dipakai sebagai peran, lawan dari §2 aturan 1. Perbaikan ini berada di luar cakupan item `ROLE-SYNC` dan menunggu persetujuan cakupan pada Tahap A tersendiri.
+> **Catatan `ROLE-SYNC` Import (2026-11-25, ditutup pada Cabang 3):** `importMembersCsvAction` (`src/modules/operations/actions.ts`) kini mengunci `requireRole(["super_admin"])` sesuai baris `library.import.run` di atas (`SA` eksklusif), dan tidak lagi menyalin `member_type` ke `account_requests.role_requested` (diisi `'santri'`, sementara `member_type` dicatat di `notes`).
 
 ### 3.3 Attendance (`PRD-03`)
 | Permission | S | K | P | Y | SA | Aturan Scope & Validasi |
@@ -151,6 +151,11 @@ Legenda: **S** = `santri`, **K** = `koordinator`, **P** = `pengurus`, **Y** = `y
 | `project.create/update` | — | `team` | `all` | `all` | — | Koordinator terbatas pada proyek milik timnya. |
 | `project.read` | `anggota` | `team` | `all` | `all` | — | Sesuai visibilitas proyek & keanggotaan tim. |
 | `task.export` | — | — | `all` | `all` | — | `super_admin` ditolak ekspor data tugas. |
+
+> **Catatan `TSK-02` (2026-11-25, Cabang 3):** Seluruh jalur baca/tulis Tasks & Projects diselaraskan dengan §3.5 + keputusan D4, membalikkan komentar lama di `20261122000004:95-96` ("Detail writes keep flowing through the server actions, which run as the service role"):
+> - `super_admin` (`SA = —`) ditolak di semua aksi baca/tulis tugas & proyek (`getTasksAction`, `getProjectsAction`, `getAssignableMembersAction`, `app.create_task`, `app.task_update`, `app.task_archive`, `app.task_assign_reviewer`, `app.task_checklist_mutate`, `app.project_upsert`, `app.project_archive`), dan visibilitas `organization` di TypeScript (`canAccessTaskForUser`) kini mensyaratkan `TASK_READ_ROLES` seperti `app.can_access_task()`.
+> - Migrasi `20261122000015_task_command_scope_rpcs.sql` memindahkan seluruh mutasi detail tugas, arsip tugas, penetapan reviewer, checklist, dan proyek ke RPC `SECURITY DEFINER` berbasis sesi pemanggil dengan `audit_logs` dalam transaksi yang sama, serta mencabut `INSERT, UPDATE, DELETE` langsung pada `public.tasks`, `public.projects`, dan `public.task_checklist_items` dari `anon` dan `authenticated`.
+> - `getPeopleAction` (`src/modules/people/actions.ts`) kini memakai jendela tanggal kalender WIB `Asia/Jakarta` (`valid_from <= today` dan `valid_to IS NULL OR valid_to >= today`) pada `reviewer_assignments` dan `team_members`, serta memeriksa seluruh `roles[]` (bukan `currentUser.role` tunggal).
 
 ### 3.6 Schedules & Announcements (`PRD-06`)
 | Permission | S | K | P | Y | SA | Aturan Scope & Validasi |
@@ -219,6 +224,8 @@ Legenda: **S** = `santri`, **K** = `koordinator`, **P** = `pengurus`, **Y** = `y
 | `admin.settings.manage` | — | — | — | — | `all` | Pengaturan cron, integrasi, dan konfigurasi sistem. |
 | `admin.audit.read` | — | — | — | `all` | `all` | **Ditolak untuk `pengurus`** (baik di Server Action maupun RLS `audit_logs`). |
 | `admin.health.read` | — | — | — | — | `all` | Status kesehatan sistem, outbox, dan manifest backup. |
+
+> **Catatan `ADM` D3 (2026-11-25, Cabang 3):** `getAdminDashboardStatsAction` (`src/modules/analytics/actions.ts`) memisahkan metrik teknis/kesehatan sistem (`systemHealth`: `activeUsersCount`, `pendingOutbox`, `failedCronRuns`, plus `pendingAccountRequests`) untuk `super_admin` dari metrik operasional/PII santri (`totalSantri`, `todayCheckedIn`, `todayLate`, `pendingReports`, `approvedReports`, `activeTasks`) untuk `pengurus`/`yayasan`. Kunci cache dasbor di `/page.tsx` dan `/admin/audit/page.tsx` diberi namespace per-user (`admin:dashboard-stats:${currentUser.id}`).
 
 ---
 

@@ -58,6 +58,7 @@ describe("pending migration inventory", () => {
       "20261122000012_attendance_reminder_day_guard.sql",
       "20261122000013_drop_dead_report_submit.sql",
       "20261122000014_announcement_command_scope.sql",
+      "20261122000015_task_command_scope_rpcs.sql",
     ]);
   });
 });
