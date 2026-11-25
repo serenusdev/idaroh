@@ -7,7 +7,8 @@ import { Illustration } from "@/components/ui/illustration";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { Modal } from "@/components/ui/modal";
 import { useIdentity } from "@/components/auth/identity-context";
-import { EXPORT_ROLES } from "@/lib/export-policy";
+import { EXPORT_ROLES, holdsRole } from "@/lib/export-policy";
+import { IAM_MUTATION_ROLES, IAM_READ_ROLES } from "@/lib/iam-policy";
 import {
   getAccountRequestsAction,
   getActiveUsersAction,
@@ -21,6 +22,9 @@ import {
   type ActiveUserItem,
 } from "@/modules/iam/actions";
 import { importMembersCsvAction } from "@/modules/operations/actions";
+import { MEMBER_CATEGORIES } from "@/modules/iam/registration";
+import type { ManualAccountPayload } from "@/modules/iam/types";
+import type { UserRole } from "@/lib/auth/types";
 import { getTeamsAction } from "@/modules/people/actions";
 import type { TeamStructureItem } from "@/modules/people/types";
 import { exportAuditedDataAction } from "@/modules/analytics/actions";
@@ -42,7 +46,12 @@ const MFA_EVIDENCE_CLASS: Record<ActiveUserItem["mfaEvidence"], string> = {
 
 export default function AdminUsersPage() {
   const { user: currentUser } = useIdentity();
-  const [activeTab, setActiveTab] = React.useState<"queue" | "active" | "archived">("queue");
+  // §3.1: the queue and every account mutation are super_admin only. yayasan and pengurus keep
+  // the read-only member console, so the controls below are hidden rather than left to fail.
+  const canDecideIam = holdsRole(currentUser, IAM_MUTATION_ROLES);
+  const [activeTab, setActiveTab] = React.useState<"queue" | "active" | "archived">(
+    canDecideIam ? "queue" : "active"
+  );
   const [selectedRoleFilter, setSelectedRoleFilter] = React.useState("Semua");
   const [searchQuery, setSearchQuery] = React.useState("");
   const [isManualModalOpen, setIsManualModalOpen] = React.useState(false);
@@ -59,6 +68,9 @@ export default function AdminUsersPage() {
     phoneNumber: "",
     status: "active",
     teamName: "",
+    // Two independent fields: the granted role (user_roles) and the descriptive category
+    // (profiles.member_type). §2 rule 1 forbids one overwriting the other.
+    roleKey: "",
     memberType: "",
   });
   const [editUserMsg, setEditUserMsg] = React.useState<{ type: "success" | "error"; text: string } | null>(null);
@@ -70,7 +82,7 @@ export default function AdminUsersPage() {
   const [adminToast, setAdminToast] = React.useState<{ type: "success" | "error"; text: string } | null>(null);
 
   // Dynamic Data
-  const requestsQuery = useCachedData("admin:account-requests", getAccountRequestsAction);
+  const requestsQuery = useCachedData(canDecideIam ? "admin:account-requests" : null, getAccountRequestsAction);
   const usersQuery = useCachedData("admin:active-users", getActiveUsersAction);
   const teamsQuery = useCachedData("teams:structure", getTeamsAction);
   const accountRequests: AccountRequestItem[] = requestsQuery.data ?? [];
@@ -93,11 +105,12 @@ export default function AdminUsersPage() {
   const [processingCards, setProcessingCards] = React.useState<Record<string, boolean>>({});
 
   // Manual Account Creation Form State
-  const [manualForm, setManualForm] = React.useState({
+  const [manualForm, setManualForm] = React.useState<ManualAccountPayload>({
     fullName: "",
     email: "",
     phone: "",
-    role: "santri" as const,
+    role: "santri",
+    memberType: "santri",
     teamName: "Sentra Digitalpreneur",
     notes: "",
   });
@@ -138,12 +151,7 @@ export default function AdminUsersPage() {
     }
   };
 
-  const isAdminOrPengurus =
-    currentUser?.role === "super_admin" ||
-    currentUser?.role === "yayasan" ||
-    currentUser?.role === "pengurus";
-
-  if (!isAdminOrPengurus) {
+  if (!holdsRole(currentUser, IAM_READ_ROLES)) {
     return <UnauthorizedState requiredRole="Super Admin / Pengurus / Yayasan" />;
   }
 
@@ -152,13 +160,13 @@ export default function AdminUsersPage() {
   const heldRoles = new Set<string>([currentUser.role, ...(currentUser.roles || [])]);
   const canExportAccounts = EXPORT_ROLES.some((role) => heldRoles.has(role));
 
-  const roleOptions = [
+  // Whoever reaches the queue is super_admin (§3.1), so the whole assignable set is on offer.
+  // super_admin is absent because the RPC refuses to mint it from a user screen.
+  const roleOptions: Array<{ value: UserRole; label: string }> = [
     { value: "santri", label: "Santri" },
     { value: "koordinator", label: "Koordinator" },
-    // Only an approver above Pengurus may grant Pengurus.
-    ...(currentUser?.role === "super_admin" || currentUser?.role === "yayasan"
-      ? [{ value: "pengurus", label: "Pengurus" }]
-      : []),
+    { value: "pengurus", label: "Pengurus" },
+    { value: "yayasan", label: "Yayasan" },
   ];
 
   // Default to the team the applicant asked for, else the first team, so an
@@ -270,7 +278,8 @@ export default function AdminUsersPage() {
       phoneNumber: "",
       status: user.status,
       teamName: user.teamName,
-      memberType: user.role,
+      roleKey: user.roles.find((held) => roleOptions.some((option) => option.value === held)) || user.role,
+      memberType: user.memberType || "",
     });
     setEditUserMsg(null);
   };
@@ -285,7 +294,13 @@ export default function AdminUsersPage() {
         phoneNumber: editUserForm.phoneNumber,
         status: editUserForm.status,
         teamName: editUserForm.teamName,
-        memberType: editUserForm.memberType,
+        // The RPC rotates the entire active role set, so an untouched select must not be sent as
+        // a change; the category is a separate column and always travels on its own.
+        roleKey:
+          editUserForm.roleKey && !editUserTarget.roles.includes(editUserForm.roleKey)
+            ? editUserForm.roleKey
+            : undefined,
+        memberType: editUserForm.memberType || undefined,
       });
       setEditUserMsg({ type: res.success ? "success" : "error", text: res.message });
       if (res.success) {
@@ -336,6 +351,7 @@ export default function AdminUsersPage() {
           email: "",
           phone: "",
           role: "santri",
+          memberType: "santri",
           teamName: "Sentra Digitalpreneur",
           notes: "",
         });
@@ -367,6 +383,15 @@ export default function AdminUsersPage() {
     (u) => u.status === "suspended" || u.status === "deactivated"
   );
 
+  // One predicate backs both the chip counts and the list, so a chip never advertises a number
+  // the search box disagrees with. "Ustadz" is a profiles.member_type category (§2 rule 1) and
+  // no longer hides inside the pengurus role; every other chip follows the granted roles.
+  const matchesRoleFilter = (item: ActiveUserItem, label: string) =>
+    label === "Semua" ||
+    (label === "Ustadz"
+      ? (item.memberType || "").toLowerCase() === "ustadz"
+      : item.roles.some((held) => held.toLowerCase().includes(label.toLowerCase())));
+
   const filteredActiveUsers = activeUsersList.filter((u) => {
     const matchesSearch =
       !searchQuery ||
@@ -374,11 +399,7 @@ export default function AdminUsersPage() {
       u.email.toLowerCase().includes(searchQuery.toLowerCase()) ||
       u.role.toLowerCase().includes(searchQuery.toLowerCase());
 
-    const matchesRole =
-      selectedRoleFilter === "Semua" ||
-      u.role.toLowerCase().includes(selectedRoleFilter.toLowerCase());
-
-    return matchesSearch && matchesRole;
+    return matchesSearch && matchesRoleFilter(u, selectedRoleFilter);
   });
 
   return (
@@ -421,22 +442,24 @@ export default function AdminUsersPage() {
 
       {/* 3. Segmented Tabs Navigation */}
       <div className="flex items-center gap-1.5 p-1 rounded-xl bg-muted mb-5">
-        <button
-          className={`flex-1 py-2 px-2.5 rounded-lg font-label-sm text-label-sm shadow-sm flex items-center justify-center gap-1.5 transition-all ${
-            activeTab === "queue"
-              ? "bg-card text-primary font-semibold shadow-xs"
-              : "text-on-surface-variant hover:text-on-surface"
-          }`}
-          onClick={() => setActiveTab("queue")}
-          type="button"
-        >
-          <span>Antrean</span>
-          {pendingRequests.length > 0 && (
-            <span className="px-1.5 py-0.2 rounded-full bg-error text-white font-mono text-[11px] leading-tight font-bold">
-              {pendingRequests.length}
-            </span>
-          )}
-        </button>
+        {canDecideIam && (
+          <button
+            className={`flex-1 py-2 px-2.5 rounded-lg font-label-sm text-label-sm shadow-sm flex items-center justify-center gap-1.5 transition-all ${
+              activeTab === "queue"
+                ? "bg-card text-primary font-semibold shadow-xs"
+                : "text-on-surface-variant hover:text-on-surface"
+            }`}
+            onClick={() => setActiveTab("queue")}
+            type="button"
+          >
+            <span>Antrean</span>
+            {pendingRequests.length > 0 && (
+              <span className="px-1.5 py-0.2 rounded-full bg-error text-white font-mono text-[11px] leading-tight font-bold">
+                {pendingRequests.length}
+              </span>
+            )}
+          </button>
+        )}
 
         <button
           className="w-full h-11 rounded-xl bg-secondary-container text-on-secondary-container font-label-md text-sm flex items-center justify-center gap-2 transition-all hover:bg-secondary-fixed"
@@ -476,8 +499,8 @@ export default function AdminUsersPage() {
         </button>
       </div>
 
-      {/* TAB 1: QUEUE */}
-      {activeTab === "queue" && (
+      {/* TAB 1: QUEUE — §3.1 makes the decision surface super_admin only. */}
+      {canDecideIam && activeTab === "queue" && (
         <div className="flex flex-col gap-3 mb-6">
           <div className="flex items-center justify-between px-0.5">
             <div className="flex items-center gap-2">
@@ -731,13 +754,8 @@ export default function AdminUsersPage() {
               />
             </div>
             <div className="flex items-center gap-1.5 overflow-x-auto py-1">
-              {[
-                `Semua (${activeUsersList.length})`,
-                `Santri (${activeUsersList.filter((u) => u.role.toLowerCase().includes("santri")).length})`,
-                `Ustadz (${activeUsersList.filter((u) => u.role.toLowerCase().includes("ustadz") || u.role.toLowerCase().includes("pengurus")).length})`,
-                `Koordinator (${activeUsersList.filter((u) => u.role.toLowerCase().includes("koordinator")).length})`,
-              ].map((chip) => {
-                const label = chip.split(" ")[0];
+              {["Semua", "Santri", "Ustadz", "Koordinator"].map((label) => {
+                const chip = `${label} (${activeUsersList.filter((u) => matchesRoleFilter(u, label)).length})`;
                 const active = selectedRoleFilter === label;
                 return (
                   <button
@@ -808,20 +826,27 @@ export default function AdminUsersPage() {
                           <span className="px-2 py-0.2 rounded-md bg-accent text-accent-foreground font-mono text-[11px] font-semibold">
                             {user.role}
                           </span>
+                          {user.memberType && user.memberType !== user.role && (
+                            <span className="px-2 py-0.2 rounded-md bg-surface-container-high text-on-surface-variant font-mono text-[11px]">
+                              {user.memberType}
+                            </span>
+                          )}
                           <span className="px-2 py-0.2 rounded-md bg-surface-container text-on-surface-variant font-mono text-[11px]">
                             {user.teamName}
                           </span>
                         </div>
                       </div>
                     </div>
-                    <button
-                      type="button"
-                      onClick={() => openEditUser(user)}
-                      className="h-8 px-2.5 rounded-lg bg-surface-container border border-border text-on-surface-variant font-label-sm text-[12px] flex items-center gap-1 hover:bg-muted transition-colors shrink-0"
-                    >
-                      <span className="material-symbols-outlined text-[15px]">edit</span>
-                      Edit
-                    </button>
+                    {canDecideIam && (
+                      <button
+                        type="button"
+                        onClick={() => openEditUser(user)}
+                        className="h-8 px-2.5 rounded-lg bg-surface-container border border-border text-on-surface-variant font-label-sm text-[12px] flex items-center gap-1 hover:bg-muted transition-colors shrink-0"
+                      >
+                        <span className="material-symbols-outlined text-[15px]">edit</span>
+                        Edit
+                      </button>
+                    )}
                   </div>
                   <div className="flex items-center gap-1.5">
                     <span className="material-symbols-outlined text-[15px] text-muted-foreground">shield</span>
@@ -842,7 +867,7 @@ export default function AdminUsersPage() {
                     </div>
                     {resetSessions[user.id] ? (
                         <span className="text-[11px] font-mono text-success">Sesi &amp; Perangkat Dicabut</span>
-                    ) : (
+                    ) : canDecideIam ? (
                       <button
                         className="px-2.5 py-1 rounded-md bg-card text-destructive font-label-sm text-label-sm active:scale-95 shadow-xs transition-all border border-border hover:bg-destructive/10"
                         onClick={() => handleResetSession(user.id)}
@@ -850,7 +875,7 @@ export default function AdminUsersPage() {
                       >
                         Cabut Sesi &amp; Perangkat
                       </button>
-                    )}
+                    ) : null}
                   </div>
                   {user.devices.length > 0 && !resetSessions[user.id] && (
                     <div className="flex flex-wrap gap-1.5">
@@ -858,7 +883,9 @@ export default function AdminUsersPage() {
                         <div key={device.id} className="inline-flex items-center gap-1.5 rounded-md border border-border bg-card px-2 py-1 text-[11px] text-on-surface-variant">
                           <span className="material-symbols-outlined text-[14px]">{device.platform === "web" ? "language" : "smartphone"}</span>
                           <span>{device.label}</span>
-                          <button type="button" onClick={() => handleRevokeDevice(user.id, device.id)} className="text-destructive hover:underline">Cabut</button>
+                          {canDecideIam && (
+                            <button type="button" onClick={() => handleRevokeDevice(user.id, device.id)} className="text-destructive hover:underline">Cabut</button>
+                          )}
                         </div>
                       ))}
                     </div>
@@ -915,14 +942,17 @@ export default function AdminUsersPage() {
 
       {/* 4. Bottom Fast Actions Section (PRD-01 §3.2 Pathway B) */}
       <div className="flex flex-col gap-2.5 mt-2">
-        <button
-          className="w-full h-12 rounded-xl bg-primary text-on-primary font-label-md text-label-md flex items-center justify-center gap-2 shadow-md active:scale-98 transition-all hover:bg-primary-container"
-          type="button"
-          onClick={() => setIsManualModalOpen(true)}
-        >
-          <span className="material-symbols-outlined text-[20px]">person_add</span>
-          <span>Buat Akun Manual (Jalur B Admin)</span>
-        </button>
+        {/* §3.1: minting an account and granting its first role is super_admin only. */}
+        {canDecideIam && (
+          <button
+            className="w-full h-12 rounded-xl bg-primary text-on-primary font-label-md text-label-md flex items-center justify-center gap-2 shadow-md active:scale-98 transition-all hover:bg-primary-container"
+            type="button"
+            onClick={() => setIsManualModalOpen(true)}
+          >
+            <span className="material-symbols-outlined text-[20px]">person_add</span>
+            <span>Buat Akun Manual (Jalur B Admin)</span>
+          </button>
+        )}
 
         <div className="flex items-center justify-between gap-2">
           {canExportAccounts && (
@@ -1049,6 +1079,41 @@ export default function AdminUsersPage() {
                     value={manualForm.phone}
                     onChange={(e) => setManualForm({ ...manualForm, phone: e.target.value })}
                   />
+                </div>
+
+                <div>
+                  <label htmlFor="manual-role" className="font-label-sm text-label-sm text-on-surface font-semibold block mb-1">
+                    Peran (user_roles)
+                  </label>
+                  <select
+                    id="manual-role"
+                    className="w-full h-11 px-3 rounded-xl bg-surface-container border border-border text-[15px] focus:outline-none focus:ring-2 focus:ring-primary"
+                    value={manualForm.role}
+                    onChange={(e) => setManualForm({ ...manualForm, role: e.target.value as UserRole })}
+                  >
+                    {roleOptions.map((option) => (
+                      <option key={option.value} value={option.value}>{option.label}</option>
+                    ))}
+                  </select>
+                </div>
+
+                <div>
+                  <label htmlFor="manual-member-type" className="font-label-sm text-label-sm text-on-surface font-semibold block mb-1">
+                    Kategori Anggota (member_type)
+                  </label>
+                  <select
+                    id="manual-member-type"
+                    className="w-full h-11 px-3 rounded-xl bg-surface-container border border-border text-[15px] focus:outline-none focus:ring-2 focus:ring-primary"
+                    value={manualForm.memberType}
+                    onChange={(e) => setManualForm({ ...manualForm, memberType: e.target.value })}
+                  >
+                    {MEMBER_CATEGORIES.map((category) => (
+                      <option key={category.value} value={category.value}>{category.label}</option>
+                    ))}
+                  </select>
+                  <p className="text-[11px] text-muted-foreground mt-1">
+                    Kategori hanya menjelaskan siapa orangnya (mis. Ustadz) dan tidak mengubah hak akses peran di atas.
+                  </p>
                 </div>
 
                 <div>
@@ -1220,14 +1285,42 @@ export default function AdminUsersPage() {
                 />
               </div>
               <div>
-                <label htmlFor="edit-member-type" className="font-label-sm text-label-sm text-on-surface font-semibold block mb-1">Tipe Anggota</label>
-                <input
+                <label htmlFor="edit-role" className="font-label-sm text-label-sm text-on-surface font-semibold block mb-1">
+                  Peran (user_roles)
+                </label>
+                <select
+                  id="edit-role"
+                  value={editUserForm.roleKey}
+                  onChange={(e) => setEditUserForm({ ...editUserForm, roleKey: e.target.value })}
+                  className="w-full h-11 px-3 rounded-xl bg-surface-container border border-border text-[14px] focus:outline-none focus:ring-2 focus:ring-primary"
+                >
+                  {roleOptions.map((option) => (
+                    <option key={option.value} value={option.value}>{option.label}</option>
+                  ))}
+                  {!roleOptions.some((option) => option.value === editUserForm.roleKey) && (
+                    <option value={editUserForm.roleKey}>
+                      {editUserForm.roleKey} (tidak dapat ditetapkan dari layar ini)
+                    </option>
+                  )}
+                </select>
+              </div>
+              <div>
+                <label htmlFor="edit-member-type" className="font-label-sm text-label-sm text-on-surface font-semibold block mb-1">
+                  Kategori Anggota (member_type)
+                </label>
+                <select
                   id="edit-member-type"
-                  type="text"
                   value={editUserForm.memberType}
                   onChange={(e) => setEditUserForm({ ...editUserForm, memberType: e.target.value })}
                   className="w-full h-11 px-3 rounded-xl bg-surface-container border border-border text-[14px] focus:outline-none focus:ring-2 focus:ring-primary"
-                />
+                >
+                  {MEMBER_CATEGORIES.map((category) => (
+                    <option key={category.value} value={category.value}>{category.label}</option>
+                  ))}
+                </select>
+                <p className="text-[11px] text-muted-foreground mt-1">
+                  Mengubah peran tidak mengubah kategori, dan sebaliknya: kategori bersifat deskriptif (§2 aturan 1).
+                </p>
               </div>
 
               {editUserMsg && (

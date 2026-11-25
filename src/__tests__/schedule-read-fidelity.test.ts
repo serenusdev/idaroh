@@ -38,8 +38,6 @@ vi.mock("@/lib/supabase/server", () => ({ createClient: mocks.createClient }));
 vi.mock("@/lib/auth/guards", () => ({
   requireAuthUser: mocks.requireAuthUser,
   requireRole: mocks.requireRole,
-  getHighestRole: () => "santri",
-  ROLE_PRIORITY: { santri: 0 },
   getJakartaTime: () => new Date("2027-01-10T02:00:00Z"),
 }));
 vi.mock("@/lib/fcm", () => ({

@@ -33,6 +33,8 @@ export interface ManualAccountPayload {
   email: string;
   phone: string;
   role: UserRole;
+  // Descriptive category (profiles.member_type), kept separate from the granted role.
+  memberType?: string;
   teamName: string;
   temporaryPassword?: string;
   notes?: string;

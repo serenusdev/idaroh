@@ -134,7 +134,7 @@ vi.mock("@/lib/supabase/server", () => ({ createClient: async () => ({
 }) }));
 vi.mock("@/lib/auth/session", () => ({ getCurrentUserProfile: vi.fn() }));
 vi.mock("@/lib/auth/guards", () => ({
-  requireRole: vi.fn(), requireAuthUser: vi.fn(), getHighestRole: vi.fn(), ROLE_PRIORITY: {},
+  requireRole: vi.fn(), requireAuthUser: vi.fn(),
 }));
 vi.mock("@/lib/fcm", () => ({ sendPushToUsers: vi.fn() }));
 vi.mock("@/lib/rate-limit", () => ({ enforceRateLimit: mocks.rateLimit }));

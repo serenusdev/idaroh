@@ -12,6 +12,8 @@ import {
 } from "@/modules/analytics/actions";
 import { getEventsAction, getAnnouncementsAction } from "@/modules/schedules/actions";
 import { useIdentity } from "@/components/auth/identity-context";
+import { holdsRole } from "@/lib/export-policy";
+import { IAM_MUTATION_ROLES } from "@/lib/iam-policy";
 import { useCachedData } from "@/hooks/use-cached-data";
 import { invalidateCache } from "@/lib/data-cache";
 import type { ScheduleEventItem, AnnouncementItem } from "@/modules/schedules/types";
@@ -29,6 +31,9 @@ export default function BerandaPage() {
   // Live configs & data — stale-while-revalidate: kunjungan ulang langsung
   // menampilkan data terakhir sambil menyegarkan di latar belakang.
   const isSupervisor = ["super_admin", "yayasan", "pengurus"].includes(currentUser.role);
+  // §3.1: only super_admin may read the registration queue or decide on it, so the approval
+  // shortcut stays out of the yayasan/pengurus dashboard instead of ending in "Unauthorized".
+  const canDecideIam = holdsRole(currentUser, IAM_MUTATION_ROLES);
   const policyQuery = useCachedData("policy:active", getActivePolicyAction);
   const eventsQuery = useCachedData(`events:${currentUser.id}`, getEventsAction);
   const announcementsQuery = useCachedData(`announcements:${currentUser.id}`, getAnnouncementsAction);
@@ -309,7 +314,8 @@ export default function BerandaPage() {
               </Link>
             </div>
 
-            {/* Pendaftar Akun Baru (IAM) */}
+            {/* Pendaftar Akun Baru (IAM) — super_admin only */}
+            {canDecideIam && (
             <div className="bg-card p-4 rounded-xl border border-border shadow-xs space-y-2">
               <div className="flex items-center justify-between">
                 <span className="text-xs text-muted-foreground font-medium">Pengajuan Akun</span>
@@ -325,10 +331,11 @@ export default function BerandaPage() {
                 href="/admin/users"
                 className="text-[11px] text-primary hover:underline flex items-center gap-0.5 pt-1"
               >
-                <span>Kelola Pengguna IAM</span>
+                <span>Kelola Antrean Akun</span>
                 <span className="material-symbols-outlined text-[13px]">arrow_forward</span>
               </Link>
             </div>
+            )}
 
             {/* Tugas & Proyek Aktif */}
             <div className="bg-card p-4 rounded-xl border border-border shadow-xs space-y-2">
@@ -415,7 +422,7 @@ export default function BerandaPage() {
               </div>
             </Link>
 
-            {/* Action 4: Kelola Pengguna IAM */}
+            {/* Action 4: the console is readable below super_admin; only the approval wording fits §3.1 */}
             <Link
               href="/admin/users"
               className="p-4 bg-card rounded-xl border border-border hover:border-primary/50 text-left transition-all space-y-2 shadow-2xs hover:shadow-xs group"
@@ -428,7 +435,7 @@ export default function BerandaPage() {
                   Kelola Pengguna IAM
                 </p>
                 <p className="text-xs text-muted-foreground mt-0.5">
-                  Persetujuan akun baru &amp; hak akses
+                  {canDecideIam ? "Persetujuan akun baru & hak akses" : "Direktori akun & peran aktif"}
                 </p>
               </div>
             </Link>

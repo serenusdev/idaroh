@@ -5,13 +5,14 @@ import path from "node:path";
 // Real AdminUsersPage + IdentityProvider; mocked action boundaries. Browser/
 // component evidence for UX-05 (mandatory rejection reason), NOT production DB E2E.
 type Outcome = { success: boolean; message: string };
-type Config = { requests?: unknown[]; users?: unknown[]; rejectOutcome?: Outcome; resetOutcome?: Outcome };
+type Config = { requests?: unknown[]; users?: unknown[]; rejectOutcome?: Outcome; resetOutcome?: Outcome; viewer?: { role: string; roles: string[] } };
 type RejectCall = { id: string; reason: string };
 declare global {
   interface Window {
     __rejectConfig: Config;
     __rejectCalls: RejectCall[];
     __resetCalls: string[];
+    __queueReads: string[];
   }
 }
 const root = path.resolve(__dirname, "..");
@@ -27,8 +28,12 @@ const config = window.__rejectConfig;
 const clone = value => value === undefined ? undefined : JSON.parse(JSON.stringify(value));
 window.__rejectCalls = [];
 window.__resetCalls = [];
+window.__queueReads = [];
 window.__rejectBoundaries = {
-  requests: async () => clone(config.requests || []),
+  requests: async () => {
+    window.__queueReads.push("getAccountRequestsAction");
+    return clone(config.requests || []);
+  },
   users: async () => clone(config.users || []),
   teams: async () => [{ id: "team-1", name: "Sentra Digitalpreneur" }],
   reject: async (id, reason) => {
@@ -41,8 +46,11 @@ window.__rejectBoundaries = {
   },
 };
 const reactRoot = createRoot(document.getElementById("reject-root"));
+// §3.1 is a role question, so the console has to be exercised as each viewer, not only as the
+// super_admin fixture the rejection drill was written for.
+const viewer = config.viewer || { role: "super_admin", roles: ["super_admin"] };
 flushSync(() => reactRoot.render(React.createElement(IdentityProvider, {
-  initialUser: { id: "admin-a", role: "super_admin", roles: ["super_admin"], status: "active", full_name: "Admin Uji", email: "admin@example.test", member_type: "pengurus" },
+  initialUser: { id: "admin-a", role: viewer.role, roles: viewer.roles, status: "active", full_name: "Admin Uji", email: "admin@example.test", member_type: "pengurus" },
 }, React.createElement(AdminUsersPage))));
 `;
 const modules: Record<string, string> = {
@@ -145,6 +153,7 @@ test.describe("UX-05 — rejection requires a real reason", () => {
 
 const activeUser = {
   id: "user-1", fullName: "Bilal Santri", email: "bilal@example.test", role: "santri",
+  roles: ["santri"], memberType: "santri",
   teamName: "Sentra Digitalpreneur", status: "active", initials: "BS", devicesCount: 1,
   deviceInfo: "1 Perangkat Aktif", mfaEnabled: false,
   devices: [{ id: "dev-1", platform: "web", label: "Chrome", updatedAt: "2026-11-14" }],
@@ -170,5 +179,49 @@ test.describe("UX-17 — reset sesi gated by an explicit confirmation", () => {
     await page.getByRole("button", { name: "Batal" }).click();
     await expect(page.getByText("Cabut semua sesi & perangkat pengguna ini?")).toHaveCount(0);
     expect(await page.evaluate(() => window.__resetCalls)).toEqual([]);
+  });
+});
+
+const ustadzPengurus = { ...activeUser, id: "user-2", fullName: "Ustaz Fulan", role: "pengurus", roles: ["pengurus"], memberType: "ustadz" };
+const plainPengurus = { ...activeUser, id: "user-3", fullName: "Pengurus Murni", role: "pengurus", roles: ["pengurus"], memberType: "pengurus" };
+
+test.describe("§3.1 — the console only offers what the viewer may do", () => {
+  test("super_admin is offered the queue and it is fetched", async ({ page }) => {
+    await mount(page, { requests, users: [activeUser] });
+    await expect(page.getByRole("button", { name: /^Antrean/ })).toBeVisible();
+    await expect(page.getByRole("button", { name: /Buat Akun Manual/ })).toBeVisible();
+    expect(await page.evaluate(() => window.__queueReads.length)).toBeGreaterThan(0);
+  });
+
+  test("yayasan reads the members but is offered no mutation and no queue read", async ({ page }) => {
+    await mount(page, { requests, users: [activeUser], viewer: { role: "yayasan", roles: ["yayasan"] } });
+    await expect(page.getByText("Bilal Santri").first()).toBeVisible();
+    await expect(page.getByRole("button", { name: /^Antrean/ })).toHaveCount(0);
+    await expect(page.getByRole("button", { name: /Buat Akun Manual/ })).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "Cabut Sesi & Perangkat" })).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "Edit", exact: true })).toHaveCount(0);
+    expect(await page.evaluate(() => window.__queueReads)).toEqual([]);
+  });
+
+  test("a multi-role account keeps its mutations when super_admin is not the primary role", async ({ page }) => {
+    await mount(page, { requests, users: [activeUser], viewer: { role: "pengurus", roles: ["pengurus", "super_admin"] } });
+    await expect(page.getByRole("button", { name: /^Antrean/ })).toBeVisible();
+  });
+});
+
+test.describe("§2 rule 1 — the ustadz chip follows member_type", () => {
+  test("an ustadz is found by category even though its granted role is pengurus", async ({ page }) => {
+    await mount(page, { requests: [], users: [ustadzPengurus, plainPengurus] });
+    await page.getByRole("button", { name: /^Aktif/ }).click();
+    await page.getByRole("button", { name: "Ustadz (1)" }).click();
+    await expect(page.getByText("Ustaz Fulan")).toBeVisible();
+    await expect(page.getByText("Pengurus Murni")).toHaveCount(0);
+  });
+
+  test("the category badge is shown next to the granted role", async ({ page }) => {
+    await mount(page, { requests: [], users: [ustadzPengurus] });
+    await page.getByRole("button", { name: /^Aktif/ }).click();
+    await expect(page.getByText("pengurus")).toBeVisible();
+    await expect(page.getByText("ustadz").first()).toBeVisible();
   });
 });

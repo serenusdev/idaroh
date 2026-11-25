@@ -14,7 +14,7 @@ vi.mock("@/lib/supabase/server", () => ({ createClient: async () => ({
 }) }));
 vi.mock("@/lib/auth/session", () => ({ getCurrentUserProfile: vi.fn() }));
 vi.mock("@/lib/auth/guards", () => ({
-  requireRole: mocks.requireRole, requireAuthUser: vi.fn(), getHighestRole: vi.fn(), ROLE_PRIORITY: {},
+  requireRole: mocks.requireRole, requireAuthUser: vi.fn(),
 }));
 vi.mock("@/lib/fcm", () => ({ sendPushToUsers: vi.fn() }));
 vi.mock("@/lib/rate-limit", () => ({ enforceRateLimit: mocks.rateLimit }));
@@ -155,7 +155,8 @@ describe("administrator sees claims separately from permissions", () => {
     const [request] = await getAccountRequestsAction();
     expect(request.claimedMemberType).toBe("ustadz");
     expect(request.privacyConsentVersion).toBe(REGISTRATION_PRIVACY_VERSION);
-    expect(mocks.requireRole).toHaveBeenCalledWith(["super_admin", "yayasan", "pengurus"]);
+    // §3.1 (ROLE-SYNC): the queue is a super_admin surface, not a shared admin one.
+    expect(mocks.requireRole).toHaveBeenCalledWith(["super_admin"]);
   });
 
   it("rejects an unauthorized queue read before accessing data", async () => {

@@ -3,7 +3,7 @@
 
 import { createAdminClient } from "@/lib/supabase/admin";
 import { createClient } from "@/lib/supabase/server";
-import { hasMinimumRole, requireAuthUser, requireRole } from "@/lib/auth/guards";
+import { requireAuthUser, requireRole } from "@/lib/auth/guards";
 import { INITIAL_PEOPLE_PROFILES, INITIAL_TEAMS } from "./data";
 import { PersonProfile, TeamStructureItem } from "./types";
 import { throwQueryError } from "@/lib/query-error";
@@ -404,7 +404,7 @@ export async function updatePersonalBioAction(
   if (typeof userId !== "string" || userId.length === 0 || userId.length > 100) {
     return { success: false, message: "ID pengguna tidak valid." };
   }
-  if (caller.id !== userId && !hasMinimumRole(caller, "pengurus")) {
+  if (caller.id !== userId) {
     throw new Error("FORBIDDEN: Anda hanya dapat memperbarui bio akun Anda sendiri.");
   }
   const cleanBio = typeof bio === "string" ? bio.trim() : "";

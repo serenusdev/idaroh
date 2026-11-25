@@ -8,6 +8,7 @@ import { useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 import { cleanupPushNotifications } from "@/lib/notifications";
 import { AUDIT_READ_ROLES, holdsRole } from "@/lib/export-policy";
+import { IAM_MUTATION_ROLES } from "@/lib/iam-policy";
 import { holdsTaskRole, TASK_READ_ROLES } from "@/lib/task-policy";
 import {
   AGENDA_MANAGER_ROLES,
@@ -69,6 +70,9 @@ export function MoreSheet({ isOpen, onClose, user }: MoreSheetProps) {
   // §2 rule 8: evaluated over user.roles[], not only the primary role, so a multi-role
   // account is never left without a link the server would accept.
   const isAdminOrPengurus = holdsScheduleRole(user, AGENDA_MANAGER_ROLES);
+  // §3.1: yayasan and pengurus keep the read-only member console; the approval wording below is
+  // reserved for the role that can actually decide.
+  const canDecideIam = holdsRole(user, IAM_MUTATION_ROLES);
   const canWriteAgenda = holdsScheduleRole(user, AGENDA_WRITE_ROLES);
 
   // §3.5: every role except super_admin has a task read scope.
@@ -265,7 +269,7 @@ export function MoreSheet({ isOpen, onClose, user }: MoreSheetProps) {
                     Kelola Pengguna IAM
                   </span>
                   <span className="font-body-sm text-[11px] text-muted-foreground block">
-                    Persetujuan akun &amp; manajemen peran
+                    {canDecideIam ? "Persetujuan akun & manajemen peran" : "Direktori akun & peran aktif"}
                   </span>
                 </div>
               </Link>

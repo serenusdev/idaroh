@@ -87,15 +87,24 @@ describe("Stage 2 — Identity & Access Management (IAM)", () => {
       expect(result.message).toContain("Status akun tidak valid");
     });
 
-    it("blocks modification when target has equal or higher hierarchy", async () => {
-      const result = await adminUpdateUserAction("mock-test-forbidden-hierarchy", {
-        fullName: "Super Admin Lain",
-      });
-      expect(result.success).toBe(false);
-      expect(result.message).toContain("hierarki");
+    it("refuses a role outside the assignable set rather than comparing hierarchies", async () => {
+      const superAdmin = await adminUpdateUserAction("mock-test-01", { roleKey: "super_admin" });
+      expect(superAdmin.success).toBe(false);
+      expect(superAdmin.message).toContain("Peran baru tidak valid");
+
+      // "ustadz" is a category, not a role (§2 rule 1), so it can never be granted here.
+      const category = await adminUpdateUserAction("mock-test-01", { roleKey: "ustadz" });
+      expect(category.success).toBe(false);
+      expect(category.message).toContain("Peran baru tidak valid");
     });
 
-    it("allows valid admin update on lower-hierarchy user", async () => {
+    it("refuses a member category outside the registration domain", async () => {
+      const result = await adminUpdateUserAction("mock-test-01", { memberType: "makhdum" });
+      expect(result.success).toBe(false);
+      expect(result.message).toContain("Kategori anggota tidak valid");
+    });
+
+    it("applies an update on a member account", async () => {
       const result = await adminUpdateUserAction("mock-test-santri", {
         fullName: "Ahmad Dahlan",
         phoneNumber: "08123456789",

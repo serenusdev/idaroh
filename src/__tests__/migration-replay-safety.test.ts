@@ -53,6 +53,7 @@ describe("pending migration inventory", () => {
       "20261122000007_team_command_rpcs_and_resource_upsert.sql",
       "20261122000008_event_command_scope.sql",
       "20261122000009_recurring_conflict_and_ics.sql",
+      "20261122000010_role_sync_ustadz_and_matrix.sql",
     ]);
   });
 });
