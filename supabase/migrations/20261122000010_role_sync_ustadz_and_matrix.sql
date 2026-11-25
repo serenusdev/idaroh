@@ -205,7 +205,11 @@ BEGIN
     ORDER BY f.created_at DESC LIMIT 1
   ) df ON true
   LEFT JOIN LATERAL (
-    SELECT c.id, COALESCE(c.effective_classification, c.requested_classification) AS final_classification
+    -- effective_classification is text and requested_classification is the
+    -- attendance_classification_type enum: uncast, the whole statement fails to parse, so every
+    -- insert into attendance_records — which fires this through trg_refresh_attendance_after_record
+    -- — errored with "COALESCE types text and attendance_classification_type cannot be matched".
+    SELECT c.id, COALESCE(c.effective_classification, c.requested_classification::text) AS final_classification
     FROM public.attendance_corrections c
     WHERE c.user_id = p.id AND c.attendance_date = p_date AND c.status = 'approved'
     ORDER BY c.decided_at DESC NULLS LAST LIMIT 1
@@ -511,7 +515,11 @@ BEGIN
   SET
     full_name          = COALESCE(p_full_name,     full_name),
     phone_number       = COALESCE(p_phone_number,  phone_number),
-    status             = COALESCE(p_status,        status),
+    -- profiles.status is public.account_status_type, so a bare text parameter makes the whole
+    -- UPDATE fail to parse ("COALESCE types text and account_status_type cannot be matched") —
+    -- suspending or reactivating an account through this RPC never reached the row. The value is
+    -- already validated against the enum labels above, so the cast cannot introduce a new error.
+    status             = COALESCE(p_status::public.account_status_type, status),
     team_name          = COALESCE(p_team_name,     team_name),
     member_type        = COALESCE(p_member_type,   member_type),
     session_revoked_at = CASE
