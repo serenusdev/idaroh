@@ -170,6 +170,11 @@ SELECT public.roledb_as('00000000-0000-0000-0000-000000000726');
 SELECT is(app.can_view_attendance_of('00000000-0000-0000-0000-000000000726'), false,
   'a suspended account cannot read attendance history at all');
 
+-- The identity above is `authenticated` (and a suspended one), and both of these reads answer a
+-- question about the operational layer rather than about visibility — assertion 24 below is the
+-- one that tests the row-level view through RLS. Reading here would only see an empty table.
+RESET ROLE;
+
 -- 18-20: the operational layer, refreshed by the insert trigger above, follows the role in
 -- user_roles rather than the descriptive category. This is the "riwayat presensi pribadi"
 -- half of ROLE-SYNC: without it an ustadz checks in every day and still reads `not_required`.
