@@ -1,5 +1,5 @@
 import { readFileSync, readdirSync } from "node:fs";
-import { resolve } from "node:path";
+import { relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { create, type Font } from "@pdf-lib/fontkit";
 import postcss from "postcss";
@@ -63,6 +63,23 @@ function sourceIcons() {
   return [...names].sort();
 }
 
+// Self-hosting regression guard: no source file may reach for a remote font host.
+function remoteFontRefs() {
+  const hits: string[] = [];
+  function visit(directory: string) {
+    for (const entry of readdirSync(directory, { withFileTypes: true })) {
+      const path = resolve(directory, entry.name);
+      if (entry.isDirectory()) {
+        if (entry.name !== "__tests__") visit(path);
+      } else if (/\.tsx?$/.test(entry.name) && /fonts\.(googleapis|gstatic)\.com/.test(readFileSync(path, "utf8"))) {
+        hits.push(relative(root, path));
+      }
+    }
+  }
+  visit(resolve(root, "src"));
+  return hits;
+}
+
 const symbols = font("material-symbols-outlined-subset.woff2") as VariableFont;
 
 describe("self-hosted fonts and zoom", () => {
@@ -110,6 +127,29 @@ describe("self-hosted fonts and zoom", () => {
     }
     expect(readFileSync(resolve(root, "public/fonts/Material-Symbols-Outlined-LICENSE.txt"), "utf8"))
       .toContain("Apache License");
+  });
+
+  it("preloads self-hosted font faces from <head> only", () => {
+    const layout = readFileSync(resolve(root, "src/app/layout.tsx"), "utf8");
+    const head = layout.slice(layout.indexOf("<head>"), layout.indexOf("</head>"));
+    const body = layout.slice(layout.indexOf("<body"), layout.indexOf("</body>"));
+    const preloads = [...layout.matchAll(/<link rel="preload" href="(\/fonts\/[^"]+)"/g)].map((m) => m[1]);
+    expect(preloads).toEqual([
+      "/fonts/hanken-grotesk-latin-variable.woff2",
+      "/fonts/ibm-plex-mono-latin-400.woff2",
+      "/fonts/material-symbols-outlined-subset.woff2",
+    ]);
+    expect(body).not.toContain('rel="preload"');
+    for (const href of preloads) {
+      expect(head, `preload must sit in <head>: ${href}`).toContain(href);
+      expect(readFileSync(resolve(root, `public${href}`)).subarray(0, 4).toString()).toBe("wOF2");
+    }
+  });
+
+  it("keeps remote font hosts out of the app tree and the stylesheet", () => {
+    expect(remoteFontRefs()).toEqual([]);
+    expect(css.toString()).not.toMatch(/@import\s+url\(\s*["']?https?:/);
+    expect(css.toString()).not.toMatch(/["']Material\+Symbols/gi);
   });
 
   it("collects dynamic result branches, navigation maps and component defaults", () => {
