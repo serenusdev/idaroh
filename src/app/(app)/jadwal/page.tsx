@@ -4,22 +4,54 @@ import * as React from "react";
 import { Illustration } from "@/components/ui/illustration";
 import { Modal } from "@/components/ui/modal";
 import {
+  AudienceConfig,
   AnnouncementItem,
   ScheduleEventItem,
   WeekDayPickerItem,
 } from "@/modules/schedules/types";
 import {
   generateICalSubscriptionAction,
+  getEventAudienceOptionsAction,
   markAnnouncementReadAction,
   publishAnnouncementAction,
   getEventsAction,
   getAnnouncementsAction,
 } from "@/modules/schedules/actions";
+import { AGENDA_WRITE_ROLES, holdsScheduleRole } from "@/lib/schedule-policy";
 import { useIdentity } from "@/components/auth/identity-context";
 import { useCachedData } from "@/hooks/use-cached-data";
 import { invalidateCache, writeCache } from "@/lib/data-cache";
 
 type ScheduleTab = "agenda" | "announcements";
+
+/**
+ * The composer used to take a free-text audience and guess a `member_type` audience from the
+ * words in it (§2 rule 1: member_type is descriptive, never an authorization). The options below
+ * are the two shapes app.announcement_upsert() accepts: the whole pondok for a manager, and a
+ * team a coordinator actually coordinates.
+ */
+type AnnAudienceOption = {
+  value: string;
+  label: string;
+  audience: AudienceConfig;
+  teamId?: string;
+};
+
+const ALL_PONDOK_OPTION: AnnAudienceOption = {
+  value: "all",
+  label: "Seluruh pondok",
+  audience: { scope: "all" },
+};
+
+function audienceOptionsFor(tier: string, teams: { id: string; name: string }[]): AnnAudienceOption[] {
+  const teamOptions = teams.map((team) => ({
+    value: `team:${team.id}`,
+    label: `Tim: ${team.name}`,
+    audience: { scope: "team" as const, teamIds: [team.id] },
+    teamId: team.id,
+  }));
+  return tier === "manager" ? [ALL_PONDOK_OPTION, ...teamOptions] : teamOptions;
+}
 
 function buildWeekDays(dateStr: string, activeDate = dateStr): WeekDayPickerItem[] {
   const base = new Date(`${dateStr}T12:00:00+07:00`);
@@ -77,7 +109,10 @@ export default function JadwalPage() {
   const [newAnnTitle, setNewAnnTitle] = React.useState("");
   const [newAnnBody, setNewAnnBody] = React.useState("");
   const [newAnnPriority, setNewAnnPriority] = React.useState<"normal" | "important">("normal");
-  const [newAnnAudience, setNewAnnAudience] = React.useState("Semua Santri & Tim");
+  const [audienceOptions, setAudienceOptions] = React.useState<AnnAudienceOption[]>([]);
+  const [newAnnAudience, setNewAnnAudience] = React.useState("");
+
+  const canComposeAnnouncement = holdsScheduleRole(user, AGENDA_WRITE_ROLES);
 
   const unreadCount = announcements.filter((a) => !a.isRead).length;
 
@@ -111,22 +146,35 @@ export default function JadwalPage() {
     }
   };
 
+  const handleOpenAnnComposer = async () => {
+    setIsCreatingAnn(true);
+    if (audienceOptions.length > 0) {
+      setNewAnnAudience(audienceOptions[0].value);
+      return;
+    }
+    try {
+      const { tier, teams } = await getEventAudienceOptionsAction();
+      const next = audienceOptionsFor(tier, teams);
+      setAudienceOptions(next);
+      setNewAnnAudience(next[0]?.value || "");
+    } catch (err) {
+      console.error("Failed to load announcement audience options:", err);
+    }
+  };
+
   const handleCreateAnnouncement = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!newAnnTitle.trim() || !newAnnBody.trim()) return;
+    const option = audienceOptions.find((o) => o.value === newAnnAudience);
+    if (!option) return;
 
     const res = await publishAnnouncementAction({
       title: newAnnTitle,
       bodyMarkdown: newAnnBody,
       priority: newAnnPriority,
-      targetAudienceLabel: newAnnAudience,
-      audienceConfig: newAnnAudience.toLowerCase().includes("pengurus")
-        ? { scope: "member_type", memberTypes: ["pengurus"] }
-        : newAnnAudience.toLowerCase().includes("koordinator")
-          ? { scope: "member_type", memberTypes: ["koordinator"] }
-          : newAnnAudience.toLowerCase().includes("santri") && !newAnnAudience.toLowerCase().includes("tim")
-            ? { scope: "member_type", memberTypes: ["santri"] }
-            : { scope: "all" },
+      targetAudienceLabel: option.label,
+      audienceConfig: option.audience,
+      teamId: option.teamId,
     });
 
     if (res.success && res.announcement) {
@@ -591,10 +639,10 @@ export default function JadwalPage() {
                   Semua Pengumuman ({announcements.length})
                 </span>
 
-                {["super_admin", "yayasan", "pengurus"].includes(user.role) && (
+                {canComposeAnnouncement && (
                   <button
                     type="button"
-                    onClick={() => setIsCreatingAnn(true)}
+                    onClick={handleOpenAnnComposer}
                     className="h-8 px-3 rounded-lg bg-primary text-on-primary font-label-sm text-xs flex items-center gap-1 hover:bg-primary-container transition-all"
                   >
                     <span className="material-symbols-outlined text-[16px]">add</span>
@@ -836,12 +884,23 @@ export default function JadwalPage() {
                   <label className="text-xs font-semibold text-on-surface block">
                     Target Audiens
                   </label>
-                  <input
-                    type="text"
+                  <select
                     value={newAnnAudience}
                     onChange={(e) => setNewAnnAudience(e.target.value)}
-                    className="w-full h-10 px-3 rounded-lg bg-surface-container-low border border-border text-xs sm:text-sm focus:outline-none focus:ring-2 focus:ring-primary"
-                  />
+                    className="w-full h-10 px-2.5 rounded-lg bg-surface-container-low border border-border text-xs sm:text-sm focus:outline-none focus:ring-2 focus:ring-primary"
+                  >
+                    {audienceOptions.map((option) => (
+                      <option key={option.value} value={option.value}>
+                        {option.label}
+                      </option>
+                    ))}
+                  </select>
+                  {audienceOptions.length === 0 && (
+                    <p className="text-[11px] text-error">
+                      Tidak ada audiens yang dapat Anda pilih — koordinator hanya menerbitkan
+                      pengumuman untuk tim yang aktif ia koordinir.
+                    </p>
+                  )}
                 </div>
               </div>
 
@@ -869,7 +928,8 @@ export default function JadwalPage() {
                 </button>
                 <button
                   type="submit"
-                  className="h-10 px-5 rounded-xl bg-primary text-on-primary text-xs font-semibold shadow-xs hover:bg-primary-container"
+                  disabled={!newAnnAudience}
+                  className="h-10 px-5 rounded-xl bg-primary text-on-primary text-xs font-semibold shadow-xs hover:bg-primary-container disabled:opacity-50"
                 >
                   Terbitkan Pengumuman
                 </button>

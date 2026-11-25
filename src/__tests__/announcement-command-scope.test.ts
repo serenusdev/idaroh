@@ -162,7 +162,11 @@ describe("ANN — the announcement command runs on the caller session", () => {
     const archive = sqlFunction(migration, "CREATE OR REPLACE FUNCTION app.announcement_archive(");
     expect(archive, "app.announcement_archive is missing").not.toBe("");
     expect(archive).toContain("FOR UPDATE");
-    expect(archive).toContain("app.can_write_announcement_audience");
+    // The row-ownership rule follows the approved SCH-02 precedent (app.event_cancel judges the
+    // stored row against app.coordinator_team_keys(); the audience helper is for the audience a
+    // write is about to store, which an archive does not change).
+    expect(archive).toContain("app.coordinator_team_keys(v_uid)");
+    expect(archive).toContain("Pengumuman ini berada di luar tim Anda.");
     expect(archive).toContain("archived_at");
     expect(archive).toContain("'announcement.deleted'");
     expect(archive).toContain("COALESCE(v_actor_name, v_uid::text)");
@@ -192,9 +196,12 @@ describe("ANN — the announcement command runs on the caller session", () => {
     }
     expect(rollback).toContain("DROP FUNCTION IF EXISTS app.enforce_announcement_audience_scope();");
     expect(rollback).not.toContain("DROP FUNCTION IF EXISTS public.enforce_announcement_audience_scope");
-    // The pre-migration state let the application write with the service-role client, so the
-    // direct write path has to come back or the old code stops working. RLS still holds.
-    expect(rollback).toContain("GRANT INSERT, UPDATE, DELETE ON public.announcements TO anon, authenticated");
+    // The pre-migration application wrote with the service-role client, which this migration never
+    // revoked, so the direct path does not strictly have to come back. The rollback restores the
+    // authenticated privilege it removed and deliberately leaves anon revoked — a rollback that
+    // re-widens a surface nobody used is not an undo, it is a second change.
+    expect(rollback).toContain("GRANT INSERT, UPDATE, DELETE ON public.announcements TO authenticated");
+    expect(rollback).not.toContain("TO anon, authenticated");
     expect(rollback).toContain("NOTIFY pgrst, 'reload schema';");
   });
 

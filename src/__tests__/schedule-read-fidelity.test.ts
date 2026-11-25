@@ -163,7 +163,8 @@ describe("SCH-05 — a failed schedule read is reported, not presented as an emp
   });
 
   it("rejects when the announcement query fails", async () => {
-    mocks.createAdminClient.mockReturnValue(database({
+    // ANN-CMD: the inbox now reads on the caller's session and lets RLS do the audience filter.
+    mocks.createClient.mockReturnValue(database({
       announcements: { error: { message: "connection timeout" } },
     }));
     await expect(getAnnouncementsAction()).rejects.toThrow(/Data gagal dimuat/);

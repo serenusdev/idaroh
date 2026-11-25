@@ -226,12 +226,14 @@ export async function getEventsAction(
 export async function getAnnouncementsAction(): Promise<AnnouncementItem[]> {
   const user = await requireAuthUser();
   try {
-    const supabase = createAdminClient();
+    // The SELECT policy "Users can view published unexpired targeted announcements" already decides
+    // published + expiry + audience in the database (app.can_view_audience). This read used to pull
+    // every row with the service-role key and re-implement that rule in JavaScript, so a caller
+    // could see what the application filter happened to allow rather than what RLS grants.
+    const supabase = await createClient();
     const { data: announcements, error } = await supabase
       .from("announcements")
       .select("*")
-      .eq("status", "published")
-      .or(`expires_at.is.null,expires_at.gt.${new Date().toISOString()}`)
       .order("published_at", { ascending: false });
 
     // Same rule as the agenda read: a published announcement that fails to load is not an
@@ -239,15 +241,14 @@ export async function getAnnouncementsAction(): Promise<AnnouncementItem[]> {
     if (error) throwQueryError("schedules.getAnnouncements", error);
 
     if (announcements) {
-      const visibleAnnouncements = await filterByAudience(supabase, announcements as any[], user);
-      if (visibleAnnouncements.length === 0) return [];
-      const { data: reads } = await supabase
+      const { data: reads, error: readsError } = await supabase
         .from("announcement_reads")
         .select("announcement_id")
         .eq("user_id", user.id);
+      if (readsError) throwQueryError("schedules.getAnnouncementReads", readsError);
       const readIds = new Set<string>((reads || []).map((read: any) => String(read.announcement_id)));
 
-      return visibleAnnouncements.map((a: any) => toAnnouncementItem(a, readIds));
+      return announcements.map((a: any) => toAnnouncementItem(a, readIds));
     }
   } catch (err) {
     console.error("Failed to query announcements from Supabase:", err);
@@ -287,19 +288,21 @@ export async function markAnnouncementReadAction(
     return { success: true, message: `Pengumuman ${announcementId} ditandai sudah dibaca.` };
   }
   try {
-    const supabase = createAdminClient();
+    // Presence of the row on the caller's own session is the visibility decision: RLS hides a
+    // published announcement the audience rule excludes, so no JavaScript filter is needed and no
+    // read receipt can be written for something the user cannot see.
+    const supabase = await createClient();
     const { data: announcement, error: announcementError } = await supabase
       .from("announcements")
-      .select("id, team_id, status, audience_config")
+      .select("id")
       .eq("id", announcementId)
       .eq("status", "published")
       .maybeSingle();
     if (announcementError) throw announcementError;
-    const visible = announcement ? (await filterByAudience(supabase, [announcement], user)).length > 0 : false;
-    if (!announcement || !visible) {
+    if (!announcement) {
       return { success: false, message: "Pengumuman tidak tersedia untuk akun ini." };
     }
-    if (user.id && announcementId.length > 30) {
+    if (user.id) {
       const { error } = await supabase.from("announcement_reads").upsert({
         announcement_id: announcementId,
         user_id: user.id,
@@ -375,11 +378,15 @@ export async function publishAnnouncementAction(payload: {
   priority: "normal" | "important";
   targetAudienceLabel: string;
   audienceConfig?: AudienceConfig;
+  teamId?: string;
   scheduledFor?: string;
   expiresAt?: string;
   status?: "draft" | "published";
 }): Promise<{ success: boolean; message: string; announcement?: AnnouncementItem }> {
-  const admin = await requireRole(["super_admin", "yayasan", "pengurus"]);
+  // §3.6 announcement.create/publish for pengurus/yayasan/super_admin at scope all, plus the
+  // koordinator the same row grants at scope team. Which announcement and which audience a caller
+  // may write is decided by app.announcement_upsert(), not by this list.
+  await requireRole(["super_admin", "yayasan", "pengurus", "koordinator"]);
   if (!payload.title.trim()) {
     return {
       success: false,
@@ -413,47 +420,33 @@ export async function publishAnnouncementAction(payload: {
     };
   }
 
-  const scheduledFor = payload.scheduledFor ? new Date(payload.scheduledFor) : null;
-  const expiresAt = payload.expiresAt ? new Date(payload.expiresAt) : null;
-  if (scheduledFor && Number.isNaN(scheduledFor.getTime())) return { success: false, message: "Waktu terbit terjadwal tidak valid." };
-  if (expiresAt && Number.isNaN(expiresAt.getTime())) return { success: false, message: "Waktu kedaluwarsa tidak valid." };
-  const shouldPublish = payload.status !== "draft" && (!scheduledFor || scheduledFor.getTime() <= Date.now());
   let newId = `ann-${Date.now()}`;
+  let isPublished = payload.status !== "draft";
   try {
-    const supabase = createAdminClient();
-    const { data: inserted, error } = await supabase
-      .from("announcements")
-      .insert({
-        title: payload.title,
-        body_markdown: payload.bodyMarkdown,
-        priority: payload.priority,
-        pinned: payload.priority === "important",
-        target_audience_label: payload.targetAudienceLabel,
-        status: shouldPublish ? "published" : "draft",
-        published_at: shouldPublish ? new Date().toISOString() : null,
-        scheduled_for: scheduledFor?.toISOString() || null,
-        expires_at: expiresAt?.toISOString() || null,
-        author_id: admin.id,
-        audience_config: payload.audienceConfig || { scope: "all" },
-      })
-      .select("id")
-      .single();
-
-    if (error || !inserted?.id) throw error || new Error("Pengumuman tidak tersimpan.");
-
-    if (inserted?.id) newId = inserted.id;
-
-    // Log to audit
-    const { error: auditError } = await supabase.from("audit_logs").insert({
-      event_name: "announcement.published",
-      actor_id: admin.id,
-      actor_name: admin.full_name,
-      target_id: newId,
-      target_label: payload.title,
-      action_detail: `Menerbitkan pengumuman prioritas ${payload.priority} untuk ${payload.targetAudienceLabel}`,
+    // The row, its audit entry and the author identity commit together inside the RPC. This write
+    // used to run on the service-role client, where auth.uid() is NULL, so nothing in the
+    // database ever judged the audience the form had chosen and the actor was taken on trust.
+    const supabase = await createClient();
+    const { data, error } = await supabase.rpc("announcement_upsert", {
+      p_announcement_id: null,
+      p_payload: announcementFormPayload(payload),
+      p_note: null,
     });
-    if (auditError) throw auditError;
-    if (shouldPublish && !process.env.VITEST) {
+    if (error) throw error;
+    const result = (data || {}) as {
+      success?: boolean;
+      message?: string;
+      announcement_id?: string;
+      status?: string;
+    };
+    if (!result.success) {
+      return { success: false, message: result.message || "Gagal menerbitkan pengumuman." };
+    }
+
+    if (result.announcement_id) newId = result.announcement_id;
+    isPublished = result.status === "published";
+
+    if (isPublished) {
       try {
         // Publication trigger already resolved the audience and persisted inbox/outbox rows.
         await drainNotificationOutbox({ notificationType: "ANNOUNCEMENT_PUBLISHED", referenceId: newId });
@@ -462,7 +455,7 @@ export async function publishAnnouncementAction(payload: {
       }
     }
   } catch (err) {
-    console.error("Failed to insert announcement in Supabase:", err);
+    console.error("Failed to publish announcement through Supabase:", err);
     return { success: false, message: "Gagal menerbitkan pengumuman." };
   }
 
@@ -473,18 +466,18 @@ export async function publishAnnouncementAction(payload: {
     priority: payload.priority,
     isPinned: payload.priority === "important",
     targetAudienceLabel: payload.targetAudienceLabel,
-    publishedAtStr: "Baru Saja",
+    publishedAtStr: isPublished ? "Baru Saja" : "Draft",
     isRead: false,
     audienceConfig: payload.audienceConfig,
-    status: shouldPublish ? "published" : "draft",
-    scheduledFor: scheduledFor?.toISOString(),
+    status: isPublished ? "published" : "draft",
+    scheduledFor: payload.scheduledFor,
   };
 
   return {
     success: true,
-    message: shouldPublish
+    message: isPublished
       ? `Pengumuman "${payload.title}" berhasil diterbitkan untuk ${payload.targetAudienceLabel}.`
-      : `Pengumuman "${payload.title}" disimpan sebagai draft${scheduledFor ? " dan dijadwalkan" : ""}.`,
+      : `Pengumuman "${payload.title}" disimpan sebagai draft${payload.scheduledFor ? " dan dijadwalkan" : ""}.`,
     announcement: newAnn,
   };
 }
@@ -493,25 +486,27 @@ export async function publishAnnouncementAction(payload: {
  * Server Action: Delete Announcement
  */
 export async function deleteAnnouncementAction(
-  announcementId: string
+  announcementId: string,
+  reason?: string
 ): Promise<{ success: boolean; message: string }> {
-  const admin = await requireRole(["super_admin", "yayasan", "pengurus"]);
+  await requireRole(["super_admin", "yayasan", "pengurus", "koordinator"]);
+  if (!announcementId) return { success: false, message: "Gagal menghapus pengumuman." };
   try {
-    const supabase = createAdminClient();
-    const { error } = await supabase
-      .from("announcements")
-      .update({ status: "archived", archived_at: new Date().toISOString(), updated_at: new Date().toISOString() })
-      .eq("id", announcementId);
-    if (error) throw error;
-    const { error: auditError } = await supabase.from("audit_logs").insert({
-      event_name: "announcement.deleted",
-      actor_name: admin.full_name,
-      target_id: announcementId,
-      target_label: "Pengumuman",
-      action_detail: `Mengarsipkan pengumuman ID ${announcementId}`,
+    // The update used to filter on id alone with the service-role key, so any caller could
+    // archive a pondok-wide notice or another team's one, and its audit row carried no actor_id.
+    // app.announcement_archive() locks the row, checks the team, stamps archived_at and writes
+    // the ledger entry in the same transaction.
+    const supabase = await createClient();
+    const { data, error } = await supabase.rpc("announcement_archive", {
+      p_announcement_id: announcementId,
+      p_reason: reason || null,
     });
-    if (auditError) throw auditError;
-    return { success: true, message: "Pengumuman berhasil dihapus." };
+    if (error) throw error;
+    const result = (data || {}) as { success?: boolean; message?: string };
+    if (!result.success) {
+      return { success: false, message: result.message || "Gagal menghapus pengumuman." };
+    }
+    return { success: true, message: result.message || "Pengumuman berhasil dihapus." };
   } catch (err) {
     console.error("Failed to delete announcement:", err);
     return { success: false, message: "Gagal menghapus pengumuman." };
@@ -524,6 +519,7 @@ export async function saveAnnouncementDraftAction(payload: {
   priority: "normal" | "important";
   targetAudienceLabel: string;
   audienceConfig?: AudienceConfig;
+  teamId?: string;
   scheduledFor?: string;
   expiresAt?: string;
 }): Promise<{ success: boolean; message: string; announcement?: AnnouncementItem }> {
@@ -577,6 +573,45 @@ function eventFormPayload(payload: CreateEventPayload): EventFormPayload {
     recurrence_rule: payload.recurrenceRule || "none",
     recurrence_until: payload.recurrenceUntil || null,
     status: null,
+  };
+}
+
+interface AnnouncementFormPayload {
+  title: string;
+  body_markdown: string;
+  priority: string;
+  target_audience_label: string;
+  team_id: string | null;
+  // Every optional key below follows the same rule as the agenda payload: absent means "keep what
+  // is stored", present-but-empty means "clear it". The admin form only sends undefined for a
+  // field the operator left alone, which is why that distinction is preserved (SCH-07 parity).
+  status?: string;
+  audience?: AudienceConfig;
+  scheduled_for?: string | null;
+  expires_at?: string | null;
+}
+
+function announcementFormPayload(payload: {
+  title: string;
+  bodyMarkdown: string;
+  priority: "normal" | "important";
+  targetAudienceLabel: string;
+  audienceConfig?: AudienceConfig;
+  teamId?: string;
+  status?: "draft" | "published";
+  scheduledFor?: string | null;
+  expiresAt?: string | null;
+}): AnnouncementFormPayload {
+  return {
+    title: payload.title.trim(),
+    body_markdown: payload.bodyMarkdown.trim(),
+    priority: payload.priority,
+    target_audience_label: payload.targetAudienceLabel.trim(),
+    ...(payload.status ? { status: payload.status } : {}),
+    ...(payload.audienceConfig ? { audience: payload.audienceConfig } : {}),
+    ...(payload.scheduledFor !== undefined ? { scheduled_for: payload.scheduledFor || null } : {}),
+    ...(payload.expiresAt !== undefined ? { expires_at: payload.expiresAt || null } : {}),
+    team_id: payload.teamId?.trim() || null,
   };
 }
 
@@ -782,9 +817,10 @@ export async function updateAnnouncementAction(
     scheduledFor?: string | null;
     expiresAt?: string | null;
     status?: "draft" | "published";
+    teamId?: string;
   }
 ): Promise<{ success: boolean; message: string; announcementId?: string }> {
-  const admin = await requireRole(["super_admin", "yayasan", "pengurus"]);
+  await requireRole(["super_admin", "yayasan", "pengurus", "koordinator"]);
   if (!announcementId || !payload.title.trim() || !payload.bodyMarkdown.trim()) {
     return { success: false, message: "ID, judul, dan isi pengumuman wajib diisi." };
   }
@@ -794,47 +830,31 @@ export async function updateAnnouncementAction(
   if (process.env.VITEST) return { success: true, message: "Pengumuman berhasil diperbarui.", announcementId };
 
   try {
-    const supabase = createAdminClient();
-    const { data: existing, error: readError } = await supabase.from("announcements").select("*").eq("id", announcementId).maybeSingle();
-    if (readError) throw readError;
-    if (!existing) return { success: false, message: "Pengumuman tidak ditemukan." };
-    if (existing.status === "archived") return { success: false, message: "Pengumuman yang sudah diarsipkan tidak dapat diubah." };
-    const scheduledFor = payload.scheduledFor === undefined
-      ? (existing.scheduled_for ? new Date(existing.scheduled_for) : null)
-      : (payload.scheduledFor ? new Date(payload.scheduledFor) : null);
-    const expiresAt = payload.expiresAt === undefined
-      ? (existing.expires_at ? new Date(existing.expires_at) : null)
-      : (payload.expiresAt ? new Date(payload.expiresAt) : null);
-    if (scheduledFor && Number.isNaN(scheduledFor.getTime())) return { success: false, message: "Waktu terbit terjadwal tidak valid." };
-    if (expiresAt && Number.isNaN(expiresAt.getTime())) return { success: false, message: "Waktu kedaluwarsa tidak valid." };
-    const nextStatus = payload.status || existing.status;
-    if (nextStatus === "published" && scheduledFor && scheduledFor.getTime() > Date.now()) return { success: false, message: "Pengumuman dengan waktu mendatang harus berstatus draft terjadwal." };
-    const { count } = await supabase.from("announcement_revisions").select("id", { count: "exact", head: true }).eq("announcement_id", announcementId);
-    const { error: revisionError } = await supabase.from("announcement_revisions").insert({ announcement_id: announcementId, revision_no: (count || 0) + 1, snapshot: existing, changed_by: admin.id });
-    if (revisionError) throw revisionError;
-    const { error } = await supabase.from("announcements").update({
-      title: payload.title.trim(),
-      body_markdown: payload.bodyMarkdown.trim(),
-      priority: payload.priority,
-      pinned: payload.priority === "important",
-      target_audience_label: payload.targetAudienceLabel,
-      audience_config: payload.audienceConfig || existing.audience_config || { scope: "all" },
-      status: nextStatus,
-      published_at: nextStatus === "published" ? (existing.published_at || new Date().toISOString()) : null,
-      scheduled_for: scheduledFor?.toISOString() || null,
-      expires_at: expiresAt?.toISOString() || null,
-      updated_at: new Date().toISOString(),
-    }).eq("id", announcementId);
+    // The stored row is locked, its previous version is snapshotted, and the new audience is
+    // judged against the caller's own roles inside the same RPC. An omitted audience key makes
+    // the row keep what it already had, so editing a field can never widen who may read it.
+    const supabase = await createClient();
+    const { data, error } = await supabase.rpc("announcement_upsert", {
+      p_announcement_id: announcementId,
+      p_payload: announcementFormPayload(payload),
+      p_note: null,
+    });
     if (error) throw error;
-    const { error: auditError } = await supabase.from("audit_logs").insert({ event_name: "announcement.updated", actor_id: admin.id, actor_name: admin.full_name, target_id: announcementId, target_label: payload.title.trim(), action_detail: "Pengumuman diperbarui; snapshot versi sebelumnya disimpan." });
-    if (auditError) throw auditError;
-    if (nextStatus === "published" && !process.env.VITEST) {
+    const result = (data || {}) as {
+      success: boolean;
+      message?: string;
+      status?: string;
+      was_published?: boolean;
+      audience_config?: AudienceConfig | null;
+    };
+    if (!result.success) return { success: false, message: result.message || "Gagal memperbarui pengumuman." };
+    const isPublished = result.status === "published";
+    if (isPublished && !process.env.VITEST) {
       try {
-        if (existing.status !== "published") {
+        if (!result.was_published) {
           await drainNotificationOutbox({ notificationType: "ANNOUNCEMENT_PUBLISHED", referenceId: announcementId });
         } else {
-          const recipientIds = await getAudienceUserIds(supabase, payload.audienceConfig || existing.audience_config || { scope: "all" });
-          await sendPushToUsers(recipientIds, {
+          await notifyAudience(result.audience_config || payload.audienceConfig, {
             type: "ANNOUNCEMENT_UPDATED",
             title: `Pembaruan Pengumuman: ${payload.title.trim()}`,
             body: "Pengumuman yang Anda ikuti telah diperbarui.",
@@ -846,7 +866,11 @@ export async function updateAnnouncementAction(
         console.error("Announcement updated but push delivery failed:", pushError);
       }
     }
-    return { success: true, message: nextStatus === "published" ? "Pengumuman berhasil diperbarui dan diterbitkan." : "Draft pengumuman berhasil diperbarui.", announcementId };
+    return {
+      success: true,
+      message: result.message || (isPublished ? "Pengumuman berhasil diperbarui dan diterbitkan." : "Draft pengumuman berhasil diperbarui."),
+      announcementId,
+    };
   } catch (err) {
     console.error("Failed to update announcement:", err);
     return { success: false, message: "Gagal memperbarui pengumuman." };

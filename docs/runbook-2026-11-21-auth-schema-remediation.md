@@ -98,9 +98,20 @@ Tanpa replay ini, verifikasi yang tersedia adalah guard statis di `src/__tests__
      -- CRON-DAY + DEAD-RPC (20261122000012/13): wrapper publik tersedia, RPC mati hilang.
      to_regprocedure('public.is_operational_day(date)')                                 IS NOT NULL AS day_guard,
      to_regprocedure('public.report_submit(uuid, uuid)')                                IS NULL     AS dead_submit_gone,
+     -- ANN-CMD (20261122000014): path tulis pengumuman pindah ke RPC + pemicu audiens.
+     to_regprocedure('public.announcement_upsert(uuid, jsonb, text)')                   IS NOT NULL AS ann_upsert,
+     to_regprocedure('public.announcement_archive(uuid, text)')                         IS NOT NULL AS ann_archive,
+     to_regprocedure('public.can_write_announcement_audience(jsonb, text, uuid)')       IS NOT NULL AS ann_audience,
+     EXISTS (SELECT 1 FROM pg_trigger t JOIN pg_class c ON c.oid = t.tgrelid
+              WHERE t.tgname = 'trg_announcements_audience_scope' AND c.relname = 'announcements'
+                AND NOT t.tgisinternal)                                                 AS ann_trigger,
+     (SELECT count(*) FROM pg_policies WHERE tablename = 'announcements'
+        AND cmd IN ('INSERT','UPDATE','DELETE'))                                        AS ann_write_policies_zero,
      (SELECT count(*) FROM supabase_migrations.schema_migrations) AS applied_count;
    ```
-   Semua boolean harus `true`. `NOTIFY pgrst` sudah disertakan di migrasi; bila PostgREST belum segar, reload API dari Dashboard.
+   Semua boolean harus `true`, kecuali `ann_write_policies_zero` yang harus `0` — `announcements` hanya punya
+   policy `FOR SELECT`, sehingga tulis langsung dari REST tetap tertutup setelah migrasi.
+   `NOTIFY pgrst` sudah disertakan di migrasi; bila PostgREST belum segar, reload API dari Dashboard.
 3b. **Backfill lapisan efektif untuk hari non-operasional (TEMPORAL).** `20261122000011` sudah memperbaiki
     tanggal di dalam rentang `non_operational_dates`, tetapi tidak menyentuh Ahad historis sebelum tanggal
     penutupan pertama kali dicatat. Setelah migrasi masuk, panggil sekali sebagai `service_role` (bukan dari
@@ -112,8 +123,8 @@ Tanpa replay ini, verifikasi yang tersedia adalah guard statis di `src/__tests__
    tidak disentuh ulang), dan menulis jumlah baris yang diperbaiki ke `RAISE NOTICE`. Batas atasnya tanggal hari
    itu; jalankan per bulan bila rentangnya panjang. Verifikasi:
    `SELECT count(*) FROM attendance_effective WHERE EXTRACT(DOW FROM attendance_date) = 0 AND status <> 'non_operational';` → `0`.
-   Catatan jumlah file: sejak §2 ditulis, backlog Gelombang 2–3 menambah migrasi `20261122000001..13`, sehingga
-   daftar `--dry-run` berisi **35 file** sejak `20261105000002` (bukan 22). Cocokkan terhadap
+   Catatan jumlah file: sejak §2 ditulis, backlog Gelombang 2–3 menambah migrasi `20261122000001..14`, sehingga
+   daftar `--dry-run` berisi **36 file** sejak `20261105000002` (bukan 22). Cocokkan terhadap
    `ls supabase/migrations | awk -F_ '$1>=20261105000002' | wc -l`, bukan ke angka lama di dokumen ini.
    `20261122000012`/`13` tidak butuh langkah operator sendiri: penjaga hari hanya dibaca rute cron (ikut deploy
    aplikasi) dan `report_submit` tidak dipanggil kode produksi mana pun.
@@ -130,7 +141,7 @@ Tanpa replay ini, verifikasi yang tersedia adalah guard statis di `src/__tests__
 ## 5. Rollback
 
 - **Aplikasi**: redeploy commit produksi sebelumnya (`4e66ce2`) dari Vercel.
-- **Database**: migrasi bersifat forward-fix; jangan menurunkan skema secara otomatis. Rollback manual hanya untuk `20261118000001` via `supabase/rollback/20261118000001_report_review_command_idempotency_down.sql` — hanya jika aplikasi juga diturunkan ke versi pra-idempotensi (urutan manual ada di header file itu). `20261121000001` tidak perlu di-rollback (hanya DROP + assert; menjalankan ulang kode lama di atas skema baru tidak dijamin — kembali ke §5 aplikasi). `20261122000011` punya rollback di `supabase/rollback/20261122000011_attendance_temporal_rules_down.sql` (memulihkan pre-image `attendance_check_in`/`refresh_attendance_effective`/`save_report` dan menghapus helper + trigger kalender); jangan jalankan kecuali aplikasi juga diturunkan — rollback ini mengembalikan cacat Ahad dan reparasi datanya sengaja tidak dibatalkan. `20261122000012` hanya menambah wrapper `public.is_operational_day(date)`; rollback-nya (`..._down.sql`) menghapus wrapper itu saja dan sengaja **tidak** menyentuh `app.is_operational_day` milik `20261122000011` — tanpa wrapper, rute cron gagal-baca → 500, bukan mengirim pengingat ke hari Ahad. `20261122000013` DROP `app.`/`public.report_submit(uuid, uuid)`; rollback-nya menancapkan kembali pre-image dari `20261101000004` **tanpa GRANT**, jadi fungsi itu kembali ada tetapi tetap tak terpanggil — tidak ada dampak data.
+- **Database**: migrasi bersifat forward-fix; jangan menurunkan skema secara otomatis. Rollback manual hanya untuk `20261118000001` via `supabase/rollback/20261118000001_report_review_command_idempotency_down.sql` — hanya jika aplikasi juga diturunkan ke versi pra-idempotensi (urutan manual ada di header file itu). `20261121000001` tidak perlu di-rollback (hanya DROP + assert; menjalankan ulang kode lama di atas skema baru tidak dijamin — kembali ke §5 aplikasi). `20261122000011` punya rollback di `supabase/rollback/20261122000011_attendance_temporal_rules_down.sql` (memulihkan pre-image `attendance_check_in`/`refresh_attendance_effective`/`save_report` dan menghapus helper + trigger kalender); jangan jalankan kecuali aplikasi juga diturunkan — rollback ini mengembalikan cacat Ahad dan reparasi datanya sengaja tidak dibatalkan. `20261122000012` hanya menambah wrapper `public.is_operational_day(date)`; rollback-nya (`..._down.sql`) menghapus wrapper itu saja dan sengaja **tidak** menyentuh `app.is_operational_day` milik `20261122000011` — tanpa wrapper, rute cron gagal-baca → 500, bukan mengirim pengingat ke hari Ahad. `20261122000013` DROP `app.`/`public.report_submit(uuid, uuid)`; rollback-nya menancapkan kembali pre-image dari `20261101000004` **tanpa GRANT**, jadi fungsi itu kembali ada tetapi tetap tak terpanggil — tidak ada dampak data. `20261122000014` (ANN-CMD) DROP pemicu + keenam fungsi `announcement_upsert`/`announcement_archive`/`can_write_announcement_audience` (`app.` dan `public.`) lalu mengembalikan grant tulis ke `authenticated` saja; rollback **tidak** menyentuh satu baris `announcements` pun, tetapi hanya mengembalikan state "aplikasi yang menulis dengan *service role*" bila build pra-ANN-CMD ikut diturunkan — kode sekarang memanggil RPC yang sudah tidak ada (lihat header file down-nya).
 - Jika push migrasi gagal di tengah: tiap file bertransaksi sendiri (`BEGIN/COMMIT`); catat file yang gagal, perbaiki penyebab (biasanya §2c/§2d belum dibereskan), lalu `supabase db push --remote` lagi — file yang sudah sukses tidak diulang.
 
 ## 6. Bukti yang dicatat

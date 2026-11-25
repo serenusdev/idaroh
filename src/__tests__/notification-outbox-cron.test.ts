@@ -243,7 +243,9 @@ describe("notification cron outbox integration", () => {
     const actions = readFileSync(new URL("../modules/schedules/actions.ts", import.meta.url), "utf8");
     expect(actions).not.toMatch(/type: "ANNOUNCEMENT_PUBLISHED"/);
     expect(actions).toContain('drainNotificationOutbox({ notificationType: "ANNOUNCEMENT_PUBLISHED", referenceId: newId })');
-    expect(actions).toContain('if (existing.status !== "published")');
+    // ANN-CMD: the update path no longer reads the row on the service-role client to learn whether
+    // this was a first publication; app.announcement_upsert() reports it from the row it locked.
+    expect(actions).toContain('if (!result.was_published)');
     expect(actions).toContain('drainNotificationOutbox({ notificationType: "ANNOUNCEMENT_PUBLISHED", referenceId: announcementId })');
   });
 });
