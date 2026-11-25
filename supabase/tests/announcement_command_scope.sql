@@ -153,15 +153,20 @@ SELECT throws_ok(
      WHERE id = '00000000-0000-0000-0000-000000000990'$$,
   '42501', NULL, 'an authenticated session still cannot edit an announcement directly');
 
--- 9-11: the role tier and the account state are judged before anything is written.
+-- 9-11: the role tier and the account state are judged before anything is written. Each RPC is
+-- called as `authenticated` so a missing GRANT cannot pass as the table owner, but the
+-- leftover-row check reads as the owner: a refused draft would be invisible to the SELECT policy
+-- anyway, so counting it inside the impersonated session would prove nothing.
 SELECT public.ann_as('00000000-0000-0000-0000-000000000981');
 SELECT is((public.announcement_upsert(NULL,
          jsonb_build_object('title', 'Percobaan Santri', 'body_markdown', 'Isi',
                             'status', 'draft'), NULL)->>'message'),
   'Anda tidak memiliki izin mengelola pengumuman.',
   'a santri cannot author an announcement');
+RESET ROLE;
 SELECT is((SELECT count(*)::int FROM public.announcements WHERE title = 'Percobaan Santri'), 0,
   'the refused write left no announcement row behind');
+SET LOCAL ROLE authenticated;
 SELECT public.ann_as('00000000-0000-0000-0000-000000000987');
 SELECT is((public.announcement_upsert(NULL,
          jsonb_build_object('title', 'Percobaan Tertunda', 'body_markdown', 'Isi',
@@ -170,7 +175,9 @@ SELECT is((public.announcement_upsert(NULL,
   'a pengurus on a pending account is refused before any role check');
 
 -- 12-14: a coordinator authors inside its own team, and the database — not the caller —
--- decides who wrote it, how it is pinned, and whether the ledger recorded it.
+-- decides who wrote it, how it is pinned, and whether the ledger recorded it. The audit row is
+-- read as the owner (audit_logs is RLS-scoped to the reader), while the stored row stays visible
+-- to its own coordinator through the live SELECT policy.
 SELECT public.ann_as('00000000-0000-0000-0000-000000000982');
 SELECT is((public.announcement_upsert(NULL,
          jsonb_build_object('title', 'Rapat Evaluasi Tim A', 'body_markdown', 'Bahasan mingguan.',
@@ -186,13 +193,16 @@ SELECT is((SELECT a.author_id || '/' || a.priority || '/' || a.pinned::text
            FROM public.announcements a WHERE a.title = 'Rapat Evaluasi Tim A'),
   '00000000-0000-0000-0000-000000000982/important/true/true',
   'the caller-supplied author_id and pinned are ignored: actor and pin come from the database');
+RESET ROLE;
 SELECT is((SELECT count(*)::int FROM public.audit_logs l
            WHERE l.target_label = 'Rapat Evaluasi Tim A'
              AND l.event_name = 'announcement.published'
              AND l.actor_id = '00000000-0000-0000-0000-000000000982'), 1,
   'the publication and its announcement.published audit row commit together, naming the actor');
+SET LOCAL ROLE authenticated;
 
 -- 15-17: the coordinator tier stops at its own team (§3.6 scope `team`).
+SELECT public.ann_as('00000000-0000-0000-0000-000000000982');
 SELECT is((public.announcement_upsert(NULL,
          jsonb_build_object('title', 'Broadcast Koordinator', 'body_markdown', 'Isi',
                             'status', 'draft', 'audience', jsonb_build_object('scope', 'all')),
@@ -204,6 +214,7 @@ SELECT is((public.announcement_upsert(NULL,
                               'teamIds', jsonb_build_array('00000000-0000-0000-0000-000000000976'))),
          NULL)->>'success'), 'false',
   'a coordinator cannot address another team it does not coordinate');
+RESET ROLE;
 SELECT is((SELECT count(*)::int FROM public.announcements
            WHERE title IN ('Broadcast Koordinator', 'Silang Tim')), 0,
   'both refused writes left no rows behind');
@@ -211,7 +222,11 @@ SELECT is((SELECT count(*)::int FROM public.announcements
 -- 18-20: one rule for both tables — the announcement helper has to answer exactly like the
 -- agenda helper SCH-02 shipped, or the same session could broadcast a pondok-wide agenda but
 -- not a pondok-wide announcement. Pinned inside the coordinator session so the real tiers are
--- compared, not the no-session branch both helpers share.
+-- compared, not the no-session branch both helpers share. The helper is called as
+-- `authenticated` here too: executed as the owner it would answer correctly even with the GRANT
+-- missing.
+SET LOCAL ROLE authenticated;
+SELECT public.ann_as('00000000-0000-0000-0000-000000000982');
 SELECT is((SELECT app.can_write_announcement_audience('{"scope":"all"}'::jsonb, NULL, NULL)
              IS NOT DISTINCT FROM app.can_write_event_audience('{"scope":"all"}'::jsonb, NULL, NULL)
              AND NOT app.can_write_announcement_audience('{"scope":"all"}'::jsonb, NULL, NULL)), true,
@@ -250,19 +265,24 @@ SELECT is((public.announcement_upsert(NULL,
 RESET ROLE;
 
 -- 23-27: the edit rules. The row is read under a lock, an absent audience keeps the stored
--- one, an archived row is frozen, and the revision number can no longer be raced.
+-- one, an archived row is frozen, and the revision number can no longer be raced. The draft row
+-- and its revision history are read as the owner: the SELECT policy hides drafts by design, which
+-- is precisely the state an anti-widening regression would leave behind.
 SET LOCAL ROLE authenticated;
 SELECT public.ann_as('00000000-0000-0000-0000-000000000982');
 SELECT is((public.announcement_upsert('00000000-0000-0000-0000-000000000991',
          jsonb_build_object('title', 'Draf Evaluasi Tim A (diedit)', 'body_markdown', 'Revisi dua.'),
          NULL)->>'success'), 'true',
   'a coordinator may edit a draft that belongs to its own team');
+RESET ROLE;
 SELECT is((SELECT a.audience_config->>'scope' FROM public.announcements a
            WHERE a.id = '00000000-0000-0000-0000-000000000991'), 'team',
   'an edit that sends no audience inherits the stored team audience instead of widening to all');
 SELECT is((SELECT count(*)::int FROM public.announcement_revisions r
            WHERE r.announcement_id = '00000000-0000-0000-0000-000000000991'), 1,
   'the replaced row is kept in announcement_revisions');
+SET LOCAL ROLE authenticated;
+SELECT public.ann_as('00000000-0000-0000-0000-000000000982');
 SELECT is((public.announcement_upsert('00000000-0000-0000-0000-000000000992',
          jsonb_build_object('title', 'Arsip Diedit', 'body_markdown', 'Isi'), NULL)->>'success'), 'false',
   'an archived announcement is frozen');
@@ -280,11 +300,13 @@ SELECT is((public.announcement_upsert(NULL,
                             'status', 'published', 'scheduled_for', '2030-01-01T09:00'),
          NULL)->>'success'), 'false',
   'an announcement scheduled into the future has to stay a draft');
+RESET ROLE;
 SELECT is((SELECT a.expires_at AT TIME ZONE 'Asia/Jakarta' FROM public.announcements a
            WHERE a.id = '00000000-0000-0000-0000-000000000991')::text, '2027-01-10 08:30:00',
   'the naive datetime-local text is resolved in Asia/Jakarta by the database');
 
 -- 30: owning the row does not grant a wider audience.
+SET LOCAL ROLE authenticated;
 SELECT public.ann_as('00000000-0000-0000-0000-000000000982');
 SELECT is((public.announcement_upsert('00000000-0000-0000-0000-000000000991',
          jsonb_build_object('title', 'Draf Evaluasi Tim A', 'body_markdown', 'Lebar.',
@@ -302,12 +324,12 @@ SELECT is((SELECT status FROM public.announcements WHERE id = '00000000-0000-000
 SELECT public.ann_as('00000000-0000-0000-0000-000000000982');
 SELECT is((public.announcement_archive('00000000-0000-0000-0000-000000000991', 'Sudah dievaluasi')::jsonb->>'success'), 'true',
   'a coordinator may archive the announcement of its own team');
+RESET ROLE;
 SELECT is((SELECT count(*)::int FROM public.audit_logs l
            WHERE l.target_id = '00000000-0000-0000-0000-000000000991'
              AND l.actor_id = '00000000-0000-0000-0000-000000000982'
              AND l.event_name = 'announcement.deleted'), 1,
   'the archive audit row carries the actor_id the old update never wrote');
-RESET ROLE;
 
 -- 35: publication still fans out through the existing trigger, so moving the write onto the
 -- session did not quietly drop audience delivery.
