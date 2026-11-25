@@ -27,6 +27,10 @@ window.__jadwalBoundaries = {
   announcements: async () => [],
   markRead: async () => ({ success: true, message: "ok" }),
   publish: async () => ({ success: true, message: "ok" }),
+  // ANN-CMD: the composer now asks the session which audiences it may address instead of
+  // guessing from profiles.member_type. This fixture signs in as a santri, so the picker the
+  // database would answer with is empty.
+  audience: async () => ({ tier: "none", teams: [], coordinated: [] }),
   ical: async () => ({ success: true, icalUrl: "https://example.invalid/feed.ics" }),
   identity: async () => ({ id: "member-a", role: "santri", status: "active", full_name: "Santri Uji" }),
 };
@@ -41,6 +45,7 @@ const modules: Record<string, string> = {
     export const getAnnouncementsAction = (...args) => window.__jadwalBoundaries.announcements(...args);
     export const markAnnouncementReadAction = (...args) => window.__jadwalBoundaries.markRead(...args);
     export const publishAnnouncementAction = (...args) => window.__jadwalBoundaries.publish(...args);
+    export const getEventAudienceOptionsAction = (...args) => window.__jadwalBoundaries.audience(...args);
     export const generateICalSubscriptionAction = (...args) => window.__jadwalBoundaries.ical(...args);`,
   "next/image": `import React from "react"; export default function Image({ priority, unoptimized, ...props }) { return React.createElement("img", props); }`,
   "@/modules/iam/actions": `export const getCurrentUserAction = () => window.__jadwalBoundaries.identity();`,
