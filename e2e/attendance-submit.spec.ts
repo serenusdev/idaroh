@@ -27,6 +27,7 @@ import { createRoot } from "react-dom/client";
 import { flushSync } from "react-dom";
 import KehadiranPage from "@/app/(app)/kehadiran/page";
 import { IdentityProvider } from "@/components/auth/identity-context";
+import { QueryProvider } from "@/components/providers/query-provider";
 const config = window.__attSubmitConfig;
 const clone = value => value === undefined ? undefined : JSON.parse(JSON.stringify(value));
 const state = { queues: config.queues || {}, calls: [], pending: new Map() };
@@ -58,7 +59,7 @@ window.__attSubmitUI = {
 const reactRoot = createRoot(document.getElementById("att-submit-root"));
 flushSync(() => reactRoot.render(React.createElement(IdentityProvider, {
   initialUser: { id: "santri-a", role: "santri", roles: ["santri"], status: "active", full_name: "Santri Uji", email: "santri@example.test", member_type: "santri" },
-}, React.createElement(KehadiranPage))));
+}, React.createElement(QueryProvider, null, React.createElement(KehadiranPage))));
 `;
 const modules: Record<string, string> = {
   "@/modules/attendance/actions": `
@@ -85,7 +86,7 @@ test.beforeAll(async () => {
     define: { "process.env.NODE_ENV": '"development"' }, plugins: [boundaries], metafile: true,
   });
   const inputs = Object.keys(result.metafile!.inputs);
-  for (const file of ["src/app/(app)/kehadiran/page.tsx", "src/components/auth/identity-context.tsx"]) {
+  for (const file of ["src/app/(app)/kehadiran/page.tsx", "src/components/auth/identity-context.tsx", "src/components/providers/query-provider.tsx"]) {
     expect(inputs.some(input => input.endsWith(file)), `Bundled actual ${file}`).toBe(true);
   }
   expect(inputs.some(input => /src\/lib\/supabase\/|src\/modules\/.*\/actions\.ts/.test(input))).toBe(false);

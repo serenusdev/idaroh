@@ -12,8 +12,8 @@ import {
 } from "@/modules/reports/actions";
 import { getActivePolicyAction } from "@/modules/analytics/actions";
 import { useIdentity } from "@/components/auth/identity-context";
-import { useCachedData } from "@/hooks/use-cached-data";
-import { invalidateCache } from "@/lib/data-cache";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { cacheKeys, invalidateReports, invalidateReviewQueue } from "@/lib/cache-keys";
 
 function getJakartaDate() {
   return new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Jakarta" }).format(new Date());
@@ -53,9 +53,12 @@ const BLANK_REPORT: DailyReport = {
 
 export default function LaporanPage() {
   const { user } = useIdentity();
-  const todayQuery = useCachedData(`reports:today:${user.id}`, getTodayReportAction);
-  const categoriesQuery = useCachedData("reports:categories", getReportCategoriesAction);
-  const policyQuery = useCachedData("policy:active", getActivePolicyAction);
+  // CACHE-01 Batch 2: every read is a Server Action behind a session+role key, so a second account
+  // or a role switch on the same browser cannot be handed this santri's draft (D3).
+  const queryClient = useQueryClient();
+  const todayQuery = useQuery({ queryKey: cacheKeys.reportsToday(user), queryFn: getTodayReportAction });
+  const categoriesQuery = useQuery({ queryKey: cacheKeys.reportCategories(user), queryFn: getReportCategoriesAction });
+  const policyQuery = useQuery({ queryKey: cacheKeys.policy(user), queryFn: getActivePolicyAction });
   const reportCategories: ReportCategory[] = React.useMemo(() => categoriesQuery.data ?? [], [categoriesQuery.data]);
   const policy = policyQuery.data ?? null;
 
@@ -71,10 +74,11 @@ export default function LaporanPage() {
   const [historyFilter, setHistoryFilter] = React.useState<"all" | "submitted" | "draft" | "late">("all");
   const [historySort, setHistorySort] = React.useState<"desc" | "asc">("desc");
 
+  // The version bump stays the race guard it always was: a history read that started before the
+  // write answers into the previous key. invalidateReports() marks today's draft and every cursor
+  // of this session's history stale, which replaces the old prefix reset.
   const refreshHistory = () => {
-    invalidateCache(`reports:history:${user.id}:`);
-    // Reset pagination and use a new request key so a pre-save in-flight read
-    // cannot overwrite the refreshed history after a successful write.
+    void invalidateReports(queryClient, user);
     setHistoryVersion((version) => version + 1);
   };
 
@@ -160,67 +164,77 @@ export default function LaporanPage() {
   };
 
   // Handle Save Draft
-  const handleSaveDraft = async () => {
-    setIsDrafting(true);
-    setFeedback(null);
-    try {
-      const res = await saveReportDraftAction({
+  const draftMutation = useMutation({
+    mutationFn: () =>
+      saveReportDraftAction({
         reportId: report.id,
         reportDate: report.reportDate,
         items: report.items,
-      });
-      if (res.success) {
-        setFeedback({ type: "info", message: res.message });
-        todayQuery.refresh();
-        refreshHistory();
-      } else {
+      }),
+    onMutate: () => {
+      setIsDrafting(true);
+      setFeedback(null);
+    },
+    onSuccess: (res) => {
+      if (!res.success) {
         setFeedback({ type: "error", message: res.message });
+        return;
       }
-    } catch {
+      setFeedback({ type: "info", message: res.message });
+      refreshHistory();
+    },
+    onError: () =>
       setFeedback({
         type: "error",
         message: "Terjadi kesalahan saat menyimpan draft laporan.",
-      });
-    } finally {
-      setIsDrafting(false);
-    }
+      }),
+    onSettled: () => setIsDrafting(false),
+  });
+
+  const handleSaveDraft = () => {
+    draftMutation.mutate();
   };
 
   // Handle Submit Report
-  const handleSubmitReport = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setIsSubmitting(true);
-    setFeedback(null);
-    try {
-      const res = await submitReportAction({
+  const submitMutation = useMutation({
+    mutationFn: () =>
+      submitReportAction({
         reportId: report.id,
         reportDate: report.reportDate,
         items: report.items,
-      });
-
-      if (res.success) {
-        setReport((prev) => ({
-          ...prev,
-          submissionStatus: "submitted",
-          isLate: res.isLate,
-          submittedAtTime: res.submittedAtTime,
-          reviewStatus: "not_reviewed",
-        }));
-        setFeedback({ type: "success", message: res.message });
-        todayQuery.refresh();
-        refreshHistory();
-        invalidateCache("review:queue");
-      } else {
+      }),
+    onMutate: () => {
+      setIsSubmitting(true);
+      setFeedback(null);
+    },
+    onSuccess: (res) => {
+      if (!res.success) {
         setFeedback({ type: "error", message: res.message });
+        return;
       }
-    } catch {
+      setReport((prev) => ({
+        ...prev,
+        submissionStatus: "submitted",
+        isLate: res.isLate,
+        submittedAtTime: res.submittedAtTime,
+        reviewStatus: "not_reviewed",
+      }));
+      setFeedback({ type: "success", message: res.message });
+      refreshHistory();
+      // /review reads the queue this submission just entered.
+      void invalidateReviewQueue(queryClient, user);
+    },
+    onError: () =>
       setFeedback({
         type: "error",
         message: "Terjadi gangguan koneksi saat mengirim laporan.",
-      });
-    } finally {
-      setIsSubmitting(false);
-    }
+      }),
+    onSettled: () => setIsSubmitting(false),
+  });
+
+  const handleSubmitReport = (e: React.FormEvent) => {
+    e.preventDefault();
+    submitMutation.mutate();
   };
 
   const totalMinutes = report.items.reduce(
@@ -257,7 +271,7 @@ export default function LaporanPage() {
           </div>
           <button
             type="button"
-            onClick={() => { todayQuery.refresh(); categoriesQuery.refresh(); policyQuery.refresh(); }}
+            onClick={() => { void todayQuery.refetch(); void categoriesQuery.refetch(); void policyQuery.refetch(); }}
             className="underline shrink-0"
           >
             Coba lagi
@@ -789,7 +803,7 @@ export default function LaporanPage() {
         </div>
         <ReportHistoryPage
           key={`${user.id}:${historyVersion}:${historyFilter}:${historySort}`}
-          scope={`${user.id}:${historyVersion}`}
+          historyVersion={historyVersion}
           statusFilter={historyFilter}
           sortOrder={historySort}
         />
@@ -813,20 +827,23 @@ function historyDate(value: string, withTime = false) {
 }
 
 function ReportHistoryPage({
-  scope,
+  historyVersion,
   before = null,
   statusFilter = "all",
   sortOrder = "desc",
 }: {
-  scope: string;
+  historyVersion: number;
   before?: string | null;
   statusFilter?: "all" | "submitted" | "draft" | "late";
   sortOrder?: "desc" | "asc";
 }) {
-  const query = useCachedData(
-    `reports:history:${scope}:${before ?? "latest"}`,
-    () => getMyReportHistoryAction({ before, limit: 20 })
-  );
+  const { user } = useIdentity();
+  // CACHE-01 Batch 2: the version lives inside the key, so an older-page read that started before
+  // a submit answers the previous key instead of overwriting the list the parent just remounted.
+  const query = useQuery({
+    queryKey: cacheKeys.reportsHistory(user, historyVersion, before),
+    queryFn: () => getMyReportHistoryAction({ before, limit: 20 }),
+  });
   const [showOlder, setShowOlder] = React.useState(false);
 
   const filteredReports = React.useMemo(() => {
@@ -846,7 +863,7 @@ function ReportHistoryPage({
       {query.error && (
         <div role="alert" className="rounded-lg border border-error/30 bg-error/10 p-3 text-sm text-error">
           <p>Riwayat laporan gagal dimuat. Silakan coba lagi.</p>
-          <button type="button" onClick={() => void query.refresh()} disabled={query.isLoading}
+          <button type="button" onClick={() => void query.refetch()} disabled={query.isLoading}
             className="mt-2 px-3 py-2 rounded-lg border border-current font-medium focus-visible:outline focus-visible:outline-2 disabled:opacity-50">
             Coba lagi memuat riwayat
           </button>
@@ -941,7 +958,7 @@ function ReportHistoryPage({
         </ul>
       )}
       {query.data?.nextCursor && (showOlder ? (
-        <ReportHistoryPage key={query.data.nextCursor} scope={scope} before={query.data.nextCursor} statusFilter={statusFilter} sortOrder={sortOrder} />
+        <ReportHistoryPage key={query.data.nextCursor} historyVersion={historyVersion} before={query.data.nextCursor} statusFilter={statusFilter} sortOrder={sortOrder} />
       ) : (
         <button type="button" onClick={() => setShowOlder(true)}
           className="px-4 py-2 rounded-lg bg-surface-container text-on-surface font-medium hover:bg-accent focus-visible:outline focus-visible:outline-2"

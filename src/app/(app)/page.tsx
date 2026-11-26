@@ -14,8 +14,8 @@ import { getEventsAction, getAnnouncementsAction } from "@/modules/schedules/act
 import { useIdentity } from "@/components/auth/identity-context";
 import { holdsRole } from "@/lib/export-policy";
 import { IAM_MUTATION_ROLES } from "@/lib/iam-policy";
-import { useCachedData } from "@/hooks/use-cached-data";
-import { invalidateCache } from "@/lib/data-cache";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { cacheKeys, invalidateAttendance, invalidatePolicy } from "@/lib/cache-keys";
 import type { ScheduleEventItem, AnnouncementItem } from "@/modules/schedules/types";
 import { LoadingSpinner } from "@/components/ui/loading-spinner";
 import { LiveClock } from "@/components/ui/live-clock";
@@ -35,10 +35,23 @@ export default function BerandaPage() {
   // §3.1: only super_admin may read the registration queue or decide on it, so the approval
   // shortcut stays out of the yayasan/pengurus dashboard instead of ending in "Unauthorized".
   const canDecideIam = holdsRole(currentUser, IAM_MUTATION_ROLES);
-  const policyQuery = useCachedData("policy:active", getActivePolicyAction);
-  const eventsQuery = useCachedData(`events:${currentUser.id}`, getEventsAction);
-  const announcementsQuery = useCachedData(`announcements:${currentUser.id}`, getAnnouncementsAction);
-  const statsQuery = useCachedData(isSupervisor ? `admin:dashboard-stats:${currentUser.id}` : null, getAdminDashboardStatsAction);
+  // CACHE-01 Batch 2: one QueryClient per session mount (the shell remounts it on user.id:role), and
+  // the supervisor gate is a key/enabled decision — a santri never fetches the management metrics.
+  const queryClient = useQueryClient();
+  const policyQuery = useQuery({ queryKey: cacheKeys.policy(currentUser), queryFn: getActivePolicyAction });
+  const eventsQuery = useQuery({
+    queryKey: cacheKeys.events(currentUser),
+    queryFn: () => getEventsAction(),
+  });
+  const announcementsQuery = useQuery({
+    queryKey: cacheKeys.announcements(currentUser),
+    queryFn: getAnnouncementsAction,
+  });
+  const statsQuery = useQuery({
+    queryKey: cacheKeys.dashboard(currentUser),
+    queryFn: getAdminDashboardStatsAction,
+    enabled: isSupervisor,
+  });
 
   const policy = policyQuery.data ?? null;
   const events: ScheduleEventItem[] = eventsQuery.data ?? [];
@@ -80,37 +93,53 @@ export default function BerandaPage() {
     setCurrentDateTime(formatOperationalDateTime());
   }, []);
 
-  const handleCheckin = async () => {
-    setIsProcessing(true);
-    setCheckinError(null);
-    const res = await checkInAttendanceAction();
-    setIsProcessing(false);
-    if (res.success) {
+  // The quick check-in writes the same row the /kehadiran history reads, so it goes through the one
+  // attendance invalidation helper instead of the old prefix reset.
+  const homeCheckInMutation = useMutation({
+    mutationFn: () => checkInAttendanceAction(),
+    onMutate: () => {
+      setIsProcessing(true);
+      setCheckinError(null);
+    },
+    onSuccess: (res) => {
+      if (!res.success) {
+        setCheckinError(res.message || "Gagal mencatat presensi. Silakan coba lagi.");
+        return;
+      }
       setCheckedIn(true);
-      invalidateCache("attendance:history");
-    } else {
-      setCheckinError(res.message || "Gagal mencatat presensi. Silakan coba lagi.");
-    }
+      void invalidateAttendance(queryClient, currentUser);
+    },
+    onSettled: () => setIsProcessing(false),
+  });
+
+  const handleCheckin = () => {
+    homeCheckInMutation.mutate();
   };
 
-  const handleSavePolicy = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setIsUpdatingPolicy(true);
-    setPolicyFeedback(null);
-
-    const res = await updatePolicySettingsAction(policyForm);
-    setIsUpdatingPolicy(false);
-
-    if (res.success) {
+  const policySaveMutation = useMutation({
+    mutationFn: () => updatePolicySettingsAction(policyForm),
+    onMutate: () => {
+      setIsUpdatingPolicy(true);
+      setPolicyFeedback(null);
+    },
+    onSuccess: (res) => {
+      if (!res.success) {
+        setPolicyFeedback(res.message);
+        return;
+      }
       setPolicyFeedback("Kebijakan jam operasional berhasil diperbarui!");
       setTimeout(() => {
         setIsPolicyModalOpen(false);
         setPolicyFeedback(null);
       }, 1200);
-      policyQuery.refresh();
-    } else {
-      setPolicyFeedback(res.message);
-    }
+      void invalidatePolicy(queryClient, currentUser);
+    },
+    onSettled: () => setIsUpdatingPolicy(false),
+  });
+
+  const handleSavePolicy = (e: React.FormEvent) => {
+    e.preventDefault();
+    policySaveMutation.mutate();
   };
 
   const pinnedAnnouncement = announcements.find((a) => a.isPinned) || announcements[0];

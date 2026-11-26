@@ -30,7 +30,12 @@ import { createRoot } from "react-dom/client";
 import { flushSync } from "react-dom";
 import LaporanPage from "@/app/(app)/laporan/page";
 import { IdentityProvider } from "@/components/auth/identity-context";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 const config = window.__reportHistoryConfig;
+// CACHE-01 Batch 2: the page reads through TanStack Query now. The harness keeps the production
+// freshness window (30s) but pins retry to zero, because these specs assert a single-shot read
+// failure; the provider's own retry policy is pinned by the query-provider unit test.
+const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: 30_000 }, mutations: { retry: 0 } } });
 const clone = value => value === undefined ? undefined : JSON.parse(JSON.stringify(value));
 const state = { pages: clone(config.pages || {}), queues: clone(config.queues || {}), calls: [], pending: new Map(), account: "member-a", status: "draft" };
 async function call(name, args, fallback) {
@@ -65,9 +70,9 @@ let generation = 0;
 function render(account, remount = false) {
   state.account = account;
   if (remount) generation++;
-  flushSync(() => reactRoot.render(React.createElement(IdentityProvider, {
+  flushSync(() => reactRoot.render(React.createElement(QueryClientProvider, { client: queryClient }, React.createElement(IdentityProvider, {
     key: generation, initialUser: { id: account, role: "santri", status: "active", full_name: "Santri Uji" },
-  }, React.createElement(LaporanPage))));
+  }, React.createElement(LaporanPage)))));
 }
 window.__reportHistoryUI = {
   snapshot: () => clone({ calls: state.calls, pending: Array.from(state.pending.keys()) }),
@@ -110,8 +115,13 @@ test.beforeAll(async () => {
     define: { "process.env.NODE_ENV": '"development"' }, plugins: [boundaries], metafile: true,
   });
   const inputs = Object.keys(result.metafile!.inputs);
-  for (const file of ["src/app/(app)/laporan/page.tsx", "src/components/auth/identity-context.tsx", "src/hooks/use-cached-data.ts", "src/lib/data-cache.ts"]) {
+  for (const file of ["src/app/(app)/laporan/page.tsx", "src/components/auth/identity-context.tsx"]) {
     expect(inputs.some(input => input.endsWith(file)), `Bundled actual ${file}`).toBe(true);
+  }
+  // CACHE-01 Batch 2: /laporan left the manual data-cache behind, so neither legacy module may be
+  // pulled into this bundle any more.
+  for (const file of ["src/hooks/use-cached-data.ts", "src/lib/data-cache.ts"]) {
+    expect(inputs.some(input => input.endsWith(file)), `Bundled legacy ${file}`).toBe(false);
   }
   expect(inputs.some(input => /src\/lib\/supabase\/|src\/modules\/.*\/actions\.ts/.test(input))).toBe(false);
   bundle = result.outputFiles[0].text;
@@ -256,13 +266,15 @@ test.describe("TRC-05 personal history — real UI, mocked actions", () => {
   test("scoped cache survives revisit but account changes never reveal the previous history", async ({ page }) => {
     await mount(page, { pages });
     await expect(history(page).locator("summary")).toHaveCount(2);
+    const readsBeforeRevisit = (await calls(page, "history")).length;
     await page.evaluate(() => {
-      window.__reportHistoryUI.queue("history", { kind: "defer", id: "revisit" });
       window.__reportHistoryUI.render("member-a", true);
     });
-    await expect.poll(async () => (await snapshot(page)).pending).toContain("revisit");
+    // CACHE-01 Batch 2: inside the 30s freshness window a revisit is served from the cache, so the
+    // rows stay and no second read is issued — the manual cache used to revalidate on every mount.
     await expect(history(page).locator("summary")).toHaveCount(2);
     await expect(history(page).getByRole("status")).toHaveCount(0);
+    expect((await calls(page, "history")).length).toBe(readsBeforeRevisit);
     await page.evaluate(() => {
       window.__reportHistoryUI.queue("history", { kind: "defer", id: "new-account" });
       window.__reportHistoryUI.render("member-b");
@@ -271,7 +283,6 @@ test.describe("TRC-05 personal history — real UI, mocked actions", () => {
     await expect(history(page).locator("summary")).toHaveCount(0);
     await expect(history(page).getByRole("status")).toBeVisible();
     await page.evaluate(value => window.__reportHistoryUI.settle("new-account", value), empty);
-    await page.evaluate(value => window.__reportHistoryUI.settle("revisit", value), first);
     await expect(history(page).getByText(/Belum ada riwayat laporan/)).toBeVisible();
     await expect(history(page).locator("summary")).toHaveCount(0);
     expect((await calls(page, "history")).at(-1)?.account).toBe("member-b");
