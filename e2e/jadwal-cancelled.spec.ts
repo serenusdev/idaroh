@@ -20,6 +20,7 @@ import { createRoot } from "react-dom/client";
 import { flushSync } from "react-dom";
 import JadwalPage from "@/app/(app)/jadwal/page";
 import { IdentityProvider } from "@/components/auth/identity-context";
+import { QueryProvider } from "@/components/providers/query-provider";
 const config = window.__jadwalConfig;
 const clone = value => value === undefined ? undefined : JSON.parse(JSON.stringify(value));
 window.__jadwalBoundaries = {
@@ -37,7 +38,7 @@ window.__jadwalBoundaries = {
 const reactRoot = createRoot(document.getElementById("jadwal-root"));
 flushSync(() => reactRoot.render(React.createElement(IdentityProvider, {
   initialUser: { id: "member-a", role: "santri", status: "active", full_name: "Santri Uji" },
-}, React.createElement(JadwalPage))));
+}, React.createElement(QueryProvider, null, React.createElement(JadwalPage)))));
 `;
 const modules: Record<string, string> = {
   "@/modules/schedules/actions": `
@@ -64,7 +65,7 @@ test.beforeAll(async () => {
     define: { "process.env.NODE_ENV": '"development"' }, plugins: [boundaries], metafile: true,
   });
   const inputs = Object.keys(result.metafile!.inputs);
-  for (const file of ["src/app/(app)/jadwal/page.tsx", "src/components/auth/identity-context.tsx"]) {
+  for (const file of ["src/app/(app)/jadwal/page.tsx", "src/components/auth/identity-context.tsx", "src/components/providers/query-provider.tsx"]) {
     expect(inputs.some(input => input.endsWith(file)), `Bundled actual ${file}`).toBe(true);
   }
   expect(inputs.some(input => /src\/lib\/supabase\/|src\/modules\/.*\/actions\.ts/.test(input))).toBe(false);

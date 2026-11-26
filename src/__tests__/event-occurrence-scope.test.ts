@@ -121,8 +121,9 @@ describe("SCH-01 — a recurring agenda is addressable one occurrence at a time"
     expect(adminPage).toContain("setEventOccurrenceCancelledAction");
     expect(adminPage).toContain("Batalkan hari ini");
     expect(adminPage).toContain("Pulihkan hari ini");
-    // The acting browser holds the events cache, so the row has to refresh.
-    expect(adminPage).toContain("eventsQuery.refresh()");
+    // The acting browser holds the events cache, so the row has to refresh. CACHE-01 Batch 1
+    // refetches through the TanStack invalidation on the occurrence mutation.
+    expect(adminPage).toContain("invalidateEvents(queryClient, currentUser)");
   });
 
   it("records the new surface in PERMISSIONS.md", () => {

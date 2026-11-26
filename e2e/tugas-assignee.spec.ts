@@ -25,6 +25,7 @@ import { createRoot } from "react-dom/client";
 import { flushSync } from "react-dom";
 import TugasPage from "@/app/(app)/tugas/page";
 import { IdentityProvider } from "@/components/auth/identity-context";
+import { QueryProvider } from "@/components/providers/query-provider";
 const config = window.__tugasConfig;
 const clone = value => value === undefined ? undefined : JSON.parse(JSON.stringify(value));
 window.__tugasCalls = { createTask: [], assignReviewer: [] };
@@ -47,7 +48,7 @@ window.__tugasBoundaries = {
 const reactRoot = createRoot(document.getElementById("tugas-root"));
 flushSync(() => reactRoot.render(React.createElement(IdentityProvider, {
   initialUser: { id: "member-a", role: "koordinator", status: "active", full_name: "Ustadz Uji" },
-}, React.createElement(TugasPage))));
+}, React.createElement(QueryProvider, null, React.createElement(TugasPage)))));
 `;
 const modules: Record<string, string> = {
   "@/modules/tasks/actions": `
@@ -88,7 +89,7 @@ test.beforeAll(async () => {
     define: { "process.env.NODE_ENV": '"development"' }, plugins: [boundaries], metafile: true,
   });
   const inputs = Object.keys(result.metafile!.inputs);
-  for (const file of ["src/app/(app)/tugas/page.tsx", "src/components/auth/identity-context.tsx"]) {
+  for (const file of ["src/app/(app)/tugas/page.tsx", "src/components/auth/identity-context.tsx", "src/components/providers/query-provider.tsx"]) {
     expect(inputs.some(input => input.endsWith(file)), `Bundled actual ${file}`).toBe(true);
   }
   expect(inputs.some(input => /src\/lib\/supabase\/|src\/modules\/.*\/actions\.ts/.test(input))).toBe(false);

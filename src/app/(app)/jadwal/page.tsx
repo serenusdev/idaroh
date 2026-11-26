@@ -19,8 +19,8 @@ import {
 } from "@/modules/schedules/actions";
 import { AGENDA_WRITE_ROLES, holdsScheduleRole } from "@/lib/schedule-policy";
 import { useIdentity } from "@/components/auth/identity-context";
-import { useCachedData } from "@/hooks/use-cached-data";
-import { invalidateCache, writeCache } from "@/lib/data-cache";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { cacheKeys, invalidateAnnouncements } from "@/lib/cache-keys";
 
 type ScheduleTab = "agenda" | "announcements";
 
@@ -81,23 +81,25 @@ export default function JadwalPage() {
     const today = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Jakarta" }).format(new Date());
     return buildWeekDays(today);
   });
-  const eventsQuery = useCachedData(`events:${user.id}`, getEventsAction);
-  const announcementsQuery = useCachedData(`announcements:${user.id}`, getAnnouncementsAction);
-  const [events, setEvents] = React.useState<ScheduleEventItem[]>(eventsQuery.data ?? []);
-  const [announcements, setAnnouncements] = React.useState<AnnouncementItem[]>(announcementsQuery.data ?? []);
+  const queryClient = useQueryClient();
+  const eventsKey = cacheKeys.events(user);
+  const announcementsKey = cacheKeys.announcements(user);
+  const eventsQuery = useQuery({ queryKey: eventsKey, queryFn: () => getEventsAction() });
+  const announcementsQuery = useQuery({
+    queryKey: announcementsKey,
+    queryFn: getAnnouncementsAction,
+  });
+  // The query cache is the list this page renders. An optimistic write patches that cache
+  // directly rather than keeping a detached useState copy that had to be mirrored back into
+  // data-cache on every change.
+  const events: ScheduleEventItem[] = eventsQuery.data ?? [];
+  const announcements: AnnouncementItem[] = announcementsQuery.data ?? [];
 
-  React.useEffect(() => {
-    if (eventsQuery.data) setEvents(eventsQuery.data);
-  }, [eventsQuery.data]);
-  React.useEffect(() => {
-    if (announcementsQuery.data) setAnnouncements(announcementsQuery.data);
-  }, [announcementsQuery.data]);
-  React.useEffect(() => {
-    writeCache(`events:${user.id}`, events);
-  }, [events, user.id]);
-  React.useEffect(() => {
-    writeCache(`announcements:${user.id}`, announcements);
-  }, [announcements, user.id]);
+  const patchAnnouncements = (updater: (prev: AnnouncementItem[]) => AnnouncementItem[]) =>
+    queryClient.setQueryData<AnnouncementItem[]>(
+      announcementsKey,
+      (prev) => (prev ? updater(prev) : prev)
+    );
   const [categoryFilter, setCategoryFilter] = React.useState<string>("all");
   const [isPinnedDismissed, setIsPinnedDismissed] = React.useState(false);
   const [selectedEvent, setSelectedEvent] = React.useState<ScheduleEventItem | null>(null);
@@ -132,11 +134,34 @@ export default function JadwalPage() {
     setWeekDays(buildWeekDays(dateStr, dateStr));
   };
 
-  const handleMarkRead = async (annId: string) => {
-    setAnnouncements((prev) =>
-      prev.map((a) => (a.id === annId ? { ...a, isRead: true } : a))
-    );
-    await markAnnouncementReadAction(annId);
+  // Tandai baca is optimistic: the unread badge drops before the round trip. The action answers
+  // { success, message } instead of throwing, so a rejected write is restored from onSuccess too,
+  // not only from onError.
+  const markReadMutation = useMutation({
+    mutationFn: (annId: string) => markAnnouncementReadAction(annId),
+    onMutate: async (annId) => {
+      await queryClient.cancelQueries({ queryKey: announcementsKey });
+      const previous = queryClient.getQueryData<AnnouncementItem[]>(announcementsKey);
+      patchAnnouncements((prev) =>
+        prev.map((a) => (a.id === annId ? { ...a, isRead: true } : a))
+      );
+      return { previous };
+    },
+    onError: (_error, _annId, context) => {
+      if (context?.previous) queryClient.setQueryData(announcementsKey, context.previous);
+    },
+    onSuccess: (res, _annId, context) => {
+      if (!res.success && context?.previous) {
+        queryClient.setQueryData(announcementsKey, context.previous);
+      }
+    },
+    // The dashboard still reads announcements through data-cache until Batch 2, and is_read is
+    // computed by app.announcement_read(), so both caches go stale after the write settles.
+    onSettled: () => invalidateAnnouncements(queryClient, user),
+  });
+
+  const handleMarkRead = (annId: string) => {
+    markReadMutation.mutate(annId);
   };
 
   const handleGenerateIcal = async () => {
@@ -178,8 +203,11 @@ export default function JadwalPage() {
     });
 
     if (res.success && res.announcement) {
-      setAnnouncements((prev) => [res.announcement!, ...prev]);
-      invalidateCache("admin:announcements");
+      const created = res.announcement;
+      patchAnnouncements((prev) => [created, ...prev]);
+      // The manager list is a separate key on the same session and the dashboard keeps its own
+      // copy in data-cache, so both have to drop the pre-publish row.
+      await invalidateAnnouncements(queryClient, user);
       setIsCreatingAnn(false);
       setNewAnnTitle("");
       setNewAnnBody("");
@@ -208,7 +236,7 @@ export default function JadwalPage() {
           </div>
           <button
             type="button"
-            onClick={() => { eventsQuery.refresh(); announcementsQuery.refresh(); }}
+            onClick={() => { void eventsQuery.refetch(); void announcementsQuery.refetch(); }}
             className="underline shrink-0"
           >
             Coba lagi

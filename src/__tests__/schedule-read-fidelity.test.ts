@@ -292,9 +292,11 @@ describe("a cancelled occurrence is a management fact, not a user fact", () => {
     const adminPage = readFileSync(resolve(__dirname, "../app/(app)/admin/jadwal/page.tsx"), "utf8");
     expect(adminPage).toMatch(/getEventsAction\(\{ includeCancelledOccurrences: true \}\)/);
     // A different row set under the same cache key would make the two surfaces overwrite
-    // each other, so the manager fetch is keyed apart from the user surfaces.
-    expect(adminPage).toContain("admin:events:${currentUser.id}");
-    expect(adminPage).not.toContain("`events:${currentUser.id}`");
+    // each other, so the manager fetch is keyed apart from the user surfaces. Since CACHE-01
+    // Batch 1 the keys come from src/lib/cache-keys.ts, which keeps the admin:events:<uid>
+    // prefix and adds the active role.
+    expect(adminPage).toContain("cacheKeys.adminEvents(currentUser)");
+    expect(adminPage).not.toContain("cacheKeys.events(currentUser)");
     for (const page of ["../app/(app)/jadwal/page.tsx", "../app/(app)/page.tsx"]) {
       expect(readFileSync(resolve(__dirname, page), "utf8")).not.toMatch(/includeCancelledOccurrences/);
     }

@@ -20,18 +20,21 @@ describe("admin/jadwal delete event contract", () => {
     expect(body).not.toContain('.from("events")\n      .select("id, title, audience_config")');
   });
 
-  it("admin/jadwal invalidates admin:events:<uid> cache on successful delete", () => {
+  it("admin/jadwal invalidates the admin:events cache of the acting session on a successful delete", () => {
     const src = fs.readFileSync(
       path.join(ROOT, "src/app/(app)/admin/jadwal/page.tsx"),
       "utf8"
     );
-    const fnStart = src.indexOf("const handleDeleteEvent = async");
-    const fnEnd = src.indexOf("const handleToggleOccurrence = async");
+    // CACHE-01 Batch 1 moved this surface to TanStack Query: the reset is declared once on the
+    // delete mutation instead of at every call site, and it is keyed by session id + active role.
+    const fnStart = src.indexOf("const deleteEventMutation = useMutation");
+    const fnEnd = src.indexOf("const handleDeleteEvent = async");
     expect(fnStart).toBeGreaterThan(-1);
     expect(fnEnd).toBeGreaterThan(fnStart);
     const body = src.slice(fnStart, fnEnd);
 
-    expect(body).toContain("invalidateCache(`admin:events:${currentUser.id}`)");
-    expect(body).toContain("eventsQuery.refresh()");
+    expect(body).toContain("deleteEventAction");
+    expect(body).toContain("invalidateEvents(queryClient, currentUser)");
+    expect(src).toContain("cacheKeys.adminEvents");
   });
 });

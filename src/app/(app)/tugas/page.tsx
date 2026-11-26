@@ -31,8 +31,8 @@ import {
 } from "@/modules/tasks/actions";
 import { TaskDiscussion } from "@/components/tasks/task-discussion";
 import { useIdentity } from "@/components/auth/identity-context";
-import { useCachedData } from "@/hooks/use-cached-data";
-import { writeCache } from "@/lib/data-cache";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { cacheKeys, invalidateProjects, invalidateTasks } from "@/lib/cache-keys";
 
 type ViewTab = "my_tasks" | "kanban" | "projects";
 
@@ -40,25 +40,22 @@ export default function TugasPage() {
   const { user } = useIdentity();
   const [activeTab, setActiveTab] = React.useState<ViewTab>("my_tasks");
   const [timeFilter, setTimeFilter] = React.useState<TaskTimeFilter>("all");
-  const tasksQuery = useCachedData(`tasks:list:${user.id}`, getTasksAction);
-  const projectsQuery = useCachedData(`tasks:projects:${user.id}`, getProjectsAction);
-  const [tasks, setTasks] = React.useState<TaskItem[]>(tasksQuery.data ?? []);
-  const [projects, setProjects] = React.useState<ProjectItem[]>(projectsQuery.data ?? []);
+  const queryClient = useQueryClient();
+  const tasksKey = cacheKeys.tasks(user);
+  const projectsKey = cacheKeys.projects(user);
+  const tasksQuery = useQuery({ queryKey: tasksKey, queryFn: getTasksAction });
+  const projectsQuery = useQuery({ queryKey: projectsKey, queryFn: getProjectsAction });
+  // The query cache holds the list this page renders. A write patches that cache instead of
+  // keeping a second copy in component state that had to be mirrored back into data-cache.
+  // useMemo keeps the array identity stable between renders, as the useState copy used to be:
+  // the grouping below is memoized on it and must not rebuild while typing in a dialog.
+  const tasks = React.useMemo(() => tasksQuery.data ?? [], [tasksQuery.data]);
+  const projects = React.useMemo(() => projectsQuery.data ?? [], [projectsQuery.data]);
 
-  React.useEffect(() => {
-    if (tasksQuery.data) setTasks(tasksQuery.data);
-  }, [tasksQuery.data]);
-  React.useEffect(() => {
-    if (projectsQuery.data) setProjects(projectsQuery.data);
-  }, [projectsQuery.data]);
-  // Sinkronkan salinan kerja ke cache agar kunjungan ulang langsung menampilkan
-  // perubahan terakhir tanpa menunggu revalidasi.
-  React.useEffect(() => {
-    writeCache(`tasks:list:${user.id}`, tasks);
-  }, [tasks, user.id]);
-  React.useEffect(() => {
-    writeCache(`tasks:projects:${user.id}`, projects);
-  }, [projects, user.id]);
+  const patchTasks = (updater: (prev: TaskItem[]) => TaskItem[]) =>
+    queryClient.setQueryData<TaskItem[]>(tasksKey, (prev) => (prev ? updater(prev) : prev));
+  const patchProjects = (updater: (prev: ProjectItem[]) => ProjectItem[]) =>
+    queryClient.setQueryData<ProjectItem[]>(projectsKey, (prev) => (prev ? updater(prev) : prev));
   const [toastMessage, setToastMessage] = React.useState<{
     type: "success" | "error" | "info";
     text: string;
@@ -140,57 +137,83 @@ export default function TugasPage() {
   );
 
   // Handle Mark Done or Status Change
-  const handleStatusChange = async (task: TaskItem, targetStatus: TaskStatus) => {
-    const res = await updateTaskStatusAction(
-      task.id,
-      targetStatus,
-      task.requiresReview,
-      task.status
-    );
+  const statusMutation = useMutation({
+    mutationFn: (vars: { task: TaskItem; targetStatus: TaskStatus }) =>
+      updateTaskStatusAction(
+        vars.task.id,
+        vars.targetStatus,
+        vars.task.requiresReview,
+        vars.task.status
+      ),
+    onSuccess: (res, vars) => {
+      if (res.success) {
+        patchTasks((prev) =>
+          prev.map((t) => (t.id === vars.task.id ? { ...t, status: res.newStatus } : t))
+        );
+        setToastMessage({ type: "success", text: res.message });
+      } else {
+        setToastMessage({ type: "error", text: res.message });
+      }
+    },
+    onSettled: () => invalidateTasks(queryClient, user),
+  });
 
-    if (res.success) {
-      setTasks((prev) =>
-        prev.map((t) => (t.id === task.id ? { ...t, status: res.newStatus } : t))
-      );
-      setToastMessage({ type: "success", text: res.message });
-    } else {
-      setToastMessage({ type: "error", text: res.message });
-    }
+  const handleStatusChange = (task: TaskItem, targetStatus: TaskStatus) => {
+    statusMutation.mutate({ task, targetStatus });
   };
 
-  // Handle Checklist Item Toggle
-  const handleToggleChecklist = async (
+  // Centang checklist is optimistic: the box flips before the round trip and a rejected write
+  // restores the snapshot — app.task_checklist_toggle answers { success, message } instead of
+  // throwing, so onSuccess has to roll back too. onSettled still refetches, because the server
+  // is the one that derives progress and status from the checklist rows.
+  const checklistToggleMutation = useMutation({
+    mutationFn: (vars: { taskId: string; checklistId: string; done: boolean }) =>
+      toggleChecklistItemAction(vars.taskId, vars.checklistId, vars.done),
+    onMutate: async (vars) => {
+      await queryClient.cancelQueries({ queryKey: tasksKey });
+      const previous = queryClient.getQueryData<TaskItem[]>(tasksKey);
+      patchTasks((prev) =>
+        prev.map((t) =>
+          t.id === vars.taskId
+            ? {
+                ...t,
+                checklist: t.checklist.map((c) =>
+                  c.id === vars.checklistId ? { ...c, done: vars.done } : c
+                ),
+              }
+            : t
+        )
+      );
+      return { previous };
+    },
+    onError: (_error, _vars, context) => {
+      if (context?.previous) queryClient.setQueryData(tasksKey, context.previous);
+    },
+    onSuccess: (res, _vars, context) => {
+      // Only a rejected write speaks up, exactly as before the migration.
+      if (!res.success) {
+        if (context?.previous) queryClient.setQueryData(tasksKey, context.previous);
+        setToastMessage({ type: "error", text: res.message });
+      }
+    },
+    onSettled: () => invalidateTasks(queryClient, user),
+  });
+
+  const handleToggleChecklist = (
     taskId: string,
     checklistId: string,
     currentDone: boolean
   ) => {
-    const nextDone = !currentDone;
-    setTasks((prev) =>
-      prev.map((t) => {
-        if (t.id === taskId) {
-          return {
-            ...t,
-            checklist: t.checklist.map((c) =>
-              c.id === checklistId ? { ...c, done: nextDone } : c
-            ),
-          };
-        }
-        return t;
-      })
-    );
-
-    const result = await toggleChecklistItemAction(taskId, checklistId, nextDone);
-    if (!result.success) {
-      setTasks((prev) => prev.map((t) => t.id === taskId ? { ...t, checklist: t.checklist.map((c) => c.id === checklistId ? { ...c, done: currentDone } : c) } : t));
-      setToastMessage({ type: "error", text: result.message });
-    }
+    checklistToggleMutation.mutate({ taskId, checklistId, done: !currentDone });
   };
 
   const handleAddChecklist = async (taskId: string, text: string) => {
     const result = await addChecklistItemAction(taskId, text);
     setToastMessage({ type: result.success ? "success" : "error", text: result.message });
     if (result.success && result.data) {
-      setTasks((prev) => prev.map((task) => task.id === taskId ? { ...task, checklist: [...task.checklist, { id: result.data!.itemId, text: text.trim(), done: false }] } : task));
+      const itemId = result.data.itemId;
+      patchTasks((prev) => prev.map((task) => task.id === taskId ? { ...task, checklist: [...task.checklist, { id: itemId, text: text.trim(), done: false }] } : task));
+      await invalidateTasks(queryClient, user);
     }
     return result.success;
   };
@@ -198,13 +221,19 @@ export default function TugasPage() {
   const handleUpdateChecklist = async (taskId: string, checklistId: string, text: string) => {
     const result = await updateChecklistItemAction(taskId, checklistId, text);
     setToastMessage({ type: result.success ? "success" : "error", text: result.message });
-    if (result.success) setTasks((prev) => prev.map((task) => task.id === taskId ? { ...task, checklist: task.checklist.map((item) => item.id === checklistId ? { ...item, text: text.trim() } : item) } : task));
+    if (result.success) {
+      patchTasks((prev) => prev.map((task) => task.id === taskId ? { ...task, checklist: task.checklist.map((item) => item.id === checklistId ? { ...item, text: text.trim() } : item) } : task));
+      await invalidateTasks(queryClient, user);
+    }
   };
 
   const handleDeleteChecklist = async (taskId: string, checklistId: string) => {
     const result = await deleteChecklistItemAction(taskId, checklistId);
     setToastMessage({ type: result.success ? "success" : "error", text: result.message });
-    if (result.success) setTasks((prev) => prev.map((task) => task.id === taskId ? { ...task, checklist: task.checklist.filter((item) => item.id !== checklistId) } : task));
+    if (result.success) {
+      patchTasks((prev) => prev.map((task) => task.id === taskId ? { ...task, checklist: task.checklist.filter((item) => item.id !== checklistId) } : task));
+      await invalidateTasks(queryClient, user);
+    }
   };
 
   // Handle Create Task Submission
@@ -260,7 +289,7 @@ export default function TugasPage() {
           }),
         };
 
-        setTasks((prev) => editingTaskId
+        patchTasks((prev) => editingTaskId
           ? prev.map((task) => task.id === editingTaskId ? { ...task, ...nextTask, status: task.status, checklist: task.checklist, assignees: task.assignees } : task)
           : [nextTask, ...prev]);
         setToastMessage({ type: "success", text: res.message });
@@ -292,7 +321,7 @@ export default function TugasPage() {
         closeConfirm();
         const result = await deleteTaskAction(task.id);
         setToastMessage({ type: result.success ? "success" : "error", text: result.message });
-        if (result.success) setTasks((current) => current.filter((item) => item.id !== task.id));
+        if (result.success) patchTasks((current) => current.filter((item) => item.id !== task.id));
       }
     );
   };
@@ -329,7 +358,7 @@ export default function TugasPage() {
       : await createProjectAction(projectForm);
     setToastMessage({ type: result.success ? "success" : "error", text: result.message });
     if (result.success) {
-      await projectsQuery.refresh();
+      await invalidateProjects(queryClient, user);
       setIsProjectDialogOpen(false);
     }
     setIsSavingProject(false);
@@ -343,7 +372,7 @@ export default function TugasPage() {
         closeConfirm();
         const result = await archiveProjectAction(project.id);
         setToastMessage({ type: result.success ? "success" : "error", text: result.message });
-        if (result.success) setProjects((current) => current.filter((item) => item.id !== project.id));
+        if (result.success) patchProjects((current) => current.filter((item) => item.id !== project.id));
       }
     );
   };
@@ -411,7 +440,7 @@ export default function TugasPage() {
           </div>
           <button
             type="button"
-            onClick={() => { tasksQuery.refresh(); projectsQuery.refresh(); }}
+            onClick={() => { void tasksQuery.refetch(); void projectsQuery.refetch(); }}
             className="underline shrink-0"
           >
             Coba lagi
