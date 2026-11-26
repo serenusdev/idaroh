@@ -127,8 +127,10 @@ SELECT public.self_as('00000000-0000-0000-0000-000000000931');
 SELECT is((SELECT (public.update_own_profile('Pemilik Baru', '0822222222222',
              'https://tracker.example.com/pixel.png'))->>'success'),
   'false', 'an avatar_url outside the caller''s storage folder is refused by the database');
-SELECT is((SELECT avatar_url FROM public.profiles WHERE id = '00000000-0000-0000-0000-000000000931'),
-  NULL, 'the refused avatar left the stored value untouched');
+-- pgTAP's is() does not treat two NULLs as equal, so an absent value is asserted with ok().
+SELECT ok((SELECT avatar_url FROM public.profiles
+           WHERE id = '00000000-0000-0000-0000-000000000931') IS NULL,
+  'the refused avatar left the stored value untouched');
 SELECT is((SELECT (public.update_own_profile('Pemilik Baru', '0822222222222',
              '/storage/v1/object/public/avatars/00000000-0000-0000-0000-000000000931/1700000000.png'))
            ->>'success'),
