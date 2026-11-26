@@ -89,7 +89,11 @@ SELECT throws_ok(
      WHERE id = '00000000-0000-0000-0000-000000000931'$$,
   '42501', NULL, 'an authenticated session can no longer rewrite its own profile row directly');
 
--- 7-9: the session and the account state are judged before anything is written.
+-- 7-8: the account state is judged before anything is written. The identity still points at the
+-- active owner from the privilege probe above, so it has to move to the pending fixture here —
+-- otherwise the RPC succeeds and this test asserts a row away that it just wrote itself.
+SET LOCAL ROLE authenticated;
+SELECT public.self_as('00000000-0000-0000-0000-000000000933');
 SELECT is((public.update_own_profile('Nama Baru', '0822222222222', NULL)->>'message'),
   'Sesi tidak valid atau akun tidak aktif.',
   'a pending account cannot use the self-service profile RPC');
