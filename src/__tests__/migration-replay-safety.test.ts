@@ -60,6 +60,7 @@ describe("pending migration inventory", () => {
       "20261122000014_announcement_command_scope.sql",
       "20261122000015_task_command_scope_rpcs.sql",
       "20261122000016_event_cancel_allow_delete_cancelled.sql",
+      "20261122000017_self_profile_update_rpc.sql",
     ]);
   });
 });
