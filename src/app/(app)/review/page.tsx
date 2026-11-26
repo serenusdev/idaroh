@@ -6,6 +6,7 @@ import { Illustration } from "@/components/ui/illustration";
 import { useIdentity } from "@/components/auth/identity-context";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { cacheKeys, invalidateDashboard } from "@/lib/cache-keys";
+import { REPORT_REVIEW_ROLES, holdsReportReviewRole } from "@/lib/report-policy";
 import { DailyReport, ReviewStatus } from "@/modules/reports/types";
 import { reviewReportAction, getReviewQueueAction } from "@/modules/reports/actions";
 import {
@@ -20,11 +21,21 @@ export default function ReviewPage() {
   const { user: currentUser } = useIdentity();
   const [activeTab, setActiveTab] = React.useState<QueueTab>("pending");
   const [searchQuery, setSearchQuery] = React.useState("");
+  // RVS-01: §3.4 gives the queue to koordinator and pengurus only, and getReviewQueueAction guards
+  // the same pair. The gate therefore has to exist before the query is declared, otherwise a
+  // super_admin or yayasan session fires a request the action is obliged to refuse, and UX-08's
+  // load-failure banner — which means "the read broke, the queue might not be empty" — renders for
+  // what is really a permission answer.
+  const canReview = holdsReportReviewRole(currentUser, REPORT_REVIEW_ROLES);
   // CACHE-01 Batch 2: the queue is the reviewer's own RLS view, so the key carries this session and
   // its active role. The list is read straight from the cache instead of mirrored into a useState,
   // which is what let a reviewer's patch leak into another account's entry before.
   const queryClient = useQueryClient();
-  const queueQuery = useQuery({ queryKey: cacheKeys.reviewQueue(currentUser), queryFn: getReviewQueueAction });
+  const queueQuery = useQuery({
+    queryKey: cacheKeys.reviewQueue(currentUser),
+    queryFn: getReviewQueueAction,
+    enabled: canReview,
+  });
   const reports = React.useMemo<DailyReport[]>(() => queueQuery.data ?? [], [queueQuery.data]);
   const [selectedReportId, setSelectedReportId] = React.useState<string>(queueQuery.data?.[0]?.id ?? "");
 
@@ -87,12 +98,6 @@ export default function ReviewPage() {
 
   const selectedReport =
     reports.find((r) => r.id === selectedReportId) || filteredReports[0] || reports[0];
-
-  const canReview =
-    currentUser?.role === "super_admin" ||
-    currentUser?.role === "yayasan" ||
-    currentUser?.role === "pengurus" ||
-    currentUser?.role === "koordinator";
 
   // CACHE-01 Batch 2: the mutation is declared above the role gate (a hook below an early return is
   // a conditional hook) and reviewReportAction stays the only writer. The SEC-04/TASK-01 idempotency
@@ -162,7 +167,7 @@ export default function ReviewPage() {
   });
 
   if (!canReview) {
-    return <UnauthorizedState requiredRole="Koordinator / Ustadz Pembina / Pengurus" />;
+    return <UnauthorizedState requiredRole="Pengurus / Koordinator" />;
   }
 
   const handleReviewDecision = (decision: "approved" | "revision_required") => {

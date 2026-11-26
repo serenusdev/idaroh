@@ -7,6 +7,7 @@ import { cn } from "@/lib/utils";
 import { MoreSheet } from "./more-sheet";
 import { UserProfile } from "@/lib/auth/types";
 import { AUDIT_READ_ROLES, holdsRole } from "@/lib/export-policy";
+import { holdsReportReviewRole, REPORT_REVIEW_ROLES } from "@/lib/report-policy";
 
 interface MobileNavProps {
   user: UserProfile;
@@ -30,6 +31,11 @@ export function MobileNav({ user }: MobileNavProps) {
 
   const isKoordinator = user.role === "koordinator";
 
+  // RVS-01: the manager sheet used to assume the review queue belonged to every manager. §3.4 says
+  // otherwise — yayasan and super_admin are `—` for report.review — so the entry follows the same
+  // pair getReviewQueueAction guards, across every role the account holds.
+  const canReview = holdsReportReviewRole(user, REPORT_REVIEW_ROLES);
+
   const navItems = isAdminOrPengurus
     ? [
         {
@@ -38,12 +44,12 @@ export function MobileNav({ user }: MobileNavProps) {
           icon: "dashboard",
           active: isActive("/") && !isMoreOpen,
         },
-        {
+        ...(canReview ? [{
           label: "Review",
           href: "/review",
           icon: "fact_check",
           active: isActive("/review") && !isMoreOpen,
-        },
+        }] : []),
         {
           label: "Jadwal",
           href: "/admin/jadwal",
