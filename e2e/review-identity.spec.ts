@@ -43,7 +43,7 @@ window.__reviewIdentityBoundaries = {
 const reactRoot = createRoot(document.getElementById("review-identity-root"));
 flushSync(() => reactRoot.render(React.createElement(IdentityProvider, {
   initialUser: { id: "reviewer-session", role: "koordinator", roles: ["koordinator"], status: "active", full_name: "Ustadz Salman Uji", team_name: "Tim Pembina Uji", email: "salman@example.test", member_type: "pengurus" },
-}, React.createElement(QueryProvider, null, React.createElement(ReviewPage))));
+}, React.createElement(QueryProvider, null, React.createElement(ReviewPage)))));
 `;
 const modules: Record<string, string> = {
   "@/modules/reports/actions": `

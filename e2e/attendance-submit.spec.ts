@@ -59,7 +59,7 @@ window.__attSubmitUI = {
 const reactRoot = createRoot(document.getElementById("att-submit-root"));
 flushSync(() => reactRoot.render(React.createElement(IdentityProvider, {
   initialUser: { id: "santri-a", role: "santri", roles: ["santri"], status: "active", full_name: "Santri Uji", email: "santri@example.test", member_type: "santri" },
-}, React.createElement(QueryProvider, null, React.createElement(KehadiranPage))));
+}, React.createElement(QueryProvider, null, React.createElement(KehadiranPage)))));
 `;
 const modules: Record<string, string> = {
   "@/modules/attendance/actions": `

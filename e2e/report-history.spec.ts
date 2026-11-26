@@ -118,11 +118,10 @@ test.beforeAll(async () => {
   for (const file of ["src/app/(app)/laporan/page.tsx", "src/components/auth/identity-context.tsx"]) {
     expect(inputs.some(input => input.endsWith(file)), `Bundled actual ${file}`).toBe(true);
   }
-  // CACHE-01 Batch 2: /laporan left the manual data-cache behind, so neither legacy module may be
-  // pulled into this bundle any more.
-  for (const file of ["src/hooks/use-cached-data.ts", "src/lib/data-cache.ts"]) {
-    expect(inputs.some(input => input.endsWith(file)), `Bundled legacy ${file}`).toBe(false);
-  }
+  // CACHE-01 Batch 2: /laporan left the manual cache hook behind, so it may not be pulled into this
+  // bundle any more. src/lib/data-cache.ts still is — cache-keys.ts imports it for the policy and
+  // dashboard bridges that /admin/audit needs until Batch 3.
+  expect(inputs.some(input => input.endsWith("src/hooks/use-cached-data.ts")), "Bundled legacy use-cached-data").toBe(false);
   expect(inputs.some(input => /src\/lib\/supabase\/|src\/modules\/.*\/actions\.ts/.test(input))).toBe(false);
   bundle = result.outputFiles[0].text;
 });

@@ -42,7 +42,7 @@ window.__auditBoundaries = {
 const reactRoot = createRoot(document.getElementById("audit-root"));
 flushSync(() => reactRoot.render(React.createElement(IdentityProvider, {
   initialUser: { id: "yayasan-a", role: config.role || "yayasan", status: "active", full_name: "Yayasan Uji" },
-}, React.createElement(QueryProvider, null, React.createElement(AdminAuditPage))));
+}, React.createElement(QueryProvider, null, React.createElement(AdminAuditPage)))));
 `;
 const modules: Record<string, string> = {
   "@/modules/analytics/actions": `

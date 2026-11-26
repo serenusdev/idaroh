@@ -38,7 +38,7 @@ window.__reviewBoundaries = {
 const reactRoot = createRoot(document.getElementById("review-root"));
 flushSync(() => reactRoot.render(React.createElement(IdentityProvider, {
   initialUser: { id: "reviewer-a", role: "pengurus", status: "active", full_name: "Pengurus Uji" },
-}, React.createElement(QueryProvider, null, React.createElement(AdminAttendanceReviewPage))));
+}, React.createElement(QueryProvider, null, React.createElement(AdminAttendanceReviewPage)))));
 `;
 const modules: Record<string, string> = {
   "@/modules/attendance/actions": `
