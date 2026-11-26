@@ -42,7 +42,7 @@ Yang tersisa adalah ukuran asetnya. Baseline terukur 2026-11-25 pada `main`:
 
 | Item | File | Selesai bila | Risiko | Rollback |
 |---|---|---|---|---|
-| FONT-02 — re-slice subset ikon | `public/fonts/material-symbols-outlined-subset.woff2`, script baru `scripts/build-icon-subset.*` | File < 60 KB; hanya 148 nama + `.notdef`; `fonts.test.ts` tetap hijau penuh tanpa mengubah assertion mana pun; path & nama file tidak berubah sehingga `globals.css`, `layout.tsx`, `middleware.ts` tidak perlu disentuh; `Content-Length` produksi dicatat sebelum vs sesudah | Subset kehilangan ligature yang baru ditambahkan orang lain; sumbu variabel hilang sehingga `FILL 1` mati; `liga` GSUB terbuang saat slicing | Simpan woff2 lama sebagai artefak, revert asset saja (satu file, tanpa migrasi, tanpa perubahan kode); URL tidak berubah sehingga cukup re-deploy |
+| FONT-02 — re-slice subset ikon | `public/fonts/material-symbols-outlined-subset.woff2`, `scripts/subset-material-icons.mjs` | File 122.864 B (−96,6% dari 3.585.732), 188 glyph, 151 nama (148 `src` + 3 seed); 4 sumbu + `liga` + `FILL 0..1` utuh; `fonts.test.ts` hijau penuh — gerbang ukuran ditetapkan < 140 KB atas keputusan operator; path & nama file tidak berubah sehingga `globals.css`, `layout.tsx`, `middleware.ts`, `public/sw.js` tidak disentuh; `Content-Length` produksi dicatat sebelum vs sesudah | Subset kehilangan ligature yang baru ditambahkan orang lain (dijaga skrip + tes); sumbu variabel hilang sehingga `FILL 1` mati (dijaga assertion `fonts.test.ts:203-210`) | Simpan woff2 lama sebagai artefak, revert asset saja (satu file, tanpa migrasi, tanpa perubahan kode); URL tidak berubah sehingga cukup re-deploy |
 
 Syarat yang wajib dipertahankan slicing (sudah dipinned tes, jadi hasil re-slice terverifikasi otomatis):
 
@@ -56,18 +56,52 @@ Syarat yang wajib dipertahankan slicing (sudah dipinned tes, jadi hasil re-slice
 
 Catatan pelaksanaan:
 
-- Tooling belum ada di mesin kerja: `pyftsubset` tidak ditemukan dan `fontTools` tidak terinstal.
-  Pasang `fonttools[brotli]` (atau paket npm `subset-font`) dan **commit skrip slicingnya** supaya
-  hasil bisa diulang saat jumlah ikon bertambah; slicing manual sekali jalan akan basi.
-- Sumber woff2 asli diambil dari rilis Material Symbols yang sudah dipakai (versinya dicatat di
-  skrip), bukan dari URL `fonts.googleapis.com` — aplikasi tidak boleh menambah kembali host itu.
-- Peluang ukuran tambahan yang **butuh keputusan pemilik desain**, bukan asumsi agen: tidak ada
-  utilitas bobot (`font-bold` dan sejenisnya) yang menempel pada span ikon, jadi `wght`/`GRAD`/`opsz`
-  praktis hanya dipakai pada nilai default. Menyatukannya jadi satu instance akan memperkecil file,
-  tetapi melanggar `fonts.test.ts:180-185` yang menuntut keempat sumbu ada — assertion itu harus
-  diubah secara sadar dan terpisah, bukan ikut "dilonggarkan" agar build lolos.
+- Slicing tidak boleh jadi kerja sekali jalan: `scripts/subset-material-icons.mjs` di-commit dan
+  berjalan murni di Node/wasm memakai dependency yang sudah ada di `package.json`
+  (`harfbuzzjs` + `fontverter` + `@pdf-lib/fontkit` + `typescript`), tanpa `pyftsubset`/`fontTools`.
+  `--names` mencetak daftar ikon yang akan retained, `--check` melaporkan drift terhadap file shipped.
+- Sumber woff2 asli = rilis Material Symbols yang dipakai aplikasi, dinaikkan ke v387 karena
+  master v2.978 tidak punya ligature `diversity_1`/`more_horiz`/`volunteer_activism`. Diunduh ke
+  `.cache/` (gitignored) dan di-pin SHA-256 di dalam skrip, bukan dari `fonts.googleapis.com` —
+  runtime aplikasi tetap nol request ke host itu.
+- Peluang ukuran tambahan butuh keputusan pemilik desain, bukan asumsi agen: tidak ada utilitas bobot
+  yang menempel pada span ikon, jadi `wght`/`GRAD`/`opsz` praktis hanya dipakai pada nilai default,
+  tetapi `fonts.test.ts:203-210` menuntut keempat sumbu ada pada range penuh. **Diputuskan operator
+  2026-11-26: pertahankan 4 sumbu (Opsi 1)** — kontrak sumbu tidak diubah, skrip tetap bebas
+  `fontTools`, dan yang disesuaikan hanyalah ambang ukuran (lihat Status di bawah).
 - Tidak perlu menaikkan `CACHE_NAME` service worker: `public/sw.js` tidak pernah memanggil
   `cache.put` untuk font/stylesheet, dan respons Vercel memakai `max-age=0, must-revalidate`.
+
+### Status FONT-02 — terukur 2026-11-26 (`scripts/subset-material-icons.mjs`, branch `feat/wave4-1-icon-font-subsetting`)
+
+Sudah berjalan: subset diregenerasi dari master upstream v387 (`Version 2.985`, 6.683 glyph) menjadi
+**122.864 byte / 188 glyph** (−96,6% dari 3.585.732). 151 nama ikon retained = 148 dari `src` +
+3 seed-only (`diversity_1`, `more_horiz`, `volunteer_activism`) yang **selama ini tampil sebagai teks
+mentah di `/laporan`** karena master v2.978 tidak punya ligature-nya; upgrade master memperbaikinya.
+Keempat sumbu, `liga`, dan `FILL 0..1` utuh — `fonts.test.ts` hijau kecuali gerbang ukuran.
+
+Angka floor (151 ikon), diukur dua toolchain berbeda dan konsisten:
+
+| Varian subset | woff2 | Ket. |
+|---|---|---|
+| 4 sumbu penuh (FILL, wght, GRAD, opsz) | **122.864 B** (harfbuzz) / 121.720–121.848 B (fontTools) | `gvar` = 218.127 dari 256.168 B TTF; `glyf` hanya 25.730 B |
+| Buang `GRAD`+`opsz` (sisa FILL+wght) | 38.012 B | melanggar `fonts.test.ts:203-210` |
+| Buang `wght`+`GRAD` (sisa FILL+opsz) | 37.896 B | melanggar `fonts.test.ts:203-210` |
+| Buang `wght`+`GRAD`+`opsz` (sisa FILL) | 18.296 B | `FILL 1` tetap hidup; melanggar assertion sumbu |
+| Static tanpa sumbu | 14.836 B | `FILL 1` mati → 5 call site rusak |
+
+Kesimpulan: **< 100 KB tidak mungkin dicapai dengan 151 ikon × 4 sumbu penuh** — biaya ~810 B/ikon
+hampir semuanya data delta varian, bukan outline (base letter 38 glyph hanya ±4 KB, glyph name `post`
+±1 KB, dan kualitas brotli tidak menutupi 22 KB sisanya). Menambah/mengurangi jumlah ikon bukan jalan
+keluar: tes lama menuntut setiap nama yang ada di `src` bentuk.
+
+**Keputusan & keadaan akhir (2026-11-26).** Operator memilih Opsi 1: 4 sumbu dipertahankan, aset
+shipped 122.864 B, dan gerbang ukuran `src/__tests__/fonts.test.ts:178-185` plus `SIZE_BUDGET` skrip
+diseragamkan ke **< 140 KB** dengan komentar yang menyebut lantainya. Assertion sumbu, `liga`,
+`familyName`, `wOF2`, preload `<head>`, dan 148+3 nama tidak diubah. Bukti: `npm test` 1111/1111 hijau,
+`npx tsc --noEmit` exit 0, `node scripts/subset-material-icons.mjs --check` konsisten dengan file
+shipped. Belum terverifikasi: `Content-Length` produksi (butuh deploy) dan rendering visual 151 ikon
+di browser.
 
 ## Release gates
 - Gate 1: no CRITICAL security/backup/identity defect without mitigation.
