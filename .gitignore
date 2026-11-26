@@ -46,3 +46,6 @@ test-results/
 .open-next/
 .wrangler/
 .dev.vars
+
+# Material Symbols master font cached by scripts/subset-material-icons.mjs (4 MB, never served)
+.cache/

@@ -1,4 +1,4 @@
-import { readFileSync, readdirSync } from "node:fs";
+import { readFileSync, readdirSync, statSync } from "node:fs";
 import { relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { create, type Font } from "@pdf-lib/fontkit";
@@ -171,6 +171,31 @@ describe("self-hosted fonts and zoom", () => {
     for (const name of names) {
       const glyphs = symbols.layout(name).glyphs;
       expect(glyphs, `Missing ligature: ${name}`).toHaveLength(1);
+      expect(glyphs[0].id, `Missing glyph: ${name}`).not.toBe(0);
+    }
+  });
+
+  it("keeps the icon font a real subset instead of the 3.58 MB master", () => {
+    const bytes = statSync(resolve(root, "public/fonts/material-symbols-outlined-subset.woff2")).size;
+    // Floor for the 151 icons the app renders with all four axes intact: 122.864 B, where gvar delta
+    // data is 218.127 of the 256.168 uncompressed bytes and outlines are only 25.730 B. Budget sits
+    // just above it (96.6% below the 3.58 MB master) so a new icon costs ~810 B before this trips.
+    expect(bytes).toBeLessThan(140 * 1024);
+    expect(symbols.numGlyphs).toBeLessThan(1000);
+  });
+
+  it("shapes database-seeded category icons that never appear in src", () => {
+    const sql = readFileSync(resolve(root, "supabase/migrations/20261101000004_activity_reports_schema.sql"), "utf8");
+    const seeds = sql.match(/INSERT INTO public\.report_categories[\s\S]*?VALUES([\s\S]*?);/)?.[1] ?? "";
+    const names = new Set<string>([
+      ...[...seeds.matchAll(/\('[^']+',\s*'[^']+',\s*'([a-z0-9_]+)'/g)].map((m) => m[1]),
+      ...[...sql.matchAll(/icon\s+text\s+DEFAULT\s+'([a-z0-9_]+)'/g)].map((m) => m[1]),
+    ]);
+    // These three exist only as rows, so a src-only subset would silently blank them.
+    expect([...names]).toEqual(expect.arrayContaining(["diversity_1", "more_horiz", "volunteer_activism"]));
+    for (const name of names) {
+      const glyphs = symbols.layout(name).glyphs;
+      expect(glyphs, `Missing seeded icon: ${name}`).toHaveLength(1);
       expect(glyphs[0].id, `Missing glyph: ${name}`).not.toBe(0);
     }
   });
