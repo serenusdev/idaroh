@@ -6,6 +6,7 @@ import { DesktopHeader } from "./desktop-header";
 import { UserProfile } from "@/lib/auth/types";
 import { PushNotificationsInit } from "@/components/notifications/push-notifications-init";
 import { IdentityProvider } from "@/components/auth/identity-context";
+import { QueryProvider } from "@/components/providers/query-provider";
 import { ToastProvider } from "@/components/ui/toast";
 
 interface AppShellProps {
@@ -16,25 +17,29 @@ interface AppShellProps {
 export function AppShell({ children, user }: AppShellProps) {
   return (
     <IdentityProvider initialUser={user}>
-      <ToastProvider>
-        <div className="min-h-screen bg-background text-on-surface antialiased flex flex-col">
-          <PushNotificationsInit userId={user.id} />
-          {/* Mobile Header & Bottom Navigation */}
-          <MobileHeader key={user.id} user={user} />
-          <MobileNav user={user} />
+      {/* Same reset the headers already use, extended to the cache: a new session or a new active
+          role means a new QueryClient, so no row fetched under the old identity survives (D3). */}
+      <QueryProvider key={`${user.id}:${user.role}`}>
+        <ToastProvider>
+          <div className="min-h-screen bg-background text-on-surface antialiased flex flex-col">
+            <PushNotificationsInit userId={user.id} />
+            {/* Mobile Header & Bottom Navigation */}
+            <MobileHeader key={user.id} user={user} />
+            <MobileNav user={user} />
 
-          {/* Desktop Persistent Sidebar & Header */}
-          <DesktopSidebar user={user} />
-          <DesktopHeader key={user.id} user={user} />
+            {/* Desktop Persistent Sidebar & Header */}
+            <DesktopSidebar user={user} />
+            <DesktopHeader key={user.id} user={user} />
 
-          {/* Main Content Area */}
-          <main className="flex-1 w-full pt-16 pb-24 md:pb-8 md:pl-64 transition-all">
-            <div className="max-w-6xl mx-auto px-4 sm:px-6 py-4 md:py-6">
-              {children}
-            </div>
-          </main>
-        </div>
-      </ToastProvider>
+            {/* Main Content Area */}
+            <main className="flex-1 w-full pt-16 pb-24 md:pb-8 md:pl-64 transition-all">
+              <div className="max-w-6xl mx-auto px-4 sm:px-6 py-4 md:py-6">
+                {children}
+              </div>
+            </main>
+          </div>
+        </ToastProvider>
+      </QueryProvider>
     </IdentityProvider>
   );
 }

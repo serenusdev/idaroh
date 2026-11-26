@@ -22,8 +22,8 @@ import {
 } from "@/modules/schedules/actions";
 import type { ScheduleEventItem, AnnouncementItem } from "@/modules/schedules/types";
 import type { CreateEventPayload } from "@/modules/schedules/actions";
-import { useCachedData } from "@/hooks/use-cached-data";
-import { invalidateCache } from "@/lib/data-cache";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { cacheKeys, invalidateAnnouncements, invalidateEvents } from "@/lib/cache-keys";
 import {
   AGENDA_MANAGER_ROLES,
   AGENDA_WRITE_ROLES,
@@ -144,20 +144,27 @@ export default function AdminJadwalPage() {
   const canManageAnnouncements = isAgendaManager;
 
   // Data states
-  // `admin:events:` and not `events:`: this fetch keeps the cancelled days so the restore
-  // control has a row to act on, and the user surfaces share the plain key.
-  const eventsQuery = useCachedData(
-    canManageEvents ? `admin:events:${currentUser.id}` : null,
-    () => getEventsAction({ includeCancelledOccurrences: true }),
-  );
-  const announcementsQuery = useCachedData(
-    canManageAnnouncements ? `admin:announcements:${currentUser.id}` : null,
-    getAdminAnnouncementsAction
-  );
-  const audienceQuery = useCachedData(
-    canManageEvents ? `event-audience:${currentUser.id}` : null,
-    getEventAudienceOptionsAction
-  );
+  // `admin:events` and not `events`: this fetch keeps the cancelled days so the restore control
+  // has a row to act on, and the user surfaces hold their own key. Both keys carry the session id
+  // and the active role (CACHE-01), so a manager cannot read a santri entry or vice versa.
+  const queryClient = useQueryClient();
+  const eventsQuery = useQuery({
+    queryKey: cacheKeys.adminEvents(currentUser),
+    queryFn: () => getEventsAction({ includeCancelledOccurrences: true }),
+    enabled: canManageEvents,
+  });
+  const announcementsQuery = useQuery({
+    queryKey: cacheKeys.adminAnnouncements(currentUser),
+    queryFn: getAdminAnnouncementsAction,
+    enabled: canManageAnnouncements,
+  });
+  // The audience options only change with team membership, so they may outlive the agenda lists.
+  const audienceQuery = useQuery({
+    queryKey: cacheKeys.audience(currentUser),
+    queryFn: getEventAudienceOptionsAction,
+    enabled: canManageEvents,
+    staleTime: 5 * 60_000,
+  });
   const events: ScheduleEventItem[] = eventsQuery.data ?? [];
   const announcements: AnnouncementItem[] = announcementsQuery.data ?? [];
   const isLoadingData = eventsQuery.isLoading || announcementsQuery.isLoading;
@@ -204,10 +211,44 @@ export default function AdminJadwalPage() {
     expiresAt: "",
   });
 
-  const refreshAnnouncements = () => {
-    announcementsQuery.refresh();
-    invalidateCache("announcements:");
-  };
+  // The Server Actions stay the only write path (they are the layer that calls the RPC, checks
+  // auth.uid() and writes audit_logs). A mutation here only owns the cache reset that follows a
+  // committed write: the manager list, the user surfaces and the dashboard's data-cache copy.
+  const eventSaveMutation = useMutation({
+    mutationFn: (payload: CreateEventPayload) =>
+      editingEventId ? updateEventAction(editingEventId, payload) : createEventAction(payload),
+    onSettled: () => invalidateEvents(queryClient, currentUser),
+  });
+
+  const deleteEventMutation = useMutation({
+    mutationFn: (eventId: string) => deleteEventAction(eventId),
+    onSettled: () => invalidateEvents(queryClient, currentUser),
+  });
+
+  // SCH-01: one cancelled day changes the manager list (it keeps the exception rows) and the
+  // user list (it hides them), so both keys go stale from this single place.
+  const occurrenceMutation = useMutation({
+    mutationFn: ({ evt, cancelled }: { evt: ScheduleEventItem; cancelled: boolean }) =>
+      setEventOccurrenceCancelledAction(evt.id, cancelled),
+    onSettled: () => invalidateEvents(queryClient, currentUser),
+  });
+
+  // The three announcement verbs share a payload, so one mutation carries the dispatch the
+  // handler already made and owns the reset of both announcement keys (manager + user view).
+  const announcementMutation = useMutation({
+    mutationFn: (payload: Parameters<typeof publishAnnouncementAction>[0]) =>
+      editingAnnouncementId
+        ? updateAnnouncementAction(editingAnnouncementId, payload)
+        : payload.status === "draft"
+          ? saveAnnouncementDraftAction(payload)
+          : publishAnnouncementAction(payload),
+    onSettled: () => invalidateAnnouncements(queryClient, currentUser),
+  });
+
+  const announcementDeleteMutation = useMutation({
+    mutationFn: (announcementId: string) => deleteAnnouncementAction(announcementId),
+    onSettled: () => invalidateAnnouncements(queryClient, currentUser),
+  });
 
   const myTeamKeys = new Set(
     (audienceQuery.data?.coordinated ?? []).flatMap((team) => [team.id, team.name])
@@ -245,7 +286,7 @@ export default function AdminJadwalPage() {
       recurrenceRule: eventForm.recurrenceRule,
       recurrenceUntil: eventForm.recurrenceUntil || undefined,
     };
-    const res = editingEventId ? await updateEventAction(editingEventId, payload) : await createEventAction(payload);
+    const res = await eventSaveMutation.mutateAsync(payload);
 
     setIsSubmitting(false);
     if (res.success) {
@@ -263,7 +304,6 @@ export default function AdminJadwalPage() {
         recurrenceRule: "none",
         recurrenceUntil: "",
       });
-      eventsQuery.refresh();
     } else {
       setFeedbackNotice({ type: "error", message: res.message });
     }
@@ -272,15 +312,8 @@ export default function AdminJadwalPage() {
   // Handle Event Delete
   const handleDeleteEvent = async (id: string, title: string) => {
     if (!confirm(`Hapus agenda "${title}" dari jadwal?`)) return;
-    const res = await deleteEventAction(id);
-    if (res.success) {
-      invalidateCache(`admin:events:${currentUser.id}`);
-      invalidateCache("events:");
-      setFeedbackNotice({ type: "success", message: res.message });
-      eventsQuery.refresh();
-    } else {
-      setFeedbackNotice({ type: "error", message: res.message });
-    }
+    const res = await deleteEventMutation.mutateAsync(id);
+    setFeedbackNotice({ type: res.success ? "success" : "error", message: res.message });
   };
 
   // SCH-01: one day of a recurring agenda can be cancelled without touching the
@@ -294,16 +327,9 @@ export default function AdminJadwalPage() {
       : `Batalkan agenda "${evt.title}" hanya pada ${dayLabel}?`)) return;
     setOccurrenceBusyId(evt.id);
     setFeedbackNotice(null);
-    const res = await setEventOccurrenceCancelledAction(evt.id, !restore);
+    const res = await occurrenceMutation.mutateAsync({ evt, cancelled: !restore });
     setOccurrenceBusyId(null);
-    if (res.success) {
-      invalidateCache(`admin:events:${currentUser.id}`);
-      invalidateCache("events:");
-      setFeedbackNotice({ type: "success", message: res.message });
-      eventsQuery.refresh();
-    } else {
-      setFeedbackNotice({ type: "error", message: res.message });
-    }
+    setFeedbackNotice({ type: res.success ? "success" : "error", message: res.message });
   };
 
   // The stored audience may name a team by id, slug or display name; the picker is keyed
@@ -387,11 +413,7 @@ export default function AdminJadwalPage() {
       scheduledFor: announcementForm.scheduledFor || undefined,
       expiresAt: announcementForm.expiresAt || undefined,
     };
-    const res = editingAnnouncementId
-      ? await updateAnnouncementAction(editingAnnouncementId, payload)
-      : announcementForm.status === "draft"
-        ? await saveAnnouncementDraftAction(payload)
-        : await publishAnnouncementAction(payload);
+    const res = await announcementMutation.mutateAsync(payload);
 
     setIsSubmitting(false);
     if (res.success) {
@@ -399,7 +421,6 @@ export default function AdminJadwalPage() {
       setIsAnnouncementModalOpen(false);
       setEditingAnnouncementId(null);
       setAnnouncementForm(emptyAnnouncementForm);
-      refreshAnnouncements();
     } else {
       setFeedbackNotice({ type: "error", message: res.message });
     }
@@ -423,13 +444,8 @@ export default function AdminJadwalPage() {
   // Handle Announcement Delete
   const handleDeleteAnnouncement = async (id: string, title: string) => {
     if (!confirm(`Hapus pengumuman "${title}"?`)) return;
-    const res = await deleteAnnouncementAction(id);
-    if (res.success) {
-      setFeedbackNotice({ type: "success", message: res.message });
-      refreshAnnouncements();
-    } else {
-      setFeedbackNotice({ type: "error", message: res.message });
-    }
+    const res = await announcementDeleteMutation.mutateAsync(id);
+    setFeedbackNotice({ type: res.success ? "success" : "error", message: res.message });
   };
 
   return (
@@ -537,7 +553,7 @@ export default function AdminJadwalPage() {
           </p>
           <button
             type="button"
-            onClick={() => { eventsQuery.refresh(); announcementsQuery.refresh(); }}
+            onClick={() => { void eventsQuery.refetch(); void announcementsQuery.refetch(); }}
             className="mt-4 inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-primary text-on-primary font-label-md text-xs shadow-xs"
           >
             <span className="material-symbols-outlined text-[16px]">refresh</span>
