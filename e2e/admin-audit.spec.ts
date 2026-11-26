@@ -23,6 +23,7 @@ import { createRoot } from "react-dom/client";
 import { flushSync } from "react-dom";
 import AdminAuditPage from "@/app/(app)/admin/audit/page";
 import { IdentityProvider } from "@/components/auth/identity-context";
+import { QueryProvider } from "@/components/providers/query-provider";
 const config = window.__adminAuditConfig;
 const clone = value => value === undefined ? undefined : JSON.parse(JSON.stringify(value));
 window.__adminApproveCalls = [];
@@ -41,7 +42,7 @@ window.__auditBoundaries = {
 const reactRoot = createRoot(document.getElementById("audit-root"));
 flushSync(() => reactRoot.render(React.createElement(IdentityProvider, {
   initialUser: { id: "yayasan-a", role: config.role || "yayasan", status: "active", full_name: "Yayasan Uji" },
-}, React.createElement(AdminAuditPage))));
+}, React.createElement(QueryProvider, null, React.createElement(AdminAuditPage)))));
 `;
 const modules: Record<string, string> = {
   "@/modules/analytics/actions": `

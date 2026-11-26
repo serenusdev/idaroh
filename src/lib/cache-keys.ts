@@ -5,7 +5,8 @@ import type { UserProfile } from "@/lib/auth/types";
 export type CacheSession = Pick<UserProfile, "id" | "role">;
 
 /**
- * Query keys for the surfaces migrated in CACHE-01 Batch 1.
+ * Query keys for every surface migrated in CACHE-01 (Batch 1: tugas + jadwal, Batch 2: kehadiran,
+ * laporan, review, beranda).
  *
  * Every key is `[<surface>:<session id>, <active role>]`. TanStack matches keys element by
  * element, so the id keeps one browser from serving another account's rows and the role is
@@ -21,20 +22,33 @@ export const cacheKeys = {
   adminEvents: (session: CacheSession) => [`admin:events:${session.id}`, session.role] as const,
   adminAnnouncements: (session: CacheSession) => [`admin:announcements:${session.id}`, session.role] as const,
   audience: (session: CacheSession) => [`event-audience:${session.id}`, session.role] as const,
+  attendance: (session: CacheSession) => [`attendance:history:${session.id}`, session.role] as const,
+  // The policy row is organisation-wide, but the CACHE-01 rule is that every key carries the
+  // reading session: getActivePolicyAction() answers through the caller's RLS visibility.
+  policy: (session: CacheSession) => [`policy:active:${session.id}`, session.role] as const,
+  reportsToday: (session: CacheSession) => [`reports:today:${session.id}`, session.role] as const,
+  reportCategories: (session: CacheSession) => [`reports:categories:${session.id}`, session.role] as const,
+  /**
+   * `reports:history:<uid>:<version>:<cursor>` becomes a four-slot key. The version stays inside
+   * the identity on purpose: /laporan bumps it after a save so a read that started before the save
+   * settles on the old key instead of overwriting the refreshed page.
+   */
+  reportsHistory: (session: CacheSession, version: number, before?: string | null) =>
+    [`reports:history:${session.id}`, session.role, String(version), before ?? "latest"] as const,
+  reviewQueue: (session: CacheSession) => [`review:queue:${session.id}`, session.role] as const,
+  dashboard: (session: CacheSession) => [`admin:dashboard-stats:${session.id}`, session.role] as const,
 };
 
-/**
- * Batch 1 leaves the unmigrated surfaces — the dashboard at `/` still calls `useCachedData`
- * with `events:<uid>` and `announcements:<uid>` — so a write has to reset the legacy
- * data-cache next to the TanStack entry. Batch 3 deletes the legacy half of each helper.
- */
+function invalidateAll(client: QueryClient, keys: readonly (readonly unknown[])[]): Promise<void> {
+  return Promise.all(keys.map((key) => client.invalidateQueries({ queryKey: key }))).then(() => undefined);
+}
+
 function invalidateTasks(client: QueryClient, session: CacheSession): Promise<void> {
-  return client.invalidateQueries({ queryKey: cacheKeys.tasks(session) }).then(() => undefined);
+  return invalidateAll(client, [cacheKeys.tasks(session)]);
 }
 
 function invalidateProjects(client: QueryClient, session: CacheSession): Promise<void> {
-  invalidateCache("tasks:projects:");
-  return client.invalidateQueries({ queryKey: cacheKeys.projects(session) }).then(() => undefined);
+  return invalidateAll(client, [cacheKeys.projects(session)]);
 }
 
 /**
@@ -42,19 +56,62 @@ function invalidateProjects(client: QueryClient, session: CacheSession): Promise
  * user view hides them (SCH-05), which is why they hold separate keys and both go stale here.
  */
 function invalidateEvents(client: QueryClient, session: CacheSession): Promise<void> {
-  invalidateCache("events:");
-  return Promise.all([
-    client.invalidateQueries({ queryKey: cacheKeys.adminEvents(session) }),
-    client.invalidateQueries({ queryKey: cacheKeys.events(session) }),
-  ]).then(() => undefined);
+  return invalidateAll(client, [cacheKeys.adminEvents(session), cacheKeys.events(session)]);
 }
 
 function invalidateAnnouncements(client: QueryClient, session: CacheSession): Promise<void> {
-  invalidateCache("announcements:");
-  return Promise.all([
-    client.invalidateQueries({ queryKey: cacheKeys.adminAnnouncements(session) }),
-    client.invalidateQueries({ queryKey: cacheKeys.announcements(session) }),
-  ]).then(() => undefined);
+  return invalidateAll(client, [cacheKeys.adminAnnouncements(session), cacheKeys.announcements(session)]);
 }
 
-export { invalidateTasks, invalidateProjects, invalidateEvents, invalidateAnnouncements };
+/**
+ * A check-in, a correction or an exception all change the same list, and they are written from
+ * three surfaces (/kehadiran, the beranda quick check-in and /admin/kehadiran's decision), so each
+ * caller routes through this one helper.
+ */
+function invalidateAttendance(client: QueryClient, session: CacheSession): Promise<void> {
+  return invalidateAll(client, [cacheKeys.attendance(session)]);
+}
+
+/**
+ * The two-element prefix matches every version and every cursor of this session's history, which
+ * replaces `invalidateCache(`reports:history:${user.id}:`)`. Today's draft goes stale with it
+ * because a save changes both.
+ */
+function invalidateReports(client: QueryClient, session: CacheSession): Promise<void> {
+  return invalidateAll(client, [
+    cacheKeys.reportsToday(session),
+    [`reports:history:${session.id}`, session.role],
+  ]);
+}
+
+/** /laporan submits into the queue that /review reads. */
+function invalidateReviewQueue(client: QueryClient, session: CacheSession): Promise<void> {
+  return invalidateAll(client, [cacheKeys.reviewQueue(session)]);
+}
+
+/**
+ * Two surfaces still read these through `useCachedData`: /admin/audit shows the policy it can also
+ * save, and it reads the same dashboard metrics the beranda shows. Until Batch 3 migrates them, a
+ * write from a migrated surface has to reset the legacy map beside the TanStack entry.
+ */
+function invalidateDashboard(client: QueryClient, session: CacheSession): Promise<void> {
+  invalidateCache("admin:dashboard-stats");
+  return invalidateAll(client, [cacheKeys.dashboard(session)]);
+}
+
+function invalidatePolicy(client: QueryClient, session: CacheSession): Promise<void> {
+  invalidateCache("policy:");
+  return invalidateAll(client, [cacheKeys.policy(session)]);
+}
+
+export {
+  invalidateTasks,
+  invalidateProjects,
+  invalidateEvents,
+  invalidateAnnouncements,
+  invalidateAttendance,
+  invalidateReports,
+  invalidateReviewQueue,
+  invalidateDashboard,
+  invalidatePolicy,
+};

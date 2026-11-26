@@ -65,6 +65,7 @@ import { flushSync } from "react-dom";
 import { NotificationInbox } from "@/components/notifications/notification-inbox";
 import { AccountStateScreen } from "@/components/auth/account-state-screen";
 import { IdentityProvider } from "@/components/auth/identity-context";
+import { QueryProvider } from "@/components/providers/query-provider";
 import AdminBackupPage from "@/app/(app)/admin/backup/page";
 import AdminCronPage from "@/app/(app)/admin/cron/page";
 import BerandaPage from "@/app/(app)/page";
@@ -149,6 +150,11 @@ window.__auditBoundaries = {
 const host = document.getElementById("audit-ui-root");
 let reactRoot = createRoot(host);
 let generation = 0;
+function withQuery(activeMode, element) {
+  // Beranda reads through TanStack Query from CACHE-01 Batch 2 on; the other surfaces in this
+  // harness stay on the manual data-cache until Batch 3 and need no provider.
+  return activeMode === "beranda" ? React.createElement(QueryProvider, null, element) : element;
+}
 function render(mode, props = {}, remount = false) {
   if (remount) generation++;
   state.account = props.userId || "account-a";
@@ -161,7 +167,7 @@ function render(mode, props = {}, remount = false) {
     React.createElement("section", { "aria-label": "First inbox" }, React.createElement(NotificationInbox, { userId: "account-a" })),
     React.createElement("section", { "aria-label": "Second inbox" }, React.createElement(NotificationInbox, { userId: "account-a" })));
   else component = React.createElement(NotificationInbox, { userId: state.account, key: generation });
-  flushSync(() => reactRoot.render(component));
+  flushSync(() => reactRoot.render(withQuery(mode, component)));
 }
 window.__auditUI = {
   snapshot: () => clone({
@@ -262,6 +268,9 @@ test.beforeAll(async () => {
     "src/app/(app)/admin/backup/page.tsx",
     "src/app/(app)/admin/cron/page.tsx",
     "src/app/(app)/page.tsx",
+    // CACHE-01 Batch 2: / is a TanStack surface now; the three surfaces above still pull the
+    // manual cache in, which is why both modules remain in this bundle.
+    "src/components/providers/query-provider.tsx",
     "src/hooks/use-cached-data.ts",
     "src/lib/data-cache.ts",
     "src/lib/safe-url.ts",

@@ -6,7 +6,8 @@ import { Illustration } from "@/components/ui/illustration";
 import { Modal } from "@/components/ui/modal";
 import { useIdentity } from "@/components/auth/identity-context";
 import { useCachedData } from "@/hooks/use-cached-data";
-import { invalidateCache } from "@/lib/data-cache";
+import { useQueryClient } from "@tanstack/react-query";
+import { invalidatePolicy } from "@/lib/cache-keys";
 import { AUDIT_EXPORT_ROLES, EXPORT_ROLES } from "@/lib/export-policy";
 import {
   exportAuditedDataAction,
@@ -22,6 +23,9 @@ import {
 
 export default function AdminAuditPage() {
   const { user: currentUser } = useIdentity();
+  // CACHE-01 Batch 2: this page keeps its legacy reads until Batch 3, but a policy activation is now
+  // also read from TanStack keys by / and /kehadiran, so it resets both caches through one helper.
+  const queryClient = useQueryClient();
   const [scope, setScope] = React.useState("Semua Tim (Organisasi)");
   const [auditPage, setAuditPage] = React.useState(1);
   const [searchLogQuery, setSearchLogQuery] = React.useState("");
@@ -197,7 +201,7 @@ export default function AdminAuditPage() {
     setToastMessage(result.message);
     if (result.success) {
       reload();
-      invalidateCache("policy:");
+      void invalidatePolicy(queryClient, currentUser);
     }
   };
 

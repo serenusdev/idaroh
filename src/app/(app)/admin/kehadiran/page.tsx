@@ -5,10 +5,14 @@ import { getAttendanceReviewQueueAction, reviewAttendanceCorrectionAction, revie
 import { useIdentity } from "@/components/auth/identity-context";
 import { UnauthorizedState } from "@/components/ui/unauthorized-state";
 import { useCachedData } from "@/hooks/use-cached-data";
-import { invalidateCache } from "@/lib/data-cache";
+import { useQueryClient } from "@tanstack/react-query";
+import { invalidateAttendance } from "@/lib/cache-keys";
 
 export default function AdminAttendanceReviewPage() {
   const { user } = useIdentity();
+  // CACHE-01 Batch 2: this page's own read stays legacy until Batch 3, but a decision here changes
+  // the santri's /kehadiran history, which is TanStack-owned from now on.
+  const queryClient = useQueryClient();
   const queueQuery = useCachedData("admin:attendance-review", getAttendanceReviewQueueAction);
   const queue = queueQuery.data ?? { corrections: [], exceptions: [] };
   const [notice, setNotice] = React.useState<string | null>(null);
@@ -40,7 +44,7 @@ export default function AdminAttendanceReviewPage() {
       if (result.success) {
         setApprovingCorrection(null);
         queueQuery.refresh();
-        invalidateCache("attendance:history");
+        void invalidateAttendance(queryClient, user);
       }
     } catch {
       setNotice("Terjadi kesalahan saat memproses keputusan. Silakan coba lagi.");

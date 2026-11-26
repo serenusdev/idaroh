@@ -34,8 +34,12 @@ describe("Cabang 3 (TSK-02 + ADM D3 + Import/People) — Tahap B contract pins",
     expect(analytics).toMatch(/isOperationalDashboardRole|holdsRole\(user,\s*\[\s*"pengurus"\s*,\s*"yayasan"\s*\]\)/);
     expect(analytics).toContain("systemHealth");
 
-    // Per-user namespaced cache keys (no shared "admin:dashboard-stats" across roles/users)
-    expect(homePage).toContain("`admin:dashboard-stats:${currentUser.id}`");
+    // Per-user namespaced cache keys (no shared "admin:dashboard-stats" across roles/users). The
+    // beranda moved onto TanStack Query in CACHE-01 Batch 2, so its namespace now comes from the
+    // key builder; /admin/audit is still a data-cache reader until Batch 3 and keeps the literal.
+    const cacheKeys = read("src/lib/cache-keys.ts");
+    expect(homePage).toContain("cacheKeys.dashboard(currentUser)");
+    expect(cacheKeys).toContain("`admin:dashboard-stats:${");
     expect(auditPage).toContain("`admin:dashboard-stats:${currentUser.id}`");
     expect(homePage).not.toMatch(/useCachedData\([^)]*"admin:dashboard-stats"[^)]*\)/);
     expect(auditPage).not.toMatch(/useCachedData\([^)]*"admin:dashboard-stats"[^)]*\)/);

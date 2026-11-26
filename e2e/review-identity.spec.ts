@@ -29,6 +29,7 @@ import { createRoot } from "react-dom/client";
 import { flushSync } from "react-dom";
 import ReviewPage from "@/app/(app)/review/page";
 import { IdentityProvider } from "@/components/auth/identity-context";
+import { QueryProvider } from "@/components/providers/query-provider";
 const config = window.__reviewIdentityConfig;
 const clone = value => value === undefined ? undefined : JSON.parse(JSON.stringify(value));
 window.__reviewIdentityCalls = [];
@@ -42,7 +43,7 @@ window.__reviewIdentityBoundaries = {
 const reactRoot = createRoot(document.getElementById("review-identity-root"));
 flushSync(() => reactRoot.render(React.createElement(IdentityProvider, {
   initialUser: { id: "reviewer-session", role: "koordinator", roles: ["koordinator"], status: "active", full_name: "Ustadz Salman Uji", team_name: "Tim Pembina Uji", email: "salman@example.test", member_type: "pengurus" },
-}, React.createElement(ReviewPage))));
+}, React.createElement(QueryProvider, null, React.createElement(ReviewPage)))));
 `;
 const modules: Record<string, string> = {
   "@/modules/reports/actions": `
@@ -66,7 +67,7 @@ test.beforeAll(async () => {
     define: { "process.env.NODE_ENV": '"development"' }, plugins: [boundaries], metafile: true,
   });
   const inputs = Object.keys(result.metafile!.inputs);
-  for (const file of ["src/app/(app)/review/page.tsx", "src/components/auth/identity-context.tsx"]) {
+  for (const file of ["src/app/(app)/review/page.tsx", "src/components/auth/identity-context.tsx", "src/components/providers/query-provider.tsx"]) {
     expect(inputs.some(input => input.endsWith(file)), `Bundled actual ${file}`).toBe(true);
   }
   expect(inputs.some(input => /src\/lib\/supabase\/|src\/modules\/.*\/actions\.ts/.test(input))).toBe(false);

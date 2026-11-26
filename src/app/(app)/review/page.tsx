@@ -4,8 +4,8 @@ import * as React from "react";
 import { UnauthorizedState } from "@/components/ui/unauthorized-state";
 import { Illustration } from "@/components/ui/illustration";
 import { useIdentity } from "@/components/auth/identity-context";
-import { useCachedData } from "@/hooks/use-cached-data";
-import { invalidateCache, writeCache } from "@/lib/data-cache";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { cacheKeys, invalidateDashboard } from "@/lib/cache-keys";
 import { DailyReport, ReviewStatus } from "@/modules/reports/types";
 import { reviewReportAction, getReviewQueueAction } from "@/modules/reports/actions";
 import {
@@ -20,20 +20,18 @@ export default function ReviewPage() {
   const { user: currentUser } = useIdentity();
   const [activeTab, setActiveTab] = React.useState<QueueTab>("pending");
   const [searchQuery, setSearchQuery] = React.useState("");
-  const queueQuery = useCachedData(`review:queue:${currentUser.id}`, getReviewQueueAction);
-  const [reports, setReports] = React.useState<DailyReport[]>(queueQuery.data ?? []);
+  // CACHE-01 Batch 2: the queue is the reviewer's own RLS view, so the key carries this session and
+  // its active role. The list is read straight from the cache instead of mirrored into a useState,
+  // which is what let a reviewer's patch leak into another account's entry before.
+  const queryClient = useQueryClient();
+  const queueQuery = useQuery({ queryKey: cacheKeys.reviewQueue(currentUser), queryFn: getReviewQueueAction });
+  const reports = React.useMemo<DailyReport[]>(() => queueQuery.data ?? [], [queueQuery.data]);
   const [selectedReportId, setSelectedReportId] = React.useState<string>(queueQuery.data?.[0]?.id ?? "");
 
   React.useEffect(() => {
-    if (queueQuery.data) {
-      const list = queueQuery.data;
-      setReports(list);
-      setSelectedReportId((current) => current || list[0]?.id || "");
-    }
+    const list = queueQuery.data;
+    if (list) setSelectedReportId((current) => current || list[0]?.id || "");
   }, [queueQuery.data]);
-  React.useEffect(() => {
-    writeCache(`review:queue:${currentUser.id}`, reports);
-  }, [reports, currentUser.id]);
 
   // Compute live counts from reports
   const filterCounts = React.useMemo(() => {
@@ -96,11 +94,78 @@ export default function ReviewPage() {
     currentUser?.role === "pengurus" ||
     currentUser?.role === "koordinator";
 
+  // CACHE-01 Batch 2: the mutation is declared above the role gate (a hook below an early return is
+  // a conditional hook) and reviewReportAction stays the only writer. The SEC-04/TASK-01 idempotency
+  // bookkeeping is deliberately kept in the click handler rather than inside mutationFn: a retrying
+  // or optimistic mutation would replay a decision, which is exactly what that machinery prevents.
+  const reviewDecisionMutation = useMutation({
+    mutationFn: (input: {
+      decision: "approved" | "revision_required";
+      reportId: string;
+      revisionNo: number;
+      notes: string;
+      storageKey: string;
+      idempotencyKey: string;
+    }) =>
+      reviewReportAction({
+        reportId: input.reportId,
+        revisionNo: input.revisionNo,
+        decision: input.decision,
+        notes: input.notes,
+        idempotencyKey: input.idempotencyKey,
+        reviewerName: currentUser.full_name,
+      }),
+    onSuccess: (res, input) => {
+      if (!res.success) {
+        setAlertNotice({ type: "error", message: res.message });
+        return;
+      }
+      setAlertNotice({ type: "success", message: res.message });
+      // The decided row is patched inside the queue cache, so the detail pane and the tab counts
+      // follow without a second copy of the list.
+      queryClient.setQueryData<DailyReport[]>(cacheKeys.reviewQueue(currentUser), (prev) =>
+        (prev ?? []).map((r) => {
+          if (r.id !== input.reportId) return r;
+          const updatedStatus: ReviewStatus =
+            input.decision === "approved" ? "approved" : "revision_required";
+          return {
+            ...r,
+            reviewStatus: updatedStatus,
+            reviewedAt: new Date().toISOString(),
+            reviews: [
+              ...(r.reviews || []),
+              {
+                id: res.reviewId || `rev-${Date.now()}`,
+                reportId: r.id,
+                revisionNo: r.revisionNo,
+                reviewerId: currentUser.id,
+                reviewerName: currentUser.full_name,
+                decision: input.decision,
+                notes: input.notes,
+                decidedAt: new Date().toISOString(),
+              },
+            ],
+          };
+        })
+      );
+      setFeedbackNotes("");
+      pendingReviewCommand.current = null;
+      clearStoredReviewCommand(input.storageKey);
+      void invalidateDashboard(queryClient, currentUser);
+    },
+    onError: () =>
+      setAlertNotice({
+        type: "error",
+        message: "Terjadi kesalahan saat memproses review laporan.",
+      }),
+    onSettled: () => setIsSubmittingReview(false),
+  });
+
   if (!canReview) {
     return <UnauthorizedState requiredRole="Koordinator / Ustadz Pembina / Pengurus" />;
   }
 
-  const handleReviewDecision = async (decision: "approved" | "revision_required") => {
+  const handleReviewDecision = (decision: "approved" | "revision_required") => {
     if (!selectedReport) return;
     setIsSubmittingReview(true);
     setAlertNotice(null);
@@ -118,60 +183,14 @@ export default function ReviewPage() {
     pendingReviewCommand.current = { fingerprint, idempotencyKey };
     storeReviewCommand(storageKey, { fingerprint, idempotencyKey });
 
-    try {
-      const res = await reviewReportAction({
-        reportId: selectedReport.id,
-        revisionNo: selectedReport.revisionNo,
-        decision,
-        notes,
-        idempotencyKey,
-        reviewerName: currentUser.full_name,
-      });
-
-      if (res.success) {
-        setAlertNotice({ type: "success", message: res.message });
-        setReports((prev) =>
-          prev.map((r) => {
-            if (r.id === selectedReport.id) {
-              const updatedStatus: ReviewStatus =
-                decision === "approved" ? "approved" : "revision_required";
-              return {
-                ...r,
-                reviewStatus: updatedStatus,
-                reviewedAt: new Date().toISOString(),
-                reviews: [
-                  ...(r.reviews || []),
-                  {
-                    id: res.reviewId || `rev-${Date.now()}`,
-                    reportId: r.id,
-                    revisionNo: r.revisionNo,
-                    reviewerId: currentUser.id,
-                    reviewerName: currentUser.full_name,
-                    decision,
-                    notes,
-                    decidedAt: new Date().toISOString(),
-                  },
-                ],
-              };
-            }
-            return r;
-          })
-        );
-        setFeedbackNotes("");
-        pendingReviewCommand.current = null;
-        clearStoredReviewCommand(storageKey);
-        invalidateCache("admin:dashboard-stats");
-      } else {
-        setAlertNotice({ type: "error", message: res.message });
-      }
-    } catch {
-      setAlertNotice({
-        type: "error",
-        message: "Terjadi kesalahan saat memproses review laporan.",
-      });
-    } finally {
-      setIsSubmittingReview(false);
-    }
+    reviewDecisionMutation.mutate({
+      decision,
+      reportId: selectedReport.id,
+      revisionNo: selectedReport.revisionNo,
+      notes,
+      storageKey,
+      idempotencyKey,
+    });
   };
 
   return (
@@ -249,7 +268,7 @@ export default function ReviewPage() {
             <span className="material-symbols-outlined text-[20px]">error</span>
             <span>Antrean review gagal dimuat. Ini bukan berarti antrean kosong.</span>
           </div>
-          <button type="button" onClick={() => queueQuery.refresh()} className="underline shrink-0">
+          <button type="button" onClick={() => void queueQuery.refetch()} className="underline shrink-0">
             Coba lagi
           </button>
         </div>

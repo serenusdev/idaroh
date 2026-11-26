@@ -22,6 +22,7 @@ import { createRoot } from "react-dom/client";
 import { flushSync } from "react-dom";
 import AdminAttendanceReviewPage from "@/app/(app)/admin/kehadiran/page";
 import { IdentityProvider } from "@/components/auth/identity-context";
+import { QueryProvider } from "@/components/providers/query-provider";
 const config = window.__reviewConfig;
 const clone = value => value === undefined ? undefined : JSON.parse(JSON.stringify(value));
 window.__reviewCalls = [];
@@ -37,7 +38,7 @@ window.__reviewBoundaries = {
 const reactRoot = createRoot(document.getElementById("review-root"));
 flushSync(() => reactRoot.render(React.createElement(IdentityProvider, {
   initialUser: { id: "reviewer-a", role: "pengurus", status: "active", full_name: "Pengurus Uji" },
-}, React.createElement(AdminAttendanceReviewPage))));
+}, React.createElement(QueryProvider, null, React.createElement(AdminAttendanceReviewPage)))));
 `;
 const modules: Record<string, string> = {
   "@/modules/attendance/actions": `

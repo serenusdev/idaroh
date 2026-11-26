@@ -10,7 +10,8 @@ import {
 import { AttendanceRecordItem } from "@/modules/attendance/types";
 import { getActivePolicyAction } from "@/modules/analytics/actions";
 import { useIdentity } from "@/components/auth/identity-context";
-import { useCachedData } from "@/hooks/use-cached-data";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { cacheKeys, invalidateAttendance } from "@/lib/cache-keys";
 import { LiveClock } from "@/components/ui/live-clock";
 import { Illustration } from "@/components/ui/illustration";
 import { Modal } from "@/components/ui/modal";
@@ -25,8 +26,14 @@ export default function KehadiranPage() {
   const [checkedInStatus, setCheckedInStatus] = React.useState("Tepat Waktu");
   const [checkinError, setCheckinError] = React.useState<string | null>(null);
 
-  const historyQuery = useCachedData(`attendance:history:${user.id}`, getAttendanceHistoryAction);
-  const policyQuery = useCachedData("policy:active", getActivePolicyAction);
+  // CACHE-01 Batch 2: both reads are Server Actions behind a session-scoped key, so another
+  // account or a different active role can never be handed these rows (D3).
+  const queryClient = useQueryClient();
+  const historyQuery = useQuery({
+    queryKey: cacheKeys.attendance(user),
+    queryFn: () => getAttendanceHistoryAction(),
+  });
+  const policyQuery = useQuery({ queryKey: cacheKeys.policy(user), queryFn: getActivePolicyAction });
   const historyItems: AttendanceRecordItem[] = historyQuery.data ?? [];
   const policy = policyQuery.data ?? null;
   const loadError = historyQuery.error?.message || policyQuery.error?.message || null;
@@ -83,31 +90,38 @@ export default function KehadiranPage() {
   const [exceptionError, setExceptionError] = React.useState<string | null>(null);
   const [isSubmittingException, setIsSubmittingException] = React.useState(false);
 
-  const handleCheckin = async () => {
-    if (isProcessing) return;
-    setIsProcessing(true);
-    setCheckinError(null);
-    try {
-      const res = await checkInAttendanceAction();
-      if (res.success) {
-        setCheckedIn(true);
-        setCheckedInTime(res.timeStr);
-        setCheckedInStatus(
-          res.classification === "on_time"
-            ? "Tepat Waktu"
-            : res.classification === "grace"
-            ? "Masa Toleransi"
-            : "Terlambat"
-        );
-        historyQuery.refresh();
-      } else {
+  // CACHE-01 Batch 2: the Server Action stays the only writer (auth.uid(), the WIB date and the
+  // audit row are decided in the database). These mutations own the local submitting flags and the
+  // cache reset that follows a committed write, which replaces the old historyQuery.refresh().
+  const checkInMutation = useMutation({
+    mutationFn: () => checkInAttendanceAction(),
+    onMutate: () => {
+      setCheckinError(null);
+      setIsProcessing(true);
+    },
+    onSuccess: (res) => {
+      if (!res.success) {
         setCheckinError(res.message || "Gagal mencatat presensi. Silakan coba lagi.");
+        return;
       }
-    } catch {
-      setCheckinError("Terjadi kesalahan saat mencatat presensi. Silakan coba lagi.");
-    } finally {
-      setIsProcessing(false);
-    }
+      setCheckedIn(true);
+      setCheckedInTime(res.timeStr);
+      setCheckedInStatus(
+        res.classification === "on_time"
+          ? "Tepat Waktu"
+          : res.classification === "grace"
+          ? "Masa Toleransi"
+          : "Terlambat"
+      );
+      void invalidateAttendance(queryClient, user);
+    },
+    onError: () => setCheckinError("Terjadi kesalahan saat mencatat presensi. Silakan coba lagi."),
+    onSettled: () => setIsProcessing(false),
+  });
+
+  const handleCheckin = () => {
+    if (isProcessing) return;
+    checkInMutation.mutate();
   };
 
   const openCorrectionDialog = (item: AttendanceRecordItem) => {
@@ -118,63 +132,68 @@ export default function KehadiranPage() {
     setIsCorrectionOpen(true);
   };
 
-  const handleCorrectionSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!selectedHistoryItem || isSubmittingCorrection) return;
-    setIsSubmittingCorrection(true);
-    setCorrectionError(null);
-    try {
-      const res = await submitCorrectionAction({
-        attendanceDate: selectedHistoryItem.dateStr,
-        recordedTime: selectedHistoryItem.timeStr,
+  const correctionMutation = useMutation({
+    mutationFn: (item: AttendanceRecordItem) =>
+      submitCorrectionAction({
+        attendanceDate: item.dateStr,
+        recordedTime: item.timeStr,
         reasonCategory: correctionReason,
         notes: correctionNotes,
-      });
-      if (res.success) {
-        setCorrectionSuccessMsg(res.message);
-        historyQuery.refresh();
-        setTimeout(() => {
-          setIsCorrectionOpen(false);
-          setCorrectionSuccessMsg("");
-        }, 1400);
-      } else {
+      }),
+    onMutate: () => {
+      setIsSubmittingCorrection(true);
+      setCorrectionError(null);
+    },
+    onSuccess: (res) => {
+      if (!res.success) {
         setCorrectionError(res.message || "Gagal mengirim koreksi presensi. Silakan coba lagi.");
+        return;
       }
-    } catch {
-      setCorrectionError("Terjadi kesalahan saat mengirim koreksi. Silakan coba lagi.");
-    } finally {
-      setIsSubmittingCorrection(false);
-    }
+      setCorrectionSuccessMsg(res.message);
+      void invalidateAttendance(queryClient, user);
+      setTimeout(() => {
+        setIsCorrectionOpen(false);
+        setCorrectionSuccessMsg("");
+      }, 1400);
+    },
+    onError: () => setCorrectionError("Terjadi kesalahan saat mengirim koreksi. Silakan coba lagi."),
+    onSettled: () => setIsSubmittingCorrection(false),
+  });
+
+  const handleCorrectionSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!selectedHistoryItem || isSubmittingCorrection) return;
+    correctionMutation.mutate(selectedHistoryItem);
   };
 
-  const handleExceptionSubmit = async (e: React.FormEvent) => {
+  const exceptionMutation = useMutation({
+    mutationFn: () =>
+      submitExceptionAction(exceptionDateFrom, exceptionDateTo, exceptionType, exceptionReason),
+    onMutate: () => {
+      setIsSubmittingException(true);
+      setExceptionError(null);
+    },
+    onSuccess: (res) => {
+      if (!res.success) {
+        setExceptionError(res.message || "Gagal mengirim permohonan izin / sakit. Silakan coba lagi.");
+        return;
+      }
+      setExceptionSuccessMsg(res.message);
+      void invalidateAttendance(queryClient, user);
+      setTimeout(() => {
+        setIsExceptionOpen(false);
+        setExceptionSuccessMsg("");
+        setExceptionReason("");
+      }, 1400);
+    },
+    onError: () => setExceptionError("Terjadi kesalahan saat mengirim permohonan. Silakan coba lagi."),
+    onSettled: () => setIsSubmittingException(false),
+  });
+
+  const handleExceptionSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (isSubmittingException) return;
-    setIsSubmittingException(true);
-    setExceptionError(null);
-    try {
-      const res = await submitExceptionAction(
-        exceptionDateFrom,
-        exceptionDateTo,
-        exceptionType,
-        exceptionReason
-      );
-      if (res.success) {
-        setExceptionSuccessMsg(res.message);
-        historyQuery.refresh();
-        setTimeout(() => {
-          setIsExceptionOpen(false);
-          setExceptionSuccessMsg("");
-          setExceptionReason("");
-        }, 1400);
-      } else {
-        setExceptionError(res.message || "Gagal mengirim permohonan izin / sakit. Silakan coba lagi.");
-      }
-    } catch {
-      setExceptionError("Terjadi kesalahan saat mengirim permohonan. Silakan coba lagi.");
-    } finally {
-      setIsSubmittingException(false);
-    }
+    exceptionMutation.mutate();
   };
 
   return (
