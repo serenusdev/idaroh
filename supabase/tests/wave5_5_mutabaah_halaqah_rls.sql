@@ -13,7 +13,12 @@ SELECT has_column('public', 'halaqah_logs', 'ustadz_id', 'halaqah memiliki ustad
 
 SELECT ok((SELECT relrowsecurity FROM pg_class WHERE oid = 'public.mutabaah_logs'::regclass), 'mutabaah RLS aktif');
 SELECT ok((SELECT relrowsecurity FROM pg_class WHERE oid = 'public.halaqah_logs'::regclass), 'halaqah RLS aktif');
-SELECT has_unique('public', 'mutabaah_logs', ARRAY['student_id', 'log_date'], 'mutabaah unik per santri dan hari');
+SELECT ok(EXISTS (
+  SELECT 1 FROM pg_constraint
+  WHERE conrelid = 'public.mutabaah_logs'::regclass
+    AND contype = 'u'
+    AND pg_get_constraintdef(oid) = 'UNIQUE (student_id, log_date)'
+), 'mutabaah unik per santri dan hari');
 SELECT has_function('public', 'save_mutabaah_log', ARRAY['uuid', 'jsonb'], 'RPC mutabaah tersedia');
 SELECT has_function('public', 'save_halaqah_log', ARRAY['uuid', 'date', 'text', 'text', 'integer', 'integer', 'text', 'text', 'text'], 'RPC halaqah tersedia');
 

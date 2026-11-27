@@ -52,6 +52,6 @@ export async function saveHalaqahLogAction(input: HalaqahInput) {
   return data;
 }
 
-export function todayWibDate() {
+export async function todayWibDate() {
   return getJakartaTime().dateStr;
 }
