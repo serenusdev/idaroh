@@ -4,6 +4,7 @@ import { drainNotificationOutbox, sendPushToUsers } from "@/lib/fcm";
 import { drainEmailOutbox } from "@/lib/email-outbox";
 import { getJakartaTime } from "@/lib/auth/guards";
 import { isCronJobDue } from "@/lib/cron-schedule";
+import { DEVICE_TOKEN_RETENTION_DAYS, expirePublishedAnnouncements, pruneStaleDeviceTokens, publishDueAnnouncements, refreshAttendanceSnapshot } from "@/lib/background-jobs";
 import { timingSafeEqual } from "node:crypto";
 
 export const dynamic = "force-dynamic";
@@ -27,40 +28,14 @@ export async function GET(request: Request) {
     const jakarta = getJakartaTime();
     const today = jakarta.dateStr;
     const now = new Date().toISOString();
-    let scheduledPublished = 0;
-    let expiredArchived = 0;
-    const { data: dueAnnouncements, error: dueError } = await admin
-      .from("announcements")
-      .select("id")
-      .eq("status", "draft")
-      .not("scheduled_for", "is", null)
-      .lte("scheduled_for", now);
-    if (dueError) throw dueError;
-    for (const announcement of dueAnnouncements || []) {
-      const { data: published, error: publishError } = await admin
-        .from("announcements")
-        .update({ status: "published", published_at: now, updated_at: now })
-        .eq("id", announcement.id)
-        .eq("status", "draft")
-        .select("id")
-        .maybeSingle();
-      if (publishError) throw publishError;
-      if (!published) continue;
-      scheduledPublished += 1;
-    }
+    // Same steps the durable worker owns, in the order this fallback has always used: publish, then
+    // drain, then archive, so a publication made by this tick is delivered by this tick.
+    const { published: scheduledPublished } = await publishDueAnnouncements(admin, now);
     // Drain after publication commits, even when no reminder is due or already claimed.
     drainAttempted = true;
     const outboxPush = await drainNotificationOutbox();
     const outboxEmail = await drainEmailOutbox();
-    const { data: expired, error: expiryError } = await admin
-      .from("announcements")
-      .update({ status: "archived", archived_at: now, updated_at: now })
-      .eq("status", "published")
-      .not("expires_at", "is", null)
-      .lte("expires_at", now)
-      .select("id");
-    if (expiryError) throw expiryError;
-    expiredArchived = expired?.length || 0;
+    const { archived: expiredArchived } = await expirePublishedAnnouncements(admin, now);
     const { data: scheduleRows, error: scheduleError } = await admin
       .from("cron_job_schedules")
       .select("job_key, time_wib, days_of_week, enabled")
@@ -80,8 +55,15 @@ export async function GET(request: Request) {
     if (dayError) throw dayError;
     const sendAttendanceReminder = due("attendance_reminder") && operationalToday === true;
     const sendReportReminder = due("report_reminder");
-    const { error: snapshotError } = await admin.rpc("refresh_attendance_effective", { p_date: today });
-    if (snapshotError) console.error("Attendance effective snapshot failed:", snapshotError);
+    // A snapshot failure must not abort the reminders: the audience falls back to the raw tables,
+    // which is why the error is captured here instead of thrown like the other steps.
+    let snapshotError: unknown = null;
+    try {
+      await refreshAttendanceSnapshot(admin, today);
+    } catch (error) {
+      snapshotError = error;
+      console.error("Attendance effective snapshot failed:", error);
+    }
     if (!sendAttendanceReminder && !sendReportReminder) {
       return NextResponse.json({ success: true, today, skipped: true, scheduledPublished, expiredArchived, outboxPush, outboxEmail });
     }
@@ -176,8 +158,12 @@ export async function GET(request: Request) {
       })
       : { sent: 0, removed: 0, skipped: true };
 
-    const cutoff = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000).toISOString();
-    await admin.from("device_tokens").delete().lt("updated_at", cutoff);
+    // Housekeeping stays non-fatal: the reminders were already queued when it runs.
+    try {
+      await pruneStaleDeviceTokens(admin, new Date(Date.now() - DEVICE_TOKEN_RETENTION_DAYS * 24 * 60 * 60 * 1000).toISOString());
+    } catch (error) {
+      console.error("Device token prune failed:", error);
+    }
     await admin.from("cron_job_runs").update({ status: "completed", completed_at: new Date().toISOString() }).in("job_key", claimedKeys);
     return NextResponse.json({ success: true, today, attendancePush, reportPush, scheduledPublished, expiredArchived, outboxPush, outboxEmail });
   } catch (error) {

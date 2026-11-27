@@ -379,7 +379,13 @@ export interface AdminDashboardMetrics {
   systemHealth?: {
     activeUsersCount: number;
     pendingOutbox: number;
+    /** Rows FCM rejected permanently: https://…/admin/notifications shows the payloads. */
+    deadLetterOutbox: number;
+    /** Emails that exhausted their attempts at Resend. */
+    deadLetterEmail: number;
     failedCronRuns: number;
+    /** When /api/worker/jobs last completed a job, so a silent scheduler is visible. */
+    lastWorkerTick: string | null;
   };
 }
 
@@ -407,24 +413,38 @@ export async function getAdminDashboardStatsAction(): Promise<AdminDashboardMetr
     if (holdsRole(user, ["super_admin"])) {
       const [
         { count: activeUsersCount, error: usersError },
-        { count: pendingOutboxCount, error: outboxError },
+        { count: pendingOutboxCount, error: pushPendingError },
+        { count: deadLetterOutboxCount, error: pushDeadLetterError },
+        { count: failedEmailCount, error: emailFailedError },
         { count: failedCronCount, error: cronError },
+        { data: workerTickRows, error: workerTickError },
         { count: reqCount, error: reqError },
       ] = await Promise.all([
         supabase.from("profiles").select("id", { count: "exact", head: true }).eq("status", "active"),
-        supabase.from("notification_outbox").select("id", { count: "exact", head: true }).eq("status", "pending"),
+        // The push queue of record is notification_push_outbox; notification_outbox was a phantom
+        // alias that made this whole block throw in production.
+        supabase.from("notification_push_outbox").select("id", { count: "exact", head: true }).eq("status", "pending"),
+        supabase.from("notification_push_outbox").select("id", { count: "exact", head: true }).eq("status", "dead_letter"),
+        supabase.from("email_outbox").select("id", { count: "exact", head: true }).eq("status", "failed"),
         supabase.from("cron_job_runs").select("id", { count: "exact", head: true }).eq("status", "failed"),
+        supabase.from("background_job_runs").select("job_key, last_success_at").not("last_success_at", "is", null).order("last_success_at", { ascending: false }).limit(1),
         supabase.from("account_requests").select("*", { count: "exact", head: true }).eq("status", "pending"),
       ]);
       if (usersError) throw usersError;
-      if (outboxError) throw outboxError;
+      if (pushPendingError) throw pushPendingError;
+      if (pushDeadLetterError) throw pushDeadLetterError;
+      if (emailFailedError) throw emailFailedError;
       if (cronError) throw cronError;
+      if (workerTickError) throw workerTickError;
       if (reqError) throw reqError;
       result.pendingAccountRequests = reqCount || 0;
       result.systemHealth = {
         activeUsersCount: activeUsersCount || 0,
         pendingOutbox: pendingOutboxCount || 0,
+        deadLetterOutbox: deadLetterOutboxCount || 0,
+        deadLetterEmail: failedEmailCount || 0,
         failedCronRuns: failedCronCount || 0,
+        lastWorkerTick: (workerTickRows as Array<{ last_success_at: string | null }> | null)?.[0]?.last_success_at ?? null,
       };
     }
 

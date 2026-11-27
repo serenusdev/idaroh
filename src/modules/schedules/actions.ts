@@ -7,6 +7,7 @@ import { requireAuthUser, requireRole } from "@/lib/auth/guards";
 import { occurrenceKey, parseEventRef } from "@/lib/event-occurrence";
 import { throwQueryError } from "@/lib/query-error";
 import { drainNotificationOutbox, hashCalendarToken, sendPushToUsers } from "@/lib/fcm";
+import { INLINE_DISPATCH_BUDGET_MS } from "@/lib/background-jobs";
 import { INITIAL_ANNOUNCEMENTS, INITIAL_EVENTS } from "./data";
 import { AnnouncementItem, AudienceConfig, ScheduleEventItem } from "./types";
 import { randomBytes } from "node:crypto";
@@ -449,7 +450,7 @@ export async function publishAnnouncementAction(payload: {
     if (isPublished) {
       try {
         // Publication trigger already resolved the audience and persisted inbox/outbox rows.
-        await drainNotificationOutbox({ notificationType: "ANNOUNCEMENT_PUBLISHED", referenceId: newId });
+        await drainNotificationOutbox({ notificationType: "ANNOUNCEMENT_PUBLISHED", referenceId: newId, budgetMs: INLINE_DISPATCH_BUDGET_MS });
       } catch (pushError) {
         console.error("Announcement saved but push delivery failed:", pushError);
       }
@@ -856,7 +857,7 @@ export async function updateAnnouncementAction(
     if (isPublished && !process.env.VITEST) {
       try {
         if (!result.was_published) {
-          await drainNotificationOutbox({ notificationType: "ANNOUNCEMENT_PUBLISHED", referenceId: announcementId });
+          await drainNotificationOutbox({ notificationType: "ANNOUNCEMENT_PUBLISHED", referenceId: announcementId, budgetMs: INLINE_DISPATCH_BUDGET_MS });
         } else {
           await notifyAudience(result.audience_config || payload.audienceConfig, {
             type: "ANNOUNCEMENT_UPDATED",

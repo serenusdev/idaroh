@@ -43,6 +43,11 @@ export function validateProductionEnvironment(env = process.env) {
   }
 
   if (env.CRON_SECRET.length < 32) throw new Error('Production CRON_SECRET must contain at least 32 characters.');
+  // Optional: /api/worker/jobs falls back to CRON_SECRET, but a separate secret lets the scheduler
+  // credential be rotated without touching the heartbeat endpoint.
+  if (env.WORKER_SECRET && env.WORKER_SECRET.length < 32) {
+    throw new Error('Production WORKER_SECRET must contain at least 32 characters.');
+  }
   if (env.TURNSTILE_SECRET_KEY && placeholder.test(env.TURNSTILE_SECRET_KEY)) {
     throw new Error('Production TURNSTILE_SECRET_KEY contains a placeholder.');
   }

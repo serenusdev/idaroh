@@ -4,6 +4,7 @@
 import { createAdminClient } from "@/lib/supabase/admin";
 import { createClient } from "@/lib/supabase/server";
 import { drainNotificationOutbox } from "@/lib/fcm";
+import { INLINE_DISPATCH_BUDGET_MS } from "@/lib/background-jobs";
 import { requireAuthUser, requireRole, getJakartaTime } from "@/lib/auth/guards";
 import { isDateOnly, isNonEmptyString, isPlainRecord, isTimeOnly } from "@/lib/input-validation";
 import { throwQueryError } from "@/lib/query-error";
@@ -654,9 +655,11 @@ export async function reviewReportAction(
     // best-effort dispatch; on failure the cron worker retries the outbox.
     if (!process.env.VITEST) {
       try {
+        // Return to the reviewer now; /api/worker/jobs?job=push-outbox finishes the queue.
         await drainNotificationOutbox({
           notificationType: payload.decision === "approved" ? "REPORT_APPROVED" : "REPORT_REVISION_REQUIRED",
           referenceId: reviewId,
+          budgetMs: INLINE_DISPATCH_BUDGET_MS,
         });
       } catch (pushError) {
         console.error("Report review saved but push dispatch failed; outbox will retry:", pushError);
