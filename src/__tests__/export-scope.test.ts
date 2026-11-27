@@ -9,9 +9,11 @@
  *     export_type & filter_criteria").
  *   - `admin.audit.read`  = yayasan `all`, pengurus **ditolak**.
  *
- * Expectations intentionally FAIL until Stage C lands
- * src/lib/export-policy.ts, the rewritten export route, and the guarded
- * exportAuditedDataAction.
+ * DX-01 retarget: the dataset reads now run through the typed Kysely reader, so the
+ * "was the stored range applied" assertions read the bound parameters of the emitted SQL
+ * instead of the PostgREST `gte:[column,value]` op strings. Every authorization assertion is
+ * unchanged, and the refusal cases are now pinned harder: the export_logs lookup must be the
+ * only relation touched and no dataset SELECT may leave the process.
  */
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -30,6 +32,8 @@ const harness = vi.hoisted(() => {
     queries: { table: string; ops: string[] }[];
     inserts: { table: string; payload: Record<string, unknown> }[];
     rows: Record<string, unknown[]>;
+    /** DX-01: dataset reads are parameterised SQL emitted by the Kysely reader. */
+    selects: { sql: string; params: unknown[] }[];
     exportLog: Record<string, unknown> | null;
     pdfCalls: string[][];
   } = {
@@ -37,6 +41,7 @@ const harness = vi.hoisted(() => {
     queries: [],
     inserts: [],
     rows: {},
+    selects: [],
     exportLog: null,
     pdfCalls: [],
   };
@@ -112,6 +117,38 @@ vi.mock("@/lib/pdf", () => ({
   },
 }));
 
+/**
+ * DX-01: the dataset reads moved from the PostgREST chain to the typed read-only reader. The mock
+ * keeps the *real* reader module (so its read-only driver guard and session bootstrap stay in the
+ * loop) and only swaps the pool: statements land in state.selects and rows come from state.rows by
+ * table name, exactly like the PostgREST mock above.
+ */
+vi.mock("@/lib/db/reader", async () => {
+  const { createReadOnlyDb } = await vi.importActual<typeof import("@/lib/db/reader")>("@/lib/db/reader");
+  const pool = {
+    options: {},
+    Client: function Client() {},
+    cursor: function Cursor() {},
+    connect: async () => ({
+      processID: 4242,
+      async query(sql: string, params: unknown[] = []) {
+        harness.state.selects.push({ sql, params });
+        if (/^\s*set /i.test(sql)) return { command: "SET", rowCount: 0, rows: [] };
+        const table = Object.keys(harness.state.rows).find((name) => sql.includes(`"${name}"`));
+        return { command: "SELECT", rowCount: 0, rows: table ? harness.state.rows[table] : [] };
+      },
+      release() {},
+    }),
+    end: async () => {},
+  };
+  const db = createReadOnlyDb({ pool: pool as never, url: "postgresql://x@127.0.0.1:5432/postgres" });
+  return {
+    createReadOnlyDb,
+    getReadOnlyDb: () => db,
+    closeReadOnlyDb: async () => db.destroy(),
+  };
+});
+
 const { GET } = await import("@/app/api/exports/[exportId]/route");
 const { exportAuditedDataAction } = await import("@/modules/analytics/actions");
 
@@ -143,19 +180,29 @@ function tablesQueried() {
   return harness.state.queries.map((query) => query.table);
 }
 
-function opsFor(table: string, occurrence = 0) {
-  const matches = harness.state.queries.filter((query) => query.table === table);
-  return matches[occurrence]?.ops || [];
+/** DX-01: the SQL the reader actually sent, minus the `SET` session bootstrap. */
+function selects() {
+  return harness.state.selects.filter((statement) => !/^\s*set /i.test(statement.sql));
 }
 
-function datasetTables() {
-  return tablesQueried().filter((table) => table !== "export_logs");
+function sqlFor(table: string) {
+  return selects()
+    .filter((statement) => statement.sql.includes(`"${table}"`))
+    .map((statement) => statement.sql.replace(/\s+/g, " ").toLowerCase())
+    .join("\n");
+}
+
+function paramsFor(table: string) {
+  return selects()
+    .filter((statement) => statement.sql.includes(`"${table}"`))
+    .flatMap((statement) => statement.params);
 }
 
 beforeEach(() => {
   harness.state.identity = OWNER;
   harness.state.queries = [];
   harness.state.inserts = [];
+  harness.state.selects = [];
   harness.state.rows = {};
   harness.state.exportLog = logRow();
   harness.state.pdfCalls = [];
@@ -173,20 +220,23 @@ describe("SEC-01 export download authorization", () => {
     const response = await download("/api/exports/export-1.csv", "export-1.csv");
     expect(response.status).toBe(403);
     expect(harness.state.queries).toHaveLength(0);
+    expect(selects()).toHaveLength(0);
   });
 
   it("refuses to materialize another admin's export request", async () => {
     harness.state.exportLog = logRow({ user_id: "pengurus-9" });
     const response = await download("/api/exports/export-1.csv", "export-1.csv");
     expect(response.status).toBe(404);
-    expect(datasetTables()).toHaveLength(0);
+    expect(tablesQueried()).toEqual(["export_logs"]);
+    expect(selects()).toHaveLength(0);
   });
 
   it("refuses a stored category outside the export whitelist instead of dumping audit logs", async () => {
     harness.state.exportLog = logRow({ category: "semua_data" });
     const response = await download("/api/exports/export-1.csv", "export-1.csv");
     expect(response.status).toBe(400);
-    expect(datasetTables()).toHaveLength(0);
+    expect(tablesQueried()).toEqual(["export_logs"]);
+    expect(selects()).toHaveLength(0);
   });
 
   it("refuses a pengurus audit-log export (admin.audit.read denies pengurus)", async () => {
@@ -202,7 +252,8 @@ describe("SEC-01 export download authorization", () => {
     });
     const response = await download("/api/exports/export-1.csv", "export-1.csv");
     expect(response.status).toBe(403);
-    expect(datasetTables()).toHaveLength(0);
+    expect(tablesQueried()).toEqual(["export_logs"]);
+    expect(selects()).toHaveLength(0);
   });
 
   it("rejects a file extension that disagrees with the logged export_type", async () => {
@@ -210,7 +261,8 @@ describe("SEC-01 export download authorization", () => {
     const response = await download("/api/exports/export-1.pdf", "export-1.pdf");
     expect(response.status).toBe(400);
     expect(harness.state.pdfCalls).toHaveLength(0);
-    expect(datasetTables()).toHaveLength(0);
+    expect(tablesQueried()).toEqual(["export_logs"]);
+    expect(selects()).toHaveLength(0);
   });
 });
 
@@ -243,14 +295,17 @@ describe("SEC-01 stored filters are applied", () => {
   it("narrows every attendance/report read to the stored WIB range", async () => {
     const response = await download("/api/exports/export-1.csv", "export-1.csv");
     expect(response.status).toBe(200);
-    expect(opsFor("attendance_records")).toContain(
-      'gte:["attendance_date","2026-11-01"]',
-    );
-    expect(opsFor("attendance_records")).toContain(
-      'lte:["attendance_date","2026-11-07"]',
-    );
-    expect(opsFor("daily_reports")).toContain('gte:["report_date","2026-11-01"]');
-    expect(opsFor("daily_reports")).toContain('lte:["report_date","2026-11-07"]');
+    const attendance = sqlFor("attendance_records");
+    expect(attendance).toContain('"attendance_date" >= $');
+    expect(attendance).toContain('"attendance_date" <= $');
+    expect(paramsFor("attendance_records")).toContain("2026-11-01");
+    expect(paramsFor("attendance_records")).toContain("2026-11-07");
+    expect(sqlFor("attendance_records")).toContain("order by");
+    const reports = sqlFor("daily_reports");
+    expect(reports).toContain('"report_date" >= $');
+    expect(reports).toContain('"report_date" <= $');
+    expect(paramsFor("daily_reports")).toContain("2026-11-01");
+    expect(paramsFor("daily_reports")).toContain("2026-11-07");
   });
 
   it("narrows timestamp datasets by WIB day boundaries", async () => {
@@ -261,10 +316,12 @@ describe("SEC-01 stored filters are applied", () => {
     harness.state.rows = { tasks: [{ id: "t1", title: "Sentra", status: "todo" }] };
     const response = await download("/api/exports/export-1.csv", "export-1.csv");
     expect(response.status).toBe(200);
-    expect(opsFor("tasks")).toContain('gte:["created_at","2026-10-31T17:00:00.000Z"]');
-    // Exclusive upper bound is the start of the WIB day after date_to, so the
-    // whole final day stays inside the export.
-    expect(opsFor("tasks")).toContain('lt:["created_at","2026-11-07T17:00:00.000Z"]');
+    // Inclusive lower and exclusive upper bound, so the whole final WIB day stays inside.
+    expect(paramsFor("tasks")).toContain("2026-10-31T17:00:00.000Z");
+    expect(paramsFor("tasks")).toContain("2026-11-07T17:00:00.000Z");
+    expect(sqlFor("tasks")).toContain('"created_at" >= $');
+    expect(sqlFor("tasks")).toContain('"created_at" < $');
+    expect(sqlFor("tasks")).toContain('"deleted_at" is null');
   });
 
   it("narrows the audit dataset for yayasan and keeps the CSV escaping", async () => {
@@ -279,7 +336,12 @@ describe("SEC-01 stored filters are applied", () => {
     };
     const response = await download("/api/exports/export-1.csv", "export-1.csv");
     expect(response.status).toBe(200);
-    expect(opsFor("audit_logs")).toContain('gte:["created_at","2026-10-31T17:00:00.000Z"]');
+    expect(paramsFor("audit_logs")).toContain("2026-10-31T17:00:00.000Z");
+    // The 500-row cap of the previous .limit(500) survives the move to SQL.
+    expect(sqlFor("audit_logs")).toContain("limit $");
+    expect(paramsFor("audit_logs")).toContain(500);
+    // Timestamps are rendered by Postgres, so the CSV text stays what PostgREST produced.
+    expect(sqlFor("audit_logs")).toContain(`to_jsonb("audit_logs"."created_at") #>> '{}'`);
     const csv = await response.text();
     expect(csv).toContain('"\'=cmd');
   });

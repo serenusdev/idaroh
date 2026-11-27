@@ -84,6 +84,11 @@ jobs:
             echo "E2E_EMAIL=e2e-active@example.test"
             echo "E2E_PASSWORD=Local-E2E-Password-2026"
             echo "PLAYWRIGHT_BASE_URL=http://127.0.0.1:3000"
+            # DX-01: the typed reader opens a direct connection to the same disposable database the
+            # app just seeded. Local Supabase serves plaintext on the pooled port, so TLS is off.
+            echo "SUPABASE_DB_URL=$DB_URL"
+            echo "DX01_DB_URL=$DB_URL"
+            echo "SUPABASE_DB_SSL_MODE=disable"
           } >> "$GITHUB_ENV"
       - name: Seed active E2E user
         run: npm run e2e:seed
@@ -105,6 +110,15 @@ jobs:
             cat /tmp/idaroh-next.log
             exit 1
           fi
+      - name: Verify DX-01 read parity against the live database
+        run: |
+          # The suite skips itself without DX01_DB_URL, so require it here: a missing export must fail
+          # the gate instead of quietly dropping the only real Postgres proof of the read migration.
+          if [ -z "$DX01_DB_URL" ]; then
+            echo "DX01_DB_URL was not exported from supabase status."
+            exit 1
+          fi
+          npx vitest run src/__tests__/dx01-live-parity.test.ts
       - name: Stop disposable Supabase
         if: always()
         run: supabase stop --no-backup

@@ -17,6 +17,8 @@ import {
   validateExportFilters,
   type ExportFilterInput,
 } from "@/lib/export-policy";
+import { ORG_SCOPE, fetchAuditLogPage, fetchOperationalCounts, fetchSystemHealth } from "@/lib/db/analytics-queries";
+import { getReadOnlyDb } from "@/lib/db/reader";
 import { AuditLogItem } from "./types";
 
 /**
@@ -112,63 +114,33 @@ export async function exportAuditedDataAction(
  */
 export async function queryAuditLogsAction(
   query: string,
-  scope: string = "Semua Tim (Organisasi)",
+  scope: string = ORG_SCOPE,
   page = 1
 ): Promise<{ success: boolean; logs: AuditLogItem[]; hasMore: boolean; page: number }> {
   // PERMISSIONS.md §3.8: admin.audit.read denies pengurus.
   await requireRole(["super_admin", "yayasan"]);
+  const pageSize = 50;
+  const safePage = Math.max(1, Math.floor(page));
   try {
-    const supabase = createAdminClient();
-    const pageSize = 50;
-    const safePage = Math.max(1, Math.floor(page));
-    let dbQuery = supabase
-      .from("audit_logs")
-      .select("*", { count: "exact" })
-      .order("created_at", { ascending: false });
-    dbQuery = typeof (dbQuery as any).range === "function"
-      ? dbQuery.range((safePage - 1) * pageSize, safePage * pageSize - 1)
-      : dbQuery.limit(pageSize);
+    // DX-01: one typed read replaces "fetch every profile id of the team, then filter by that list".
+    const { rows, totalCount } = await fetchAuditLogPage(getReadOnlyDb(), { scope, query, page: safePage, pageSize });
+    if (rows.length === 0) return { success: true, logs: [], hasMore: false, page: safePage };
 
-    if (scope !== "Semua Tim (Organisasi)") {
-      const { data: scopedActors, error: scopedActorsError } = await supabase
-        .from("profiles")
-        .select("id")
-        .eq("team_name", scope);
-      if (scopedActorsError) throw scopedActorsError;
-      const actorIds = (scopedActors || []).map((actor: any) => actor.id);
-      if (actorIds.length === 0) return { success: true, logs: [], hasMore: false, page: safePage };
-      dbQuery = dbQuery.in("actor_id", actorIds);
-    }
-
-    const sanitizedQuery = query.replace(/[,()]/g, "").trim();
-    if (sanitizedQuery) {
-      dbQuery = dbQuery.or(
-        `event_name.ilike.%${sanitizedQuery}%,actor_name.ilike.%${sanitizedQuery}%,target_label.ilike.%${sanitizedQuery}%,action_detail.ilike.%${sanitizedQuery}%`
-      );
-    }
-
-    const { data: logs, error, count } = await dbQuery;
-
-    if (error) throw error;
-    if (logs) {
-      if (logs.length === 0) return { success: true, logs: [], hasMore: false, page: safePage };
-
-      return {
-        success: true,
-        hasMore: typeof count === "number" ? safePage * pageSize < count : logs.length === pageSize,
-        page: safePage,
-        logs: logs.map((l: any) => ({
-          id: l.id,
-          timeAgo: formatRelativeTimeId(l.created_at),
-          eventName: l.event_name,
-          actorName: l.actor_name || "Sistem",
-          targetLabel: l.target_label || "-",
-          actionDetail: l.action_detail || "-",
-          hash: l.hash || "sha256:unavailable",
-          createdIso: l.created_at,
-        })),
-      };
-    }
+    return {
+      success: true,
+      hasMore: safePage * pageSize < totalCount,
+      page: safePage,
+      logs: rows.map((l) => ({
+        id: l.id,
+        timeAgo: formatRelativeTimeId(l.created_at),
+        eventName: l.event_name,
+        actorName: l.actor_name || "Sistem",
+        targetLabel: l.target_label || "-",
+        actionDetail: l.action_detail || "-",
+        hash: l.hash || "sha256:unavailable",
+        createdIso: l.created_at,
+      })),
+    };
   } catch (err) {
     if (!process.env.VITEST) throwQueryError("analytics.audit_logs", err);
   }
@@ -408,43 +380,18 @@ export async function getAdminDashboardStatsAction(): Promise<AdminDashboardMetr
   };
 
   try {
-    const supabase = createAdminClient();
-
     if (holdsRole(user, ["super_admin"])) {
-      const [
-        { count: activeUsersCount, error: usersError },
-        { count: pendingOutboxCount, error: pushPendingError },
-        { count: deadLetterOutboxCount, error: pushDeadLetterError },
-        { count: failedEmailCount, error: emailFailedError },
-        { count: failedCronCount, error: cronError },
-        { data: workerTickRows, error: workerTickError },
-        { count: reqCount, error: reqError },
-      ] = await Promise.all([
-        supabase.from("profiles").select("id", { count: "exact", head: true }).eq("status", "active"),
-        // The push queue of record is notification_push_outbox; notification_outbox was a phantom
-        // alias that made this whole block throw in production.
-        supabase.from("notification_push_outbox").select("id", { count: "exact", head: true }).eq("status", "pending"),
-        supabase.from("notification_push_outbox").select("id", { count: "exact", head: true }).eq("status", "dead_letter"),
-        supabase.from("email_outbox").select("id", { count: "exact", head: true }).eq("status", "failed"),
-        supabase.from("cron_job_runs").select("id", { count: "exact", head: true }).eq("status", "failed"),
-        supabase.from("background_job_runs").select("job_key, last_success_at").not("last_success_at", "is", null).order("last_success_at", { ascending: false }).limit(1),
-        supabase.from("account_requests").select("*", { count: "exact", head: true }).eq("status", "pending"),
-      ]);
-      if (usersError) throw usersError;
-      if (pushPendingError) throw pushPendingError;
-      if (pushDeadLetterError) throw pushDeadLetterError;
-      if (emailFailedError) throw emailFailedError;
-      if (cronError) throw cronError;
-      if (workerTickError) throw workerTickError;
-      if (reqError) throw reqError;
-      result.pendingAccountRequests = reqCount || 0;
+      // DX-01: seven exact-count requests become one typed aggregate select. Decision D3 stays a
+      // guard on the role holders, not a property of the connection.
+      const health = await fetchSystemHealth(getReadOnlyDb());
+      result.pendingAccountRequests = health.pendingAccountRequests;
       result.systemHealth = {
-        activeUsersCount: activeUsersCount || 0,
-        pendingOutbox: pendingOutboxCount || 0,
-        deadLetterOutbox: deadLetterOutboxCount || 0,
-        deadLetterEmail: failedEmailCount || 0,
-        failedCronRuns: failedCronCount || 0,
-        lastWorkerTick: (workerTickRows as Array<{ last_success_at: string | null }> | null)?.[0]?.last_success_at ?? null,
+        activeUsersCount: health.activeUsersCount,
+        pendingOutbox: health.pendingOutbox,
+        deadLetterOutbox: health.deadLetterOutbox,
+        deadLetterEmail: health.deadLetterEmail,
+        failedCronRuns: health.failedCronRuns,
+        lastWorkerTick: health.lastWorkerTick,
       };
     }
 
@@ -454,43 +401,15 @@ export async function getAdminDashboardStatsAction(): Promise<AdminDashboardMetr
 
     const today = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Jakarta" }).format(new Date());
 
-    // 1. Total santri
-    const { count: santriCount, error: santriError } = await supabase
-      .from("profiles")
-      .select("*", { count: "exact", head: true })
-      .eq("member_type", "santri")
-      .eq("status", "active");
-    if (santriError) throw santriError;
-    result.totalSantri = santriCount || 0;
-
-    // 2. Attendance today — exact counts avoid the default REST row limit.
-    const [{ count: checkedInCount, error: attendanceError }, { count: lateCount, error: lateError }] = await Promise.all([
-      supabase.from("attendance_records").select("id", { count: "exact", head: true }).eq("attendance_date", today),
-      supabase.from("attendance_records").select("id", { count: "exact", head: true }).eq("attendance_date", today).eq("classification", "late"),
-    ]);
-    if (attendanceError) throw attendanceError;
-    if (lateError) throw lateError;
-    result.todayCheckedIn = checkedInCount || 0;
-    result.todayLate = lateCount || 0;
-
-    // 3. Reports — only submitted reports belong in the review/approval KPIs.
-    const [{ count: pendingReportCount, error: pendingReportsError }, { count: approvedReportCount, error: approvedReportsError }] = await Promise.all([
-      supabase.from("daily_reports").select("id", { count: "exact", head: true }).eq("submission_status", "submitted").in("review_status", ["not_reviewed", "under_review"]),
-      supabase.from("daily_reports").select("id", { count: "exact", head: true }).eq("submission_status", "submitted").eq("review_status", "approved"),
-    ]);
-    if (pendingReportsError) throw pendingReportsError;
-    if (approvedReportsError) throw approvedReportsError;
-    result.pendingReports = pendingReportCount || 0;
-    result.approvedReports = approvedReportCount || 0;
-
-    // 4. Active tasks
-    const { count: taskCount, error: taskError } = await supabase
-      .from("tasks")
-      .select("id", { count: "exact", head: true })
-      .in("status", ["todo", "in_progress", "in_review"])
-      .is("deleted_at", null);
-    if (taskError) throw taskError;
-    result.activeTasks = taskCount || 0;
+    // The WIB date stays a bound parameter: the reader pins its session to UTC, so the operational
+    // day is decided here, never by now() inside Postgres.
+    const kpi = await fetchOperationalCounts(getReadOnlyDb(), today);
+    result.totalSantri = kpi.totalSantri;
+    result.todayCheckedIn = kpi.todayCheckedIn;
+    result.todayLate = kpi.todayLate;
+    result.pendingReports = kpi.pendingReports;
+    result.approvedReports = kpi.approvedReports;
+    result.activeTasks = kpi.activeTasks;
   } catch (err) {
     if (process.env.VITEST) return result;
     throwQueryError("analytics.admin_dashboard", err);
