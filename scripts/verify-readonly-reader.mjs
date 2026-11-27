@@ -62,7 +62,7 @@ try {
   //    bootstrap (src/lib/db/reader.ts → SESSION_STATEMENTS), not a server-side default: the role's
   //    value is printed for information, then the same statements are applied and re-read.
   const pre = await client.query(
-    "select current_setting('default_transaction_read_only') as read_only, current_setting('time zone') as tz",
+    "select current_setting('default_transaction_read_only') as read_only, current_setting('timezone') as tz",
   );
   console.log(`     default role sebelum bootstrap: ${pre.rows[0].read_only} · tz ${pre.rows[0].tz} (informasi)`);
 
@@ -75,8 +75,10 @@ try {
     await client.query(statement);
   }
 
+  // 'timezone' is the GUC name; the two-word "time zone" spelling is accepted by SET/SHOW only, and
+  // current_setting() rejects it as unrecognized.
   const settings = await client.query(
-    "select current_setting('default_transaction_read_only') as read_only, current_setting('time zone') as tz, current_setting('statement_timeout') as stmt_timeout",
+    "select current_setting('default_transaction_read_only') as read_only, current_setting('timezone') as tz, current_setting('statement_timeout') as stmt_timeout",
   );
   report("default_transaction_read_only = on setelah bootstrap", settings.rows[0].read_only === "on", `nilainya ${settings.rows[0].read_only}`);
   report("time zone = UTC", /utc/i.test(settings.rows[0].tz), settings.rows[0].tz);
