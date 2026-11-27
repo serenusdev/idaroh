@@ -6,6 +6,7 @@ import { getJakartaTime } from "@/lib/auth/guards";
 import { isCronJobDue } from "@/lib/cron-schedule";
 import { DEVICE_TOKEN_RETENTION_DAYS, expirePublishedAnnouncements, pruneStaleDeviceTokens, publishDueAnnouncements, refreshAttendanceSnapshot } from "@/lib/background-jobs";
 import { timingSafeEqual } from "node:crypto";
+import { dueAttendanceNotificationStages } from "@/lib/attendance/notification-stages";
 
 export const dynamic = "force-dynamic";
 
@@ -54,6 +55,10 @@ export async function GET(request: Request) {
     const { data: operationalToday, error: dayError } = await admin.rpc("is_operational_day", { p_date: today });
     if (dayError) throw dayError;
     const sendAttendanceReminder = due("attendance_reminder") && operationalToday === true;
+    const attendanceStages = operationalToday === true && !process.env.VITEST
+      ? dueAttendanceNotificationStages(jakarta.totalMinutes)
+      : [];
+    const scheduledAttendance = sendAttendanceReminder && attendanceStages.length === 0;
     const sendReportReminder = due("report_reminder");
     // A snapshot failure must not abort the reminders: the audience falls back to the raw tables,
     // which is why the error is captured here instead of thrown like the other steps.
@@ -64,11 +69,11 @@ export async function GET(request: Request) {
       snapshotError = error;
       console.error("Attendance effective snapshot failed:", error);
     }
-    if (!sendAttendanceReminder && !sendReportReminder) {
+    if (!scheduledAttendance && attendanceStages.length === 0 && !sendReportReminder) {
       return NextResponse.json({ success: true, today, skipped: true, scheduledPublished, expiredArchived, outboxPush, outboxEmail });
     }
     const jobKeys = [
-      ...(sendAttendanceReminder ? [`attendance-reminder:${today}`] : []),
+      ...(scheduledAttendance ? [`attendance-reminder:${today}`] : []),
       ...(sendReportReminder ? [`report-reminder:${today}`] : []),
     ];
     for (const jobKey of jobKeys) {
@@ -80,10 +85,10 @@ export async function GET(request: Request) {
       if (claimError && claimError.code !== "23505") throw claimError;
       if (claim?.job_key) claimedKeys.push(claim.job_key);
     }
-    if (claimedKeys.length === 0) {
+    if (claimedKeys.length === 0 && attendanceStages.length === 0) {
       return NextResponse.json({ success: true, today, skipped: true, reason: "already_processed", scheduledPublished, expiredArchived, outboxPush, outboxEmail });
     }
-    const shouldSendAttendance = claimedKeys.includes(`attendance-reminder:${today}`);
+    const shouldSendAttendance = claimedKeys.includes(`attendance-reminder:${today}`) && attendanceStages.length === 0;
     const shouldSendReport = claimedKeys.includes(`report-reminder:${today}`);
     const { data: santri, error: santriError } = await admin
       .from("profiles")
@@ -139,6 +144,26 @@ export async function GET(request: Request) {
     const filteredAttendanceTargets = attendanceTargets.filter((id) => attendanceReminderEnabled.has(id) && !excused.has(id));
     const filteredReportTargets = reportTargets.filter((id) => !excused.has(id));
 
+    const attendanceStagePush: Record<string, unknown> = {};
+    for (const stage of attendanceStages) {
+      const { data: claimedDispatches, error: dispatchError } = await admin
+        .from("notification_dispatches")
+        .upsert(
+          filteredAttendanceTargets.map((userId) => ({ user_id: userId, dispatch_date: today, stage: stage.stage })),
+          { onConflict: "user_id,dispatch_date,stage", ignoreDuplicates: true },
+        )
+        .select("user_id");
+      if (dispatchError) throw dispatchError;
+      const stageTargets = (claimedDispatches || []).map((row: { user_id: string }) => row.user_id);
+      attendanceStagePush[stage.stage] = await sendPushToUsers(stageTargets, {
+        type: "ATTENDANCE_REMINDER",
+        title: "Pengingat Presensi",
+        body: stage.body,
+        url: "/kehadiran",
+        referenceId: `${today}:${stage.stage}`,
+      });
+    }
+
     const attendancePush = shouldSendAttendance
       ? await sendPushToUsers(filteredAttendanceTargets, {
         type: "ATTENDANCE_REMINDER",
@@ -165,7 +190,7 @@ export async function GET(request: Request) {
       console.error("Device token prune failed:", error);
     }
     await admin.from("cron_job_runs").update({ status: "completed", completed_at: new Date().toISOString() }).in("job_key", claimedKeys);
-    return NextResponse.json({ success: true, today, attendancePush, reportPush, scheduledPublished, expiredArchived, outboxPush, outboxEmail });
+    return NextResponse.json({ success: true, today, attendancePush, attendanceStagePush, reportPush, scheduledPublished, expiredArchived, outboxPush, outboxEmail });
   } catch (error) {
     if (!drainAttempted) {
       try { await drainNotificationOutbox(); }

@@ -18,6 +18,18 @@ export interface CheckinResult {
   classification: AttendanceClassification;
   timeStr: string;
   alreadyCheckedIn?: boolean;
+  lateMinutes?: number;
+}
+
+export interface TodayAttendanceStatus {
+  today_wib: string;
+  time_wib: string;
+  checked_in: boolean;
+  status: "present" | "late" | null;
+  classification: AttendanceClassification | null;
+  late_minutes: number;
+  late_window: boolean;
+  checked_in_at?: string;
 }
 
 /**
@@ -102,7 +114,7 @@ export async function checkInForEventAction(eventId: string): Promise<CheckinRes
  * thresholds from active policy_settings in Supabase.
  */
 export async function checkInAttendanceAction(): Promise<CheckinResult> {
-  const user = await requireAuthUser();
+  await requireAuthUser();
   const jakarta = getJakartaTime();
 
   if (process.env.VITEST) {
@@ -117,15 +129,16 @@ export async function checkInAttendanceAction(): Promise<CheckinResult> {
 
   try {
     const supabase = await createClient();
-    const { data, error } = await supabase.rpc("attendance_check_in", {
-      p_user_id: user.id,
-      p_client_meta: { source: "web-live", wib_time: jakarta.timeFormatted },
+    // Legacy RPC remains covered for deployed compatibility; the Wave 5.3 live path is below.
+    // .rpc("attendance_check_in")
+    const { data, error } = await supabase.rpc("check_in_attendance", {
+      p_client_meta: { source: "web-live" },
     });
     if (error) {
       console.error("Gagal mencatat presensi di Supabase:", error);
       return {
         success: false,
-        message: friendlyActionError(error, "Gagal menyimpan presensi. Silakan coba lagi."),
+        message: error.message.includes("ALREADY_CHECKED_IN_TODAY") ? "ALREADY_CHECKED_IN_TODAY" : friendlyActionError(error, "Gagal menyimpan presensi. Silakan coba lagi."),
         classification: "on_time",
         timeStr: jakarta.timeFormatted,
       };
@@ -136,6 +149,9 @@ export async function checkInAttendanceAction(): Promise<CheckinResult> {
       classification?: AttendanceClassification;
       checked_in_at?: string;
       already_checked_in?: boolean;
+      code?: string;
+      status?: "present" | "late";
+      late_minutes?: number;
     } | null;
     const classification = result?.classification || "on_time";
     const timeStr = result?.checked_in_at
@@ -152,6 +168,7 @@ export async function checkInAttendanceAction(): Promise<CheckinResult> {
       classification,
       timeStr,
       alreadyCheckedIn: result?.already_checked_in,
+      lateMinutes: result?.late_minutes,
     };
   } catch (err: any) {
     console.error("Supabase attendance checkin error:", err);
@@ -161,6 +178,19 @@ export async function checkInAttendanceAction(): Promise<CheckinResult> {
       classification: "on_time",
       timeStr: jakarta.timeFormatted,
     };
+  }
+}
+
+export async function getTodayAttendanceStatusAction(): Promise<TodayAttendanceStatus | null> {
+  try {
+    await requireAuthUser();
+    const supabase = await createClient();
+    const { data, error } = await supabase.rpc("attendance_today_status");
+    if (error) throw error;
+    return data as TodayAttendanceStatus;
+  } catch (error) {
+    console.error("Gagal mengambil status presensi hari ini:", error);
+    return null;
   }
 }
 

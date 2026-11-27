@@ -64,6 +64,7 @@ flushSync(() => reactRoot.render(React.createElement(IdentityProvider, {
 const modules: Record<string, string> = {
   "@/modules/attendance/actions": `
     export const getAttendanceHistoryAction = () => window.__attSubmitBoundaries.history();
+    export const getTodayAttendanceStatusAction = () => ({ checked_in: false, late_window: false, status: null, classification: null, late_minutes: 0, today_wib: "2026-11-27", time_wib: "07:30:00" });
     export const checkInAttendanceAction = () => window.__attSubmitBoundaries.checkin();
     export const submitCorrectionAction = (payload) => window.__attSubmitBoundaries.correction(payload);
     export const submitExceptionAction = (...args) => window.__attSubmitBoundaries.exception(...args);`,
