@@ -1049,49 +1049,89 @@ export async function unenrollMfaAction(factorId: string): Promise<ActionResult>
 
 /**
  * Server Action: Update current user's own profile (Issue 4 — self-service).
- * Users can only update their own profile. Role/status changes are blocked.
+ * Role/status changes are blocked: this path only reaches the columns §3.7 gives to
+ * `people.profile.update_self`, and it can only reach the caller's own row.
+ *
+ * The function is total — every statement sits inside the try. A throw that escapes a Server
+ * Action is replaced by "An error occurred in the Server Components render..." in production
+ * builds, so the user and the support team both lose the actual reason.
  */
 export async function updateProfileAction(payload: {
   fullName: string;
   phoneNumber: string;
   avatarUrl?: string;
 }): Promise<ActionResult> {
-  if (!payload.fullName.trim()) {
-    return { success: false, message: "Nama lengkap wajib diisi." };
-  }
-
   try {
-    const user = await requireAuthUser();
-    const supabase = createAdminClient();
+    const given = payload ?? { fullName: "", phoneNumber: "" };
+    const fullName = typeof given.fullName === "string" ? given.fullName.trim() : "";
+    if (!fullName) {
+      return { success: false, message: "Nama lengkap wajib diisi." };
+    }
+    if (fullName.length > 100) {
+      return { success: false, message: "Nama lengkap maksimal 100 karakter." };
+    }
+    if (typeof given.phoneNumber !== "string") {
+      return { success: false, message: "Nomor telepon tidak valid." };
+    }
+    const phoneNumber = given.phoneNumber.trim();
+    if (phoneNumber.length > 30) {
+      return { success: false, message: "Nomor telepon maksimal 30 karakter." };
+    }
 
-    const updatePayload: Record<string, string> = {
-      full_name: payload.fullName.trim(),
-      phone_number: payload.phoneNumber.trim(),
-      updated_at: new Date().toISOString(),
-    };
-    if (payload.avatarUrl !== undefined) {
-      const trimmedUrl = payload.avatarUrl.trim();
-      if (!trimmedUrl) {
-        updatePayload.avatar_url = "";
-      } else {
-        const expectedPrefix = `/storage/v1/object/public/avatars/${user.id}/`;
-        const isValid = trimmedUrl.includes(expectedPrefix) && !trimmedUrl.includes("..");
-        if (!isValid) {
-          return {
-            success: false,
-            message: "URL avatar tidak valid atau bukan milik akun Anda.",
-          };
+    const user = await requireAuthUser();
+
+    // null means "leave the stored value alone". An unchanged URL is not a write, and the value
+    // already in the row can predate this form (seed, admin edit, restore) — rejecting it turned
+    // every later save into a failure for that account.
+    let avatarUrl: string | null = null;
+    if (typeof given.avatarUrl === "string") {
+      const trimmedUrl = given.avatarUrl.trim();
+      if (trimmedUrl !== (user.avatar_url ?? "")) {
+        if (!trimmedUrl) {
+          avatarUrl = "";
+        } else {
+          const expectedPrefix = `/storage/v1/object/public/avatars/${user.id}/`;
+          const isValid = trimmedUrl.includes(expectedPrefix) && !trimmedUrl.includes("..");
+          if (!isValid) {
+            return {
+              success: false,
+              message: "URL avatar tidak valid atau bukan milik akun Anda.",
+            };
+          }
+          avatarUrl = trimmedUrl;
         }
-        updatePayload.avatar_url = trimmedUrl;
       }
     }
 
-    const { error } = await supabase
-      .from("profiles")
-      .update(updatePayload)
-      .eq("id", user.id);
+    // The session client, so the database sees auth.uid() and can own the scope check and the
+    // audit_logs row instead of trusting this process (SEC-10).
+    const supabase = await createClient();
+    const { data: rpcResult, error: rpcError } = await supabase.rpc("update_own_profile", {
+      p_full_name: fullName,
+      p_phone_number: phoneNumber,
+      p_avatar_url: avatarUrl,
+    });
 
-    if (error) throw error;
+    if (rpcError) {
+      // Deploy ordering: the app can reach production before the operator applies
+      // 20261122000017, and PostgREST then answers PGRST202 in English.
+      console.error("updateProfileAction rpc error:", rpcError);
+      return {
+        success: false,
+        message: /could not find the function|pgrst202/i.test(String(rpcError.message ?? rpcError))
+          ? "Gagal memperbarui profil."
+          : friendlyActionError(rpcError, "Gagal memperbarui profil."),
+      };
+    }
+    if (!rpcResult?.success) {
+      return {
+        success: false,
+        message: friendlyActionError(
+          rpcResult?.message,
+          "Gagal memperbarui profil.",
+        ),
+      };
+    }
 
     return { success: true, message: "Profil berhasil diperbarui." };
   } catch (err: any) {
