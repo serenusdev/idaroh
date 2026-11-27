@@ -7,9 +7,10 @@
  *
  *   SUPABASE_DB_URL=postgresql://... node scripts/verify-readonly-reader.mjs
  *
- * It reads SUPABASE_DB_URL / SUPABASE_DB_SSL_MODE exactly the way src/lib/db/reader.ts does, and it
- * prints no part of the connection string except the host and port. Exit code 1 means the read-only
- * guarantee does not hold in that environment.
+ * It reads SUPABASE_DB_URL / SUPABASE_DB_SSL_MODE exactly the way src/lib/db/reader.ts does and opens
+ * the session with the same bootstrap statements, so it measures the guarantee the application
+ * actually relies on. It prints no part of the connection string except the host and port. Exit code 1
+ * means the read-only guarantee does not hold in that environment.
  */
 
 import { Pool } from "pg";
@@ -56,12 +57,28 @@ try {
   console.log(`Host: ${host}:${port} · mode SSL: ${mode}`);
   console.log(`Postgres: ${version.rows[0].v.split(",")[0]}`);
 
-  // 1. The session must open exactly the way reader.ts declares it.
+  // 1. The session must end up exactly the way reader.ts declares it. A stock Supabase role leaves
+  //    default_transaction_read_only off, so the guarantee being verified is the reader's own
+  //    bootstrap (src/lib/db/reader.ts → SESSION_STATEMENTS), not a server-side default: the role's
+  //    value is printed for information, then the same statements are applied and re-read.
+  const pre = await client.query(
+    "select current_setting('default_transaction_read_only') as read_only, current_setting('time zone') as tz",
+  );
+  console.log(`     default role sebelum bootstrap: ${pre.rows[0].read_only} · tz ${pre.rows[0].tz} (informasi)`);
+
+  const timeout = Math.min(30000, Math.max(250, Number(process.env.DX01_STATEMENT_TIMEOUT_MS) || 5000));
+  for (const statement of [
+    "set default_transaction_read_only = on",
+    "set time zone 'utc'",
+    `set statement_timeout = ${timeout}`,
+  ]) {
+    await client.query(statement);
+  }
+
   const settings = await client.query(
     "select current_setting('default_transaction_read_only') as read_only, current_setting('time zone') as tz, current_setting('statement_timeout') as stmt_timeout",
   );
-  const readOnlyOn = settings.rows[0].read_only === "on";
-  report("default_transaction_read_only = on", readOnlyOn, `nilainya ${settings.rows[0].read_only}`);
+  report("default_transaction_read_only = on setelah bootstrap", settings.rows[0].read_only === "on", `nilainya ${settings.rows[0].read_only}`);
   report("time zone = UTC", /utc/i.test(settings.rows[0].tz), settings.rows[0].tz);
   console.log(`     statement_timeout = ${settings.rows[0].stmt_timeout}`);
 

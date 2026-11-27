@@ -65,9 +65,10 @@ Perubahan ini menambah secret, jadi urutannya terbalik dari pola Database-First:
    ```bash
    SUPABASE_DB_URL='postgresql://…' node scripts/verify-readonly-reader.mjs
    ```
-   Keluaran: host:port, versi Postgres, status `default_transaction_read_only`, percobaan DDL yang
-   **harus** ditolak (SQLSTATE 25006), angka health read, dan kehadiran 11 relasi read model.
-   Exit code 1 bila jaminan read-only tidak berlaku.
+   Keluaran: host:port, versi Postgres, nilai `default_transaction_read_only` **sebelum** (informasi —
+   role `postgres` Supabase secara default `off`) dan **sesudah** bootstrap reader diterapkan (harus
+   `on`), percobaan DDL yang **harus** ditolak (SQLSTATE 25006), angka health read, dan kehadiran 11
+   relasi read model. Exit code 1 bila jaminan read-only tidak berlaku.
 4. **Merge / deploy.** Setelah itu card Beranda, `/admin/audit`, dan unduhan ekspor tetap normal;
    bila langkah 1–3 dilewati, ketiganya gagal dengan pesan `INTERNAL`/`UNAVAILABLE` yang jelas.
 
