@@ -1,4 +1,5 @@
 import type { ParsedReportRow } from "./types";
+import { strFromU8, unzipSync } from "fflate";
 
 function parseJsonCell(value: string | undefined): unknown {
   if (!value?.trim()) return undefined;
@@ -25,6 +26,32 @@ export function parseCsv(text: string): ParsedReportRow[] {
       sourceRow: index + 2,
     };
   });
+}
+
+export function parseXlsx(body: Uint8Array): ParsedReportRow[] {
+  const files = unzipSync(body);
+  const sheetName = Object.keys(files).find((name) => /^xl\/worksheets\/sheet\d+\.xml$/.test(name));
+  if (!sheetName) return [];
+  const sharedStrings = files["xl/sharedStrings.xml"] ? [...strFromU8(files["xl/sharedStrings.xml"]).matchAll(/<si[\s\S]*?<t[^>]*>([\s\S]*?)<\/t>[\s\S]*?<\/si>/g)].map((match) => xmlDecode(match[1])) : [];
+  const rows: string[][] = [];
+  for (const rowMatch of strFromU8(files[sheetName]).matchAll(/<row\b[^>]*>([\s\S]*?)<\/row>/g)) {
+    const cells: string[] = [];
+    for (const cellMatch of rowMatch[1].matchAll(/<c\b([^>]*)>([\s\S]*?)<\/c>/g)) {
+      const attributes = cellMatch[1];
+      const ref = /\br="([A-Z]+)\d+"/.exec(attributes)?.[1] ?? "A";
+      const index = [...ref].reduce((total, letter) => total * 26 + letter.charCodeAt(0) - 64, 0) - 1;
+      const type = /\bt="([^"]+)"/.exec(attributes)?.[1];
+      const raw = /<v[^>]*>([\s\S]*?)<\/v>/.exec(cellMatch[2])?.[1] ?? /<t[^>]*>([\s\S]*?)<\/t>/.exec(cellMatch[2])?.[1] ?? "";
+      const value = type === "s" ? sharedStrings[Number(raw)] ?? "" : xmlDecode(raw);
+      cells[index] = value;
+    }
+    rows.push(cells);
+  }
+  return parseCsv(rows.map((row) => row.map((cell) => `"${(cell ?? "").replace(/"/g, '""')}"`).join(",")).join("\n"));
+}
+
+function xmlDecode(value: string): string {
+  return value.replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&#39;/g, "'");
 }
 
 export function normalizeName(value: string): string {

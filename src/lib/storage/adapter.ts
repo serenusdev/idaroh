@@ -1,4 +1,4 @@
-export type StorageCategory = "raw-imports" | "rapor";
+export type StorageCategory = "avatars" | "reports" | "resources" | "raw-imports" | "rapor";
 
 export interface StorageObject {
   id: string;
@@ -11,6 +11,7 @@ export interface StorageObject {
 export interface StorageAdapter {
   upload(params: { category: StorageCategory; path: string; body: Uint8Array; mimeType: string }): Promise<StorageObject>;
   createArchive(params: { category: StorageCategory; path: string; files: Array<{ name: string; body: Uint8Array }> }): Promise<StorageObject>;
+  download(id: string): Promise<Response>;
 }
 
 export class StorageNotConfiguredError extends Error {
@@ -19,8 +20,3 @@ export class StorageNotConfiguredError extends Error {
     this.name = "StorageNotConfiguredError";
   }
 }
-
-export const storageAdapter: StorageAdapter = {
-  async upload() { throw new StorageNotConfiguredError(); },
-  async createArchive() { throw new StorageNotConfiguredError(); },
-};

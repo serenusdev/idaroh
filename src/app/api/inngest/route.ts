@@ -3,7 +3,7 @@ import { createClient } from "@/lib/supabase/server";
 import { requireRole } from "@/lib/auth/guards";
 import { chunk } from "@/lib/inngest/report-batch";
 import { renderReportCardPdf } from "@/modules/report-cards/pdf";
-import { storageAdapter } from "@/lib/storage/adapter";
+import { storageAdapter } from "@/lib/storage/gdrive";
 
 export const runtime = "nodejs";
 
