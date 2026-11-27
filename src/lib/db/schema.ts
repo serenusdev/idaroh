@@ -117,6 +117,22 @@ export interface HalaqahLogsTable {
   updated_at: string;
 }
 
+export interface GatePassesTable {
+  id: string;
+  student_id: string;
+  reason: string;
+  destination: string;
+  out_at: Date | null;
+  due_back_at: Date;
+  actual_back_at: Date | null;
+  status: "pending" | "approved" | "out" | "returned" | "overdue" | "rejected" | "cancelled";
+  qr_token: string;
+  approved_by: string | null;
+  created_by: string;
+  created_at: Date;
+  updated_at: Date;
+}
+
 export interface DailyReportsTable {
   id: string;
   user_id: string;
@@ -337,6 +353,7 @@ export interface Database {
   attendance_exceptions: AttendanceExceptionsTable;
   mutabaah_logs: MutabaahLogsTable;
   halaqah_logs: HalaqahLogsTable;
+  gate_passes: GatePassesTable;
   daily_reports: DailyReportsTable;
   tasks: TasksTable;
   audit_logs: AuditLogsTable;
