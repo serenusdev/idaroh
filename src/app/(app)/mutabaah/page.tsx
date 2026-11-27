@@ -3,6 +3,8 @@ import { requireAuthUser } from "@/lib/auth/guards";
 import MutabaahForm from "@/modules/mutabaah/mutabaah-form";
 import { todayWibDate } from "@/modules/mutabaah/actions";
 
+export const dynamic = "force-dynamic";
+
 export default async function MutabaahPage() {
   const user = await requireAuthUser();
   const canRecordCollectively = user.role === "pengurus" || user.role === "super_admin" || user.roles?.some((role) => role === "pengurus" || role === "super_admin");
