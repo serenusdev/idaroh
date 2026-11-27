@@ -91,6 +91,32 @@ export interface AttendanceExceptionsTable {
   created_at: string;
 }
 
+export interface MutabaahLogsTable {
+  id: string;
+  student_id: string;
+  log_date: string;
+  checklist: unknown;
+  recorded_by: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface HalaqahLogsTable {
+  id: string;
+  student_id: string;
+  session_date: string;
+  entry_type: "ziyadah" | "murojaah";
+  surah_name: string;
+  ayah_from: number;
+  ayah_to: number;
+  quality_grade: "mumtaz" | "jayyid_jiddan" | "jayyid" | "maqbul" | "needs_review";
+  tajwid_errors: string;
+  notes: string;
+  ustadz_id: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
 export interface DailyReportsTable {
   id: string;
   user_id: string;
@@ -309,6 +335,8 @@ export interface Database {
   profiles: ProfilesTable;
   attendance_records: AttendanceRecordsTable;
   attendance_exceptions: AttendanceExceptionsTable;
+  mutabaah_logs: MutabaahLogsTable;
+  halaqah_logs: HalaqahLogsTable;
   daily_reports: DailyReportsTable;
   tasks: TasksTable;
   audit_logs: AuditLogsTable;

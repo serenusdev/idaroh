@@ -62,6 +62,7 @@ export function DesktopSidebar({ user }: DesktopSidebarProps) {
     { label: "Beranda", href: "/", icon: "dashboard" },
     { label: "Presensi Harian", href: "/kehadiran", icon: "how_to_reg" },
     { label: "Laporan Aktivitas", href: "/laporan", icon: "edit_document" },
+    { label: "Mutaba'ah & Halaqah", href: "/mutabaah", icon: "menu_book" },
     ...(canReview ? [{ label: "Review Laporan", href: "/review", icon: "fact_check" }] : []),
     ...(canViewTasks ? [{ label: "Tugas & Proyek", href: "/tugas", icon: "task_alt" }] : []),
     { label: "Jadwal & Agenda", href: "/jadwal", icon: "calendar_month" },
