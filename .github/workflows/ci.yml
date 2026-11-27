@@ -118,7 +118,10 @@ jobs:
             echo "DX01_DB_URL was not exported from supabase status."
             exit 1
           fi
-          npx vitest run src/__tests__/dx01-live-parity.test.ts
+          # tap, not the default reporter: vitest formats failures with Map.groupBy, which the Node 20
+          # this job pins does not have — a failure would otherwise print only "Map.groupBy is not a
+          # function" and hide every assertion diff.
+          npx vitest run --reporter=tap src/__tests__/dx01-live-parity.test.ts
       - name: Stop disposable Supabase
         if: always()
         run: supabase stop --no-backup

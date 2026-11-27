@@ -1,5 +1,5 @@
 import { sql } from "kysely";
-import { countInt, jsonMaxText, jsonText } from "@/lib/db/expressions";
+import { countInt, countIntOver, jsonMaxText, jsonText } from "@/lib/db/expressions";
 import type { ReadOnlyDb } from "@/lib/db/reader";
 
 /**
@@ -195,9 +195,9 @@ export async function fetchOperationalCounts(db: ReadOnlyDb, today: string): Pro
  * costs one statement regardless of how large the team is.
  *
  * `ORDER BY created_at DESC` alone could repeat or skip a row when two logs share a timestamp, so the
- * id is the tie-break; `count(*) OVER ()` carries the total without a second round-trip, which also
- * means an off-the-end page reports a total of 0 — the same `hasMore: false` the old early return for
- * an empty page produced.
+ * id is the tie-break; `cast(count(*) over () as int)` carries the total without a second round-trip,
+ * which also means an off-the-end page reports a total of 0 — the same `hasMore: false` the old early
+ * return for an empty page produced.
  */
 export async function fetchAuditLogPage(db: ReadOnlyDb, input: AuditLogPageQuery): Promise<AuditLogPage> {
   const pageSize = Math.max(1, Math.floor(input.pageSize));
@@ -215,7 +215,7 @@ export async function fetchAuditLogPage(db: ReadOnlyDb, input: AuditLogPageQuery
       "audit_logs.action_detail",
       "audit_logs.hash",
       jsonText("audit_logs.created_at").as("created_at"),
-      sql<number>`count(*)::int over ()`.as("total_count"),
+      countIntOver().as("total_count"),
     ])
     // One EXISTS instead of a fetched actor_id list: same team semantics, bounded cost.
     .$if(input.scope !== ORG_SCOPE, (qb) =>
@@ -239,8 +239,10 @@ export async function fetchAuditLogPage(db: ReadOnlyDb, input: AuditLogPageQuery
         ]),
       ),
     )
-    .orderBy("created_at", "desc")
-    .orderBy("id", "desc")
+    // Qualified: an unqualified ORDER BY name would resolve to the created_at *alias*, sorting the
+    // page by ISO text instead of by the instant.
+    .orderBy("audit_logs.created_at", "desc")
+    .orderBy("audit_logs.id", "desc")
     .limit(pageSize)
     .offset((safePage - 1) * pageSize)
     .execute();

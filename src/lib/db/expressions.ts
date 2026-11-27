@@ -16,6 +16,18 @@ export function countInt(): RawBuilder<number> {
 }
 
 /**
+ * The whole-filtered-set size carried on every row of a page, so one statement answers both the
+ * rows and `hasMore`.
+ *
+ * `count(*)::int over ()` is a syntax error — the cast binds before `OVER` can attach to the
+ * function call — so the narrowing is written as an explicit `cast(… over () as int)`. Verified
+ * against Postgres; `count(*) over ()` alone would arrive from `pg` as a string.
+ */
+export function countIntOver(): RawBuilder<number> {
+  return sql<number>`cast(count(*) over () as int)`;
+}
+
+/**
  * Renders a date/timestamptz column as the exact JSON text PostgREST produced
  * (`2026-11-27T05:36:56.123456+00:00`) instead of a JS `Date`.
  *

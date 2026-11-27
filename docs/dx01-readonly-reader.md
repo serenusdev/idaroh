@@ -86,8 +86,14 @@ dipakai) atau dihapus; menghapusnya **tidak** mengembalikan jalur lama secara ot
 - Semantik pencarian audit dipertahankan apa adanya: koma dan kurung `( )` dibuang (keduanya sintaks
   `.or()` PostgREST), `*` dirender sebagai wildcard LIKE, `%` dibiarkan hidup. Ini paritas, bukan
   "perbaikan".
-- `ORDER BY created_at DESC` di audit explorer kini diikat ` , id DESC`. Sebelumnya dua log dengan
-  timestamp identik bisa membuat satu baris muncul di dua halaman atau hilang sama sekali.
+- `ORDER BY audit_logs.created_at DESC` di audit explorer kini diikat `, audit_logs.id DESC`, dan
+  keduanya menyebut **kolom**, bukan alias teks `created_at` yang se nama (alias itu mengurutkan
+  berdasarkan teks). Sebelumnya dua log dengan timestamp identik bisa membuat satu baris muncul di dua
+  halaman atau hilang sama sekali.
+- Total baris satu halaman dibawa oleh `cast(count(*) over () as int)`, bukan request kedua. Bentuk
+  `count(*)::int over ()` **gagal sintaks di Postgres** (cast mengikat sebelum `OVER` menempel pada
+  function call) — kesalahan ini ketahuan oleh langkah paritas di CI, bukan oleh tes unit yang hanya
+  membaca teks SQL.
 - Plafon baris ikut dipindah: PostgREST diam-diam membatasi 1000 baris (`db-max-rows`); baca ekspor
   kini menulis `.limit(1000)` secara eksplisit (audit tetap 500). Tanpa ini, SELECT mentah bisa
   mengubah ekspor menjadi dump tabel tak terbatas.

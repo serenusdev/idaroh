@@ -176,10 +176,14 @@ describe("DX-01 — audit explorer page", () => {
     expect(sqlText).toContain('"profiles"."team_name" = $1');
     expect(sqlText).toContain('"profiles"."id" = "audit_logs"."actor_id"');
     expect(sqlText).not.toContain('"actor_id" in (');
-    expect(sqlText).toContain('count(*)::int over ()');
+    // Window count narrowed in the database. `count(*)::int over ()` is a Postgres syntax error (the
+    // cast binds before OVER can attach), so the cast wraps the window expression instead.
+    expect(sqlText).toContain("cast(count(*) over () as int)");
+    expect(sqlText).not.toContain("::int over");
     expect(sqlText).toContain('to_jsonb("audit_logs"."created_at") #>> \'{}\'');
-    // Newest first, with a stable tie-break so a page cannot repeat or skip a row.
-    expect(sqlText).toContain('order by "created_at" desc, "id" desc');
+    // Newest first, by the column rather than the same-named ISO-text alias, with a stable tie-break
+    // so a page cannot repeat or skip a row.
+    expect(sqlText).toContain('order by "audit_logs"."created_at" desc, "audit_logs"."id" desc');
     expect(selects[0].params).toEqual(["Cabang 3", 20, 40]);
     expect(page.totalCount).toBe(3);
     expect(page.rows[0].id).toBe("l1");
