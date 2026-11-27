@@ -3,6 +3,7 @@
 import * as React from "react";
 import {
   checkInAttendanceAction,
+  getTodayAttendanceStatusAction,
   getAttendanceHistoryAction,
   submitCorrectionAction,
   submitExceptionAction,
@@ -34,6 +35,10 @@ export default function KehadiranPage() {
     queryFn: () => getAttendanceHistoryAction(),
   });
   const policyQuery = useQuery({ queryKey: cacheKeys.policy(user), queryFn: getActivePolicyAction });
+  const todayStatusQuery = useQuery({ queryKey: ["attendance:today-status", user?.id], queryFn: getTodayAttendanceStatusAction });
+  const serverCheckedIn = todayStatusQuery.data?.checked_in === true;
+  const serverLateWindow = todayStatusQuery.data?.late_window === true;
+  const isCheckedInToday = checkedIn || serverCheckedIn;
   const historyItems: AttendanceRecordItem[] = historyQuery.data ?? [];
   const policy = policyQuery.data ?? null;
   const loadError = historyQuery.error?.message || policyQuery.error?.message || null;
@@ -313,13 +318,13 @@ export default function KehadiranPage() {
                 </h2>
               </div>
               <span className="font-label-sm text-label-sm text-primary font-semibold bg-accent px-2.5 py-1 rounded-full">
-                {checkedIn ? "Tercatat" : "Siap Dicatat"}
+                {isCheckedInToday ? "Terkunci" : serverLateWindow ? "Terlambat" : "Siap Dicatat"}
               </span>
             </div>
 
             {/* Interactive Tactile Button with Ripple & State */}
             <div className="relative">
-              {checkedIn ? (
+              {isCheckedInToday ? (
                 <div className="p-4 bg-surface-container-low text-success border border-success/30 rounded-2xl flex items-center gap-3.5">
                   <Illustration
                     src="/illustrations/undraw_done_erdp.svg"
@@ -330,7 +335,7 @@ export default function KehadiranPage() {
                   />
                   <div className="flex-1 min-w-0">
                     <p className="font-headline-sm text-[16px] font-bold leading-tight text-on-surface">
-                      Presensi Anda Telah Tercatat
+                      Sudah Presensi Hari Ini — Reset 00:00
                     </p>
                     <p className="font-body-sm text-[12px] sm:text-[13px] text-muted-foreground mt-0.5">
                       {checkedInTime} • Status: <span className="font-semibold text-success">{checkedInStatus}</span> (Tervalidasi Server)
@@ -339,10 +344,10 @@ export default function KehadiranPage() {
                 </div>
               ) : (
                 <button
-                  className="w-full min-h-[64px] bg-primary text-on-primary rounded-2xl flex items-center justify-center gap-3 shadow-sm hover:bg-primary-container active:scale-[0.98] transition-all p-4 select-none relative overflow-hidden group disabled:opacity-80"
+                  className={`w-full min-h-[64px] ${serverLateWindow ? "bg-red-600 hover:bg-red-700" : "bg-primary hover:bg-primary-container"} text-on-primary rounded-2xl flex items-center justify-center gap-3 shadow-sm active:scale-[0.98] transition-all p-4 select-none relative overflow-hidden group disabled:opacity-80`}
                   id="btn-checkin"
                   onClick={handleCheckin}
-                  disabled={isProcessing}
+                  disabled={isProcessing || isCheckedInToday}
                   type="button"
                 >
                   {isProcessing ? (
@@ -366,7 +371,7 @@ export default function KehadiranPage() {
                       </span>
                       <div className="text-left">
                         <p className="font-headline-sm text-headline-sm text-on-primary leading-tight font-semibold">
-                          Tekan untuk Check-in Mandiri
+                          {serverLateWindow ? "Presensi Terlambat (> 08:15)" : "Presensi Masuk"}
                         </p>
                         <p className="font-body-sm text-body-sm text-on-primary-container leading-none opacity-90 mt-0.5">
                           Sinkronisasi 1 ketuk ke basis data pondok
