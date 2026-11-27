@@ -33,6 +33,7 @@ window.__auditBoundaries = {
   active: async () => clone(config.activePolicy ?? null),
   chain: async () => ({ valid: true, checked: 3, message: "ok" }),
   logs: async () => ({ success: true, logs: [], hasMore: false }),
+  compliance: async () => ({ success: true, rows: [], totalCount: 0, hasMore: false }),
   approve: async (id, note) => { window.__adminApproveCalls.push({ id, note }); return { success: true, message: "Usulan kebijakan disetujui." }; },
   activate: async () => ({ success: true, message: "ok" }),
   update: async () => ({ success: true, message: "ok" }),
@@ -51,6 +52,7 @@ const modules: Record<string, string> = {
     export const getActivePolicyAction = () => window.__auditBoundaries.active();
     export const getAuditChainStatusAction = () => window.__auditBoundaries.chain();
     export const queryAuditLogsAction = () => window.__auditBoundaries.logs();
+    export const queryComplianceCenterAction = (...args) => window.__auditBoundaries.compliance(...args);
     export const approvePolicySettingsAction = (...args) => window.__auditBoundaries.approve(...args);
     export const activatePolicySettingsAction = () => window.__auditBoundaries.activate();
     export const updatePolicySettingsAction = () => window.__auditBoundaries.update();

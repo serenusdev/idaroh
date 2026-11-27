@@ -22,6 +22,7 @@ export const EXPORT_CATEGORIES = [
   "tugas_proyek",
   "users",
   "audit_logs",
+  "compliance_audit",
 ] as const;
 
 export type ExportCategory = (typeof EXPORT_CATEGORIES)[number];
@@ -47,7 +48,7 @@ export function holdsRole(user: UserProfile, roles: readonly UserRole[]): boolea
 }
 
 export function exportRolesFor(category: ExportCategory): readonly UserRole[] {
-  return category === "audit_logs" ? AUDIT_EXPORT_ROLES : EXPORT_ROLES;
+  return category === "audit_logs" || category === "compliance_audit" ? AUDIT_EXPORT_ROLES : EXPORT_ROLES;
 }
 
 /**
