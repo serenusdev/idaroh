@@ -17,7 +17,7 @@ import {
   validateExportFilters,
   type ExportFilterInput,
 } from "@/lib/export-policy";
-import { ORG_SCOPE, fetchAuditLogPage, fetchOperationalCounts, fetchSystemHealth } from "@/lib/db/analytics-queries";
+import { ORG_SCOPE, fetchAuditLogPage, fetchComplianceCenterPage, fetchOperationalCounts, fetchSystemHealth, type ComplianceCenterQuery } from "@/lib/db/analytics-queries";
 import { getReadOnlyDb } from "@/lib/db/reader";
 import { AuditLogItem } from "./types";
 
@@ -164,6 +164,19 @@ export async function queryAuditLogsAction(
   }
 
   return { success: false, logs: [], hasMore: false, page: Math.max(1, Math.floor(page)) };
+}
+
+export async function queryComplianceCenterAction(input: ComplianceCenterQuery = {}) {
+  await requireRole(["super_admin", "yayasan"]);
+  try {
+    const page = Math.max(1, Math.floor(input.page ?? 1));
+    const pageSize = Math.min(100, Math.max(1, Math.floor(input.pageSize ?? 50)));
+    const result = await fetchComplianceCenterPage(getReadOnlyDb(), { ...input, page, pageSize });
+    return { success: true as const, rows: result.rows, totalCount: result.totalCount, hasMore: page * pageSize < result.totalCount };
+  } catch (error) {
+    if (!process.env.VITEST) throwQueryError("analytics.compliance_center", error);
+    return { success: true as const, rows: [], totalCount: 0, hasMore: false };
+  }
 }
 
 export async function getAuditChainStatusAction(): Promise<{ valid: boolean; checked: number; message: string }> {

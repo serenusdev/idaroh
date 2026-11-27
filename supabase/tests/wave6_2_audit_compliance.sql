@@ -1,0 +1,14 @@
+BEGIN;
+SELECT plan(10);
+SELECT has_table('public','audit_logs','audit log source exists');
+SELECT has_table('public','export_logs','export ledger exists');
+SELECT ok((SELECT relrowsecurity FROM pg_class WHERE oid='public.audit_logs'::regclass),'audit logs RLS remains enabled');
+SELECT ok((SELECT relrowsecurity FROM pg_class WHERE oid='public.export_logs'::regclass),'export logs RLS remains enabled');
+SELECT ok(EXISTS (SELECT 1 FROM pg_trigger WHERE tgrelid='public.audit_logs'::regclass AND tgname='trg_audit_logs_append_only'),'append-only trigger remains installed');
+SELECT ok(NOT has_table_privilege('anon','public.audit_logs','SELECT'),'anon cannot read audit logs');
+SELECT ok(NOT has_table_privilege('anon','public.export_logs','INSERT'),'anon cannot write export logs');
+SELECT ok(has_table_privilege('authenticated','public.audit_logs','SELECT'),'authenticated audit reads remain RLS-gated');
+SELECT ok(has_table_privilege('authenticated','public.export_logs','INSERT'),'authenticated export writes remain RLS-gated');
+SELECT ok(EXISTS (SELECT 1 FROM pg_policies WHERE schemaname='public' AND tablename='audit_logs' AND policyname ILIKE '%Audit logs%'),'audit authorization policy exists');
+SELECT * FROM finish();
+ROLLBACK;

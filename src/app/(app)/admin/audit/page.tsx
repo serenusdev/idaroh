@@ -18,6 +18,7 @@ import {
   activatePolicySettingsAction,
   getAuditChainStatusAction,
   getAdminDashboardStatsAction,
+  queryComplianceCenterAction,
 } from "@/modules/analytics/actions";
 
 export default function AdminAuditPage() {
@@ -75,6 +76,11 @@ export default function AdminAuditPage() {
   const [exportDateFrom, setExportDateFrom] = React.useState("");
   const [exportDateTo, setExportDateTo] = React.useState("");
   const [isExporting, setIsExporting] = React.useState(false);
+  const [complianceFilters, setComplianceFilters] = React.useState({ dateFrom: "", dateTo: "", actor: "", actionType: "", entityType: "", complianceStatus: "all" as "all" | "compliant" | "attention" });
+  const complianceQuery = useQuery({
+    queryKey: ["audit-compliance", currentUser, complianceFilters],
+    queryFn: () => queryComplianceCenterAction({ ...complianceFilters, pageSize: 25 }),
+  });
 
   const [approveTargetId, setApproveTargetId] = React.useState<string | null>(null);
   const [approveReason, setApproveReason] = React.useState("");
@@ -216,6 +222,18 @@ export default function AdminAuditPage() {
 
   return (
     <div className="w-full max-w-7xl mx-auto space-y-5 pb-24">
+      <section className="rounded-2xl border border-border bg-card p-5 space-y-4">
+        <div><h2 className="text-lg font-bold">Audit &amp; Compliance Center</h2><p className="text-sm text-muted-foreground">Rekam jejak append-only dengan filter rentang waktu WIB, aktor, aksi, entitas, dan status kepatuhan.</p></div>
+        <div className="grid gap-2 md:grid-cols-3 lg:grid-cols-6">
+          <input type="date" value={complianceFilters.dateFrom} onChange={(e) => setComplianceFilters((v) => ({ ...v, dateFrom: e.target.value }))} className="rounded border p-2 text-sm" aria-label="Tanggal awal WIB" />
+          <input type="date" value={complianceFilters.dateTo} onChange={(e) => setComplianceFilters((v) => ({ ...v, dateTo: e.target.value }))} className="rounded border p-2 text-sm" aria-label="Tanggal akhir WIB" />
+          <input placeholder="Aktor" value={complianceFilters.actor} onChange={(e) => setComplianceFilters((v) => ({ ...v, actor: e.target.value }))} className="rounded border p-2 text-sm" />
+          <input placeholder="Tipe aksi" value={complianceFilters.actionType} onChange={(e) => setComplianceFilters((v) => ({ ...v, actionType: e.target.value }))} className="rounded border p-2 text-sm" />
+          <input placeholder="Entitas: gate_pass, mutabaah..." value={complianceFilters.entityType} onChange={(e) => setComplianceFilters((v) => ({ ...v, entityType: e.target.value }))} className="rounded border p-2 text-sm" />
+          <select value={complianceFilters.complianceStatus} onChange={(e) => setComplianceFilters((v) => ({ ...v, complianceStatus: e.target.value as "all" | "compliant" | "attention" }))} className="rounded border p-2 text-sm"><option value="all">Semua status</option><option value="compliant">Compliant</option><option value="attention">Perlu perhatian</option></select>
+        </div>
+        <div className="overflow-x-auto"><table className="w-full text-left text-sm"><thead><tr className="border-b"><th className="p-2">Waktu WIB</th><th className="p-2">Aktor</th><th className="p-2">Aksi</th><th className="p-2">Entitas</th><th className="p-2">Status</th></tr></thead><tbody>{(complianceQuery.data?.success ? complianceQuery.data.rows : []).map((row) => <tr key={row.id} className="border-b"><td className="p-2 whitespace-nowrap">{new Date(row.created_at).toLocaleString("id-ID", { timeZone: "Asia/Jakarta" })}</td><td className="p-2">{row.actor_name || "Sistem"}</td><td className="p-2">{row.event_name}</td><td className="p-2">{row.target_label || "-"}</td><td className={`p-2 font-semibold ${row.compliance_status === "attention" ? "text-red-600" : "text-green-700"}`}>{row.compliance_status}</td></tr>)}</tbody></table></div>
+      </section>
       {/* Toast Alert Notice */}
       {toastMessage && (
         <div role="status" aria-live="polite" className="p-3.5 rounded-xl bg-surface-container text-primary border border-border flex items-center justify-between text-xs sm:text-sm shadow-xs">
@@ -842,7 +860,10 @@ export default function AdminAuditPage() {
                   <option value="presensi_laporan">Presensi &amp; Laporan Harian Terpadu</option>
                   <option value="tugas_proyek">Rekap Tugas &amp; Proyek Sentra</option>
                   {canExportAuditLogs && (
-                    <option value="audit_logs">Log Audit ISO/IEC 27001 Lengkap</option>
+                    <>
+                      <option value="audit_logs">Log Audit ISO/IEC 27001 Lengkap</option>
+                      <option value="compliance_audit">Rekam Kepatuhan Terstruktur</option>
+                    </>
                   )}
                 </select>
               </div>

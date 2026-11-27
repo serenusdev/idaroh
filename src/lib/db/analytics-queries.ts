@@ -63,6 +63,24 @@ export interface AuditLogPageQuery {
   pageSize: number;
 }
 
+export type ComplianceStatus = "all" | "compliant" | "attention";
+export interface ComplianceCenterQuery {
+  dateFrom?: string | null;
+  dateTo?: string | null;
+  actor?: string;
+  actionType?: string;
+  entityType?: string;
+  complianceStatus?: ComplianceStatus;
+  page?: number;
+  pageSize?: number;
+}
+export interface ComplianceCenterRow extends AuditLogRow {
+  actor_id: string | null;
+  target_id: string | null;
+  compliance_status: "compliant" | "attention";
+}
+export interface ComplianceCenterPage { rows: ComplianceCenterRow[]; totalCount: number; }
+
 /**
  * The old `.or("event_name.ilike.%q%,…")` sent the term inside a PostgREST expression, so `,` `(` `)`
  * were stripped (they delimit/syntax the filter list) and `*` was rendered as the LIKE wildcard.
@@ -248,4 +266,30 @@ export async function fetchAuditLogPage(db: ReadOnlyDb, input: AuditLogPageQuery
     .execute();
 
   return { rows, totalCount: rows.length > 0 ? rows[0].total_count : 0 };
+}
+
+/** Wave 6.2 read-only compliance search with PostgreSQL-owned WIB boundaries. */
+export async function fetchComplianceCenterPage(db: ReadOnlyDb, input: ComplianceCenterQuery): Promise<ComplianceCenterPage> {
+  const pageSize = Math.min(100, Math.max(1, Math.floor(input.pageSize ?? 50)));
+  const page = Math.max(1, Math.floor(input.page ?? 1));
+  const actor = normalizeIlikeTerm(input.actor ?? "");
+  const actionType = normalizeIlikeTerm(input.actionType ?? "");
+  const entityType = normalizeIlikeTerm(input.entityType ?? "");
+  const attention = sql<boolean>`audit_logs.event_name ILIKE '%failed%' OR audit_logs.event_name ILIKE '%error%' OR audit_logs.event_name ILIKE '%rejected%' OR audit_logs.event_name ILIKE '%late%' OR audit_logs.event_name ILIKE '%overdue%' OR audit_logs.event_name ILIKE '%denied%'`;
+  const rows = await db.selectFrom("audit_logs").select([
+    "audit_logs.id", "audit_logs.event_name", "audit_logs.actor_id", "audit_logs.actor_name", "audit_logs.target_id", "audit_logs.target_label", "audit_logs.action_detail", "audit_logs.hash",
+    jsonText("audit_logs.created_at").as("created_at"),
+    sql<"compliant" | "attention">`CASE WHEN ${attention} THEN 'attention' ELSE 'compliant' END`.as("compliance_status"),
+    countIntOver().as("total_count"),
+  ])
+    .$if(Boolean(input.dateFrom), (qb) => qb.where(sql<boolean>`audit_logs.created_at >= (${input.dateFrom!}::date AT TIME ZONE 'Asia/Jakarta')`))
+    .$if(Boolean(input.dateTo), (qb) => qb.where(sql<boolean>`audit_logs.created_at < ((${input.dateTo!}::date + 1) AT TIME ZONE 'Asia/Jakarta')`))
+    .$if(actor.length > 0, (qb) => qb.where("audit_logs.actor_name", "ilike", `%${actor}%`))
+    .$if(actionType.length > 0, (qb) => qb.where("audit_logs.event_name", "ilike", `%${actionType}%`))
+    .$if(entityType.length > 0, (qb) => qb.where((eb) => eb.or([eb("audit_logs.target_label", "ilike", `%${entityType}%`), eb("audit_logs.event_name", "ilike", `%${entityType}%`)])))
+    .$if(input.complianceStatus === "attention", (qb) => qb.where(attention))
+    .$if(input.complianceStatus === "compliant", (qb) => qb.where(sql<boolean>`NOT (${attention})`))
+    .orderBy("audit_logs.created_at", "desc").orderBy("audit_logs.id", "desc")
+    .limit(pageSize).offset((page - 1) * pageSize).execute();
+  return { rows, totalCount: rows.length ? rows[0].total_count : 0 };
 }
