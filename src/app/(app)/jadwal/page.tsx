@@ -155,8 +155,7 @@ export default function JadwalPage() {
         queryClient.setQueryData(announcementsKey, context.previous);
       }
     },
-    // The dashboard still reads announcements through data-cache until Batch 2, and is_read is
-    // computed by app.announcement_read(), so both caches go stale after the write settles.
+    // is_read is computed by app.announcement_read(), so the unread count moves with this write too.
     onSettled: () => invalidateAnnouncements(queryClient, user),
   });
 

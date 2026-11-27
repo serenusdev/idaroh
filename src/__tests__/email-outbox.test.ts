@@ -23,6 +23,7 @@ function makeChain(opts: { rows?: OutboxRow[]; claim?: { id: string } | null; on
     select: vi.fn(() => chain),
     eq: vi.fn(() => chain),
     lt: vi.fn(() => chain),
+    lte: vi.fn(() => chain),
     order: vi.fn(() => chain),
     limit: vi.fn(() => chain),
     update: vi.fn((payload: Record<string, unknown>) => {

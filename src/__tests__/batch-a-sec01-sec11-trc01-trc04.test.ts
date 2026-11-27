@@ -599,10 +599,10 @@ describe("TRC-04 — email outbox entries on report review", () => {
       expect(mocks.fromCalls.some((c) => c.table === "email_outbox")).toBe(false);
       expect(mocks.fromCalls.some((c) => c.table === "audit_logs")).toBe(false);
       expect(mocks.fromCalls.some((c) => c.table === "notifications")).toBe(false);
-      expect(mocks.drainPush).toHaveBeenCalledWith({
+      expect(mocks.drainPush).toHaveBeenCalledWith(expect.objectContaining({
         notificationType: "REPORT_APPROVED",
         referenceId: "review-1",
-      });
+      }));
     });
 
     it("revision_required: keeps notes in the command payload", async () => {
@@ -620,10 +620,10 @@ describe("TRC-04 — email outbox entries on report review", () => {
         p_idempotency_key: "test-review-revision-1",
       });
       expect(mocks.fromCalls.some((c) => c.table === "email_outbox")).toBe(false);
-      expect(mocks.drainPush).toHaveBeenCalledWith({
+      expect(mocks.drainPush).toHaveBeenCalledWith(expect.objectContaining({
         notificationType: "REPORT_REVISION_REQUIRED",
         referenceId: "review-1",
-      });
+      }));
     });
 
     it("push dispatch failure does not fail the persisted review", async () => {
@@ -660,10 +660,10 @@ describe("TRC-04 — email outbox entries on report review", () => {
       expect(result).toMatchObject({ success: true, reviewId: "review-original", idempotent: true });
       expect(mocks.fromCalls.some((c) => c.table === "audit_logs")).toBe(false);
       expect(mocks.fromCalls.some((c) => c.table === "email_outbox")).toBe(false);
-      expect(mocks.drainPush).toHaveBeenCalledWith({
+      expect(mocks.drainPush).toHaveBeenCalledWith(expect.objectContaining({
         notificationType: "REPORT_APPROVED",
         referenceId: "review-original",
-      });
+      }));
     });
 
     it("surfaces an idempotency conflict from the RPC", async () => {

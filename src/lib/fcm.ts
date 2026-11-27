@@ -107,12 +107,15 @@ async function finish(admin: AdminClient, job: ClaimedPush, retry: boolean, code
 }
 
 /** Dispatch due work only. Credentials absent: do not claim or consume attempts.
- * FCM acceptance is at-least-once; checkpoint each accepted token before continuing. */
+ * FCM acceptance is at-least-once; checkpoint each accepted token before continuing.
+ * `budgetMs` bounds how long one caller waits: a user request dispatches a small slice and lets the
+ * durable worker finish the queue, while the worker itself runs under a longer budget. */
 export async function drainNotificationOutbox(options: {
   notificationIds?: string[];
   notificationType?: string;
   referenceId?: string;
   limit?: number;
+  budgetMs?: number;
 } = {}): Promise<PushResult> {
   const result: PushResult = { sent: 0, removed: 0, skipped: false };
   const credentials = readCredentials();
@@ -121,7 +124,8 @@ export async function drainNotificationOutbox(options: {
 
   const admin = createAdminClient();
   let accessToken: string | undefined;
-  const deadline = Date.now() + 20_000;
+  const budget = options.budgetMs === undefined ? 20_000 : Math.max(0, options.budgetMs);
+  const deadline = Date.now() + budget;
   const limit = Math.max(1, Math.min(options.limit || 50, 100));
   for (let attempt = 0; attempt < limit && Date.now() < deadline; attempt += 1) {
     const { data, error } = await admin.rpc("claim_notification_push", {

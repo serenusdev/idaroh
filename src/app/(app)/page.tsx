@@ -404,6 +404,36 @@ export default function BerandaPage() {
                   <span className="text-xs text-muted-foreground">eksekusi gagal</span>
                 </div>
               </div>
+              <div className="bg-card p-4 rounded-xl border border-border shadow-xs space-y-2">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs text-muted-foreground font-medium">Dead-letter</span>
+                  <span className="material-symbols-outlined text-error text-[20px]">error</span>
+                </div>
+                <div className="flex items-baseline gap-2">
+                  <span className="font-headline-sm text-2xl font-bold text-on-surface">
+                    {adminStats.systemHealth.deadLetterOutbox}
+                  </span>
+                  <span className="text-xs text-muted-foreground">
+                    push · {adminStats.systemHealth.deadLetterEmail} email
+                  </span>
+                </div>
+              </div>
+              <div className="bg-card p-4 rounded-xl border border-border shadow-xs space-y-2">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs text-muted-foreground font-medium">Worker Terakhir</span>
+                  <span className="material-symbols-outlined text-primary text-[20px]">alarm</span>
+                </div>
+                <div className="flex items-baseline gap-2">
+                  <span className="font-headline-sm text-2xl font-bold text-on-surface">
+                    {adminStats.systemHealth.lastWorkerTick
+                      ? new Date(adminStats.systemHealth.lastWorkerTick).toLocaleTimeString("id-ID", {
+                        hour: "2-digit", minute: "2-digit", timeZone: "Asia/Jakarta",
+                      })
+                      : "—"}
+                  </span>
+                  <span className="text-xs text-muted-foreground">tick sukses WIB</span>
+                </div>
+              </div>
             </>
             )}
 
