@@ -13,6 +13,7 @@ import {
 import { getEventsAction, getAnnouncementsAction } from "@/modules/schedules/actions";
 import { useIdentity } from "@/components/auth/identity-context";
 import { holdsRole } from "@/lib/export-policy";
+import { REPORT_REVIEW_ROLES, holdsReportReviewRole } from "@/lib/report-policy";
 import { IAM_MUTATION_ROLES } from "@/lib/iam-policy";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { cacheKeys, invalidateAttendance, invalidatePolicy } from "@/lib/cache-keys";
@@ -35,6 +36,9 @@ export default function BerandaPage() {
   // §3.1: only super_admin may read the registration queue or decide on it, so the approval
   // shortcut stays out of the yayasan/pengurus dashboard instead of ending in "Unauthorized".
   const canDecideIam = holdsRole(currentUser, IAM_MUTATION_ROLES);
+  // RVS-01: §3.4 keeps report.review with pengurus and koordinator, so a super_admin or yayasan
+  // dashboard shows the pending count without a queue shortcut it cannot open (§2 rule 8).
+  const canReview = holdsReportReviewRole(currentUser, REPORT_REVIEW_ROLES);
   // CACHE-01 Batch 2: one QueryClient per session mount (the shell remounts it on user.id:role), and
   // the supervisor gate is a key/enabled decision — a santri never fetches the management metrics.
   const queryClient = useQueryClient();
@@ -337,13 +341,15 @@ export default function BerandaPage() {
                 </span>
                 <span className="text-xs text-muted-foreground">perlu ditinjau</span>
               </div>
-              <Link
-                href="/review"
-                className="text-[11px] text-primary hover:underline flex items-center gap-0.5 pt-1"
-              >
-                <span>Buka Antrean Review</span>
-                <span className="material-symbols-outlined text-[13px]">arrow_forward</span>
-              </Link>
+              {canReview && (
+                <Link
+                  href="/review"
+                  className="text-[11px] text-primary hover:underline flex items-center gap-0.5 pt-1"
+                >
+                  <span>Buka Antrean Review</span>
+                  <span className="material-symbols-outlined text-[13px]">arrow_forward</span>
+                </Link>
+              )}
             </div>
             </>
             )}
@@ -470,7 +476,8 @@ export default function BerandaPage() {
               </div>
             </Link>
 
-            {/* Action 3: Review Laporan Santri */}
+            {/* Action 3: Review Laporan Santri — §3.4 keeps the queue with pengurus/koordinator */}
+            {canReview && (
             <Link
               href="/review"
               className="p-4 bg-card rounded-xl border border-border hover:border-primary/50 text-left transition-all space-y-2 shadow-2xs hover:shadow-xs group"
@@ -487,6 +494,7 @@ export default function BerandaPage() {
                 </p>
               </div>
             </Link>
+            )}
 
             {/* Action 4: the console is readable below super_admin; only the approval wording fits §3.1 */}
             <Link

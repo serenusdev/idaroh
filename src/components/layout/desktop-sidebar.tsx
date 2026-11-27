@@ -11,6 +11,7 @@ import { useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 import { cleanupPushNotifications } from "@/lib/notifications";
 import { AUDIT_READ_ROLES, holdsRole } from "@/lib/export-policy";
+import { holdsReportReviewRole, REPORT_REVIEW_ROLES } from "@/lib/report-policy";
 import { holdsTaskRole, TASK_READ_ROLES } from "@/lib/task-policy";
 import {
   AGENDA_MANAGER_ROLES,
@@ -52,11 +53,16 @@ export function DesktopSidebar({ user }: DesktopSidebarProps) {
   // reject must not be offered here.
   const canViewTasks = holdsTaskRole(user, TASK_READ_ROLES);
 
+  // RVS-01: §3.4 keeps report.review with pengurus and koordinator only, so the queue entry follows
+  // the same pair the Server Action guards. A yayasan or super_admin account would otherwise be
+  // handed a link that ends in "Akses Dibatasi", which §2 rule 8 forbids.
+  const canReview = holdsReportReviewRole(user, REPORT_REVIEW_ROLES);
+
   const mainNav = [
     { label: "Beranda", href: "/", icon: "dashboard" },
     { label: "Presensi Harian", href: "/kehadiran", icon: "how_to_reg" },
     { label: "Laporan Aktivitas", href: "/laporan", icon: "edit_document" },
-    { label: "Review Laporan", href: "/review", icon: "fact_check" },
+    ...(canReview ? [{ label: "Review Laporan", href: "/review", icon: "fact_check" }] : []),
     ...(canViewTasks ? [{ label: "Tugas & Proyek", href: "/tugas", icon: "task_alt" }] : []),
     { label: "Jadwal & Agenda", href: "/jadwal", icon: "calendar_month" },
     // A manager gets the command page inside Administrasi; a plain koordinator has one
