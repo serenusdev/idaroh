@@ -4,7 +4,7 @@
  * The unit suites prove the emitted SQL and its bound parameters. Only a real Postgres can prove
  * the two transports agree on the things that are easy to get silently wrong:
  *   - timestamptz text (`pg` would hand back a JS Date and lose microseconds in the CSV export),
- *   - `count(*)::int over ()` versus PostgREST's `Content-Range` total,
+ *   - `cast(count(*) over () as int)` versus PostgREST's `Content-Range` total,
  *   - the team EXISTS rewrite versus the old "fetch every profile id, then IN (...)" filter,
  *   - the `*` wildcard PostgREST expands inside an ilike pattern,
  *   - the aggregate head-counts the Admin Overview card shows.
@@ -12,7 +12,12 @@
  * It therefore runs only where a database is reachable: the CI `database-integration` job exports
  * DX01_DB_URL for the disposable Supabase, and the step is placed after `npm run e2e:seed` because
  * the team scoping check needs a real profile row. Without those variables the suite skips.
- * Everything it writes carries the DX01-PARITY marker and is deleted in afterAll.
+ *
+ * The fixture rows carry a run-unique marker, and the audit ledger is NOT deleted afterwards:
+ * `trg_audit_logs_append_only` is a BEFORE DELETE OR UPDATE trigger, so a delete is not merely
+ * inconvenient, it is refused by the database — which is the guarantee this item must not weaken to
+ * keep a test tidy. The instance is disposable, so the marked rows leave with it. Everything written
+ * outside `audit_logs` (the team label, the attendance rows) is undone in afterAll.
  */
 
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -22,7 +27,12 @@ const REST_URL = process.env.NEXT_PUBLIC_SUPABASE_URL ?? process.env.SUPABASE_UR
 const SERVICE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY ?? "";
 const LIVE = Boolean(DB_URL && REST_URL && SERVICE_KEY);
 
-const MARKER = "DX01-PARITY";
+// Unique per run so a re-run on the same instance can never read another run's fixture: the audit
+// rows themselves are kept, because the ledger refuses to delete them.
+const RUN_TAG = process.env.GITHUB_RUN_ID
+  ? `${process.env.GITHUB_RUN_ID}-${process.env.GITHUB_RUN_ATTEMPT ?? "1"}`
+  : `${process.pid}-${Date.now().toString(36)}`;
+const MARKER = `DX01-PARITY-${RUN_TAG}`;
 const TEAM = "DX01 Parity Team";
 const AUDIT_COLUMNS = "id,event_name,actor_name,target_label,action_detail,hash,created_at";
 
@@ -136,7 +146,8 @@ beforeAll(async () => {
 
 afterAll(async () => {
   if (!LIVE) return;
-  await rest(`audit_logs?action_detail=eq.${encodeURIComponent(`${MARKER} detail`)}`, { method: "DELETE" });
+  // No audit_logs DELETE here: trg_audit_logs_append_only rejects it, and the run-unique marker means
+  // the leftovers cannot be mistaken for another run's fixture. The disposable instance drops them.
   if (actorId) {
     await rest(`attendance_records?user_id=eq.${actorId}&attendance_date=gte.2026-11-20`, { method: "DELETE" });
     await rest(`profiles?id=eq.${actorId}`, {

@@ -9,7 +9,7 @@ ke koneksi Postgres langsung yang **read-only dan tertype**. Tidak ada perubahan
 | Jalur | Sebelum | Sesudah |
 | --- | --- | --- |
 | `getAdminDashboardStatsAction` — blok D3 (7 head-count) + 6 KPI | 11 request REST | 2 SELECT tertype (`fetchSystemHealth`, `fetchOperationalCounts`) |
-| `queryAuditLogsAction` | 2 request + `actor_id=in.(…)` tak terbatas | 1 SELECT dengan `EXISTS` + `count(*)::int over ()` |
+| `queryAuditLogsAction` | 2 request + `actor_id=in.(…)` tak terbatas | 1 SELECT dengan `EXISTS` + `cast(count(*) over () as int)` |
 | Dataset `/api/exports/[id]` | 6 cabang REST chain | SELECT Kysely dengan predikat & rentang WIB yang sama |
 | **Semua tulis** (`export_logs` insert/update, `audit_logs` insert, RPC, mutation modul) | service-role + RLS + audit | **tidak berubah** |
 | `src/modules/reports/actions.ts` | PostgREST (embedded resource, pin RVS-01) | **sengaja tidak dimigrasikan** |
@@ -99,3 +99,18 @@ dipakai) atau dihapus; menghapusnya **tidak** mengembalikan jalur lama secara ot
   mengubah ekspor menjadi dump tabel tak terbatas.
 - Read model hanya memuat 11 relasi yang benar-benar dibaca, dan nama/kolomnya dicocokkan dengan
   katalog `information_schema` project produksi. Tabel yang tidak ada di peta tidak bisa disebut.
+
+## Bukti paritas: `dx01-live-parity.test.ts`
+
+Satu-satunya bukti bahwa dua transport ini benar-benar sama adalah database nyata, jadi suite ini jalan
+di job `database-integration` (butuh `DX01_DB_URL` + REST URL + service key; tanpa itu ia **skip**,
+bukan berpura-pura lulus).
+
+- Baris fixture audit diberi penanda unik per run (`DX01-PARITY-<run id>-<attempt>`) dan **tidak
+  dihapus** di `afterAll`: `trg_audit_logs_append_only` adalah trigger `BEFORE DELETE OR UPDATE`, jadi
+  penghapusan ditolak database. Menonaktifkan trigger agar teardown terlihat bersih sama saja
+  melonggarkan jaminan ledger demi tes — instance CI-nya sekali pakai, baris itu ikut hilang bersamanya.
+- Langkah CI memakai `--reporter=tap`. Vitest 3 menghitung ulang kegagalan dengan `Map.groupBy`, yang
+  tidak ada di Node 20 (pin job ini); dengan reporter default, kegagalan fixture hanya menampilkan
+  `TypeError: Map.groupBy is not a function` dan diff asersinya hilang. Pin Node tidak saya ubah karena
+  itu memengaruhi seluruh job — itu keputusan terpisah untuk operator.
