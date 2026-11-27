@@ -17,6 +17,8 @@ const valid = {
   TURNSTILE_SECRET_KEY: "0x4AAAAAAA_valid_turnstile_secret",
   RESEND_API_KEY: "re_valid_resend_key",
   EMAIL_FROM: "IDAROH <no-reply@idaroh.sch.id>",
+  // DX-01: the direct read-only connection the typed analytics path needs.
+  SUPABASE_DB_URL: "postgresql://postgres:valid_db_password@aws-0-ap-southeast-1.pooler.supabase.com:5432/postgres",
 };
 
 describe("production environment", () => {
@@ -42,6 +44,14 @@ describe("production environment", () => {
     // Secret without site key would fail-closed every login/registration (no token).
     expect(() => validateProductionEnvironment({ ...valid, NEXT_PUBLIC_TURNSTILE_SITE_KEY: "" })).toThrow("NEXT_PUBLIC_TURNSTILE_SITE_KEY");
     expect(() => validateProductionEnvironment({ ...valid, NEXT_PUBLIC_TURNSTILE_SITE_KEY: "placeholder-site-key" })).toThrow("NEXT_PUBLIC_TURNSTILE_SITE_KEY");
+  });
+  it("requires the direct read connection for the typed analytics path", () => {
+    // Without it the reader fails closed at runtime; deployment must not discover that in production.
+    expect(() => validateProductionEnvironment({ ...valid, SUPABASE_DB_URL: "" })).toThrow("SUPABASE_DB_URL");
+    expect(() => validateProductionEnvironment({ ...valid, SUPABASE_DB_URL: "https://project.supabase.co" })).toThrow("postgresql://");
+    expect(() => validateProductionEnvironment({ ...valid, SUPABASE_DB_URL: "postgresql://" })).toThrow("postgresql://");
+    // An unknown TLS mode would silently fall back to verify-full instead of being configured.
+    expect(() => validateProductionEnvironment({ ...valid, SUPABASE_DB_SSL_MODE: "prefer" })).toThrow("SUPABASE_DB_SSL_MODE");
   });
   it("does not require production services in local development", () => {
     expect(() => validateProductionEnvironment({ NODE_ENV: "development" })).not.toThrow();

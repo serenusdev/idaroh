@@ -352,25 +352,43 @@ describe("JOB-01 — request paths stay bounded", () => {
 
 describe("JOB-01 — systemHealth reads the real relations", () => {
   const analytics = read("src/modules/analytics/actions.ts");
-  const block = analytics.slice(
-    analytics.indexOf('if (holdsRole(user, ["super_admin"]))'),
-    analytics.indexOf("result.systemHealth = {"),
+  // DX-01 folded the seven head-count requests into one typed select and moved it to
+  // src/lib/db/analytics-queries.ts. The relations, the dead-letter states and the schema
+  // cross-check are exactly what this block existed to protect, so they follow the query. The
+  // relation is now named through Kysely's selectFrom(), so both spellings count as a read.
+  const queries = existsSync(resolve(root, "src/lib/db/analytics-queries.ts"))
+    ? read("src/lib/db/analytics-queries.ts")
+    : "";
+  const block = queries.slice(
+    queries.indexOf("export async function fetchSystemHealth"),
+    queries.indexOf("export async function fetchOperationalCounts"),
   );
+  const reads = (table: string) => new RegExp(`(?:\\.from|\\.selectFrom)\\(\\s*"${table}"\\s*\\)`);
 
   it("never reads the phantom notification_outbox relation again", () => {
-    expect(analytics).not.toMatch(/from\(\s*"notification_outbox"\s*\)/);
-    expect(block).toContain('from("notification_push_outbox")');
+    expect(analytics).not.toMatch(reads("notification_outbox"));
+    expect(queries).not.toMatch(reads("notification_outbox"));
+    expect(block).toMatch(reads("notification_push_outbox"));
+  });
+
+  it("keeps the D3 holders check in front of the health read", () => {
+    const dashboard = analytics.slice(
+      analytics.indexOf("export async function getAdminDashboardStatsAction("),
+    );
+    const gate = dashboard.indexOf('if (holdsRole(user, ["super_admin"]))');
+    expect(gate).toBeGreaterThan(-1);
+    expect(dashboard.indexOf("fetchSystemHealth(")).toBeGreaterThan(gate);
   });
 
   it("counts every dead-letter state the worker can reach", () => {
-    expect(block).toMatch(/from\("notification_push_outbox"\)[\s\S]*eq\("status", "dead_letter"\)/);
-    expect(block).toMatch(/from\("email_outbox"\)[\s\S]*eq\("status", "failed"\)/);
-    expect(block).toContain('from("background_job_runs")');
+    expect(block).toMatch(/(?:\.from|\.selectFrom)\(\s*"notification_push_outbox"\s*\)[\s\S]*?"status",\s*"=",\s*"dead_letter"/);
+    expect(block).toMatch(/(?:\.from|\.selectFrom)\(\s*"email_outbox"\s*\)[\s\S]*?"status",\s*"=",\s*"failed"/);
+    expect(block).toMatch(reads("background_job_runs"));
     expect(analytics).toMatch(/result\.systemHealth = \{[\s\S]*deadLetterOutbox[\s\S]*deadLetterEmail[\s\S]*lastWorkerTick/);
   });
 
   it("pins that every relation the health block reads exists in the applied schema", () => {
-    const tables = [...block.matchAll(/from\(\s*"([a-z_]+)"\s*\)/g)].map((match) => match[1]);
+    const tables = [...block.matchAll(/(?:\.from|\.selectFrom)\(\s*"([a-z_]+)"\s*\)/g)].map((match) => match[1]);
     expect(tables.length).toBeGreaterThan(3);
     for (const table of tables) {
       expect(migrationText, `${table} is not created by any migration`).toMatch(

@@ -19,6 +19,9 @@ const cspHeader = `default-src 'self'; img-src 'self' data: blob: https://lh3.go
 const nextConfig = {
   reactStrictMode: true,
   poweredByHeader: false,
+  // DX-01: pg is a CommonJS driver with an optional native binding; bundling it into the server
+  // chunks breaks its require() of defaults. Keep it external to the server bundle.
+  serverExternalPackages: ["pg"],
   // pdf.ts reads this WOFF2 at runtime via readFile (not a static import), so
   // Next's output tracing never sees it. Include it explicitly or PDF export
   // fails on Vercel serverless where node_modules is not deployed by default.

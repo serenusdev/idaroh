@@ -26,11 +26,27 @@ export function validateProductionEnvironment(env = process.env) {
     'TURNSTILE_SECRET_KEY',
     'RESEND_API_KEY',
     'EMAIL_FROM',
+    // DX-01: the typed read path (analytics, audit explorer, export datasets) connects directly. It
+    // fails closed without this secret rather than falling back to the service-role HTTP client.
+    'SUPABASE_DB_URL',
   ];
   for (const key of required) {
     if (!env[key]?.trim() || placeholder.test(env[key])) {
       throw new Error(`Production environment variable ${key} is missing or contains a placeholder.`);
     }
+  }
+
+  // A connection string is not an HTTP URL, so it is checked separately: the scheme has to be a real
+  // libpq URI with a host, and it must never be logged.
+  if (!/^postgres(?:ql)?:\/\/[^/@\s]+/i.test(env.SUPABASE_DB_URL.trim())) {
+    throw new Error('Production SUPABASE_DB_URL must be a postgresql:// connection string with a host.');
+  }
+  const sslMode = (env.SUPABASE_DB_SSL_MODE || 'verify-full').trim().toLowerCase();
+  if (!['disable', 'no-verify', 'verify-full'].includes(sslMode)) {
+    throw new Error('Production SUPABASE_DB_SSL_MODE must be disable, no-verify or verify-full.');
+  }
+  if (sslMode !== 'verify-full') {
+    console.warn(`[env] SUPABASE_DB_SSL_MODE=${sslMode} — the analytic connection does not verify the database certificate. Use verify-full unless the endpoint cannot support it.`);
   }
 
   for (const key of ['NEXT_PUBLIC_SUPABASE_URL', 'NEXT_PUBLIC_APP_URL', 'CAPACITOR_SERVER_URL']) {
