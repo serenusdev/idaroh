@@ -77,6 +77,20 @@ export interface AttendanceRecordsTable {
   updated_at: string;
 }
 
+export interface AttendanceExceptionsTable {
+  id: string;
+  user_id: string;
+  date_from: string;
+  date_to: string;
+  type: "excused" | "sick" | "duty";
+  reason: string;
+  evidence_url: string | null;
+  status: "pending" | "approved" | "rejected" | "cancelled";
+  decided_by: string | null;
+  decided_at: string | null;
+  created_at: string;
+}
+
 export interface DailyReportsTable {
   id: string;
   user_id: string;
@@ -294,6 +308,7 @@ export interface StoredFilesTable {
 export interface Database {
   profiles: ProfilesTable;
   attendance_records: AttendanceRecordsTable;
+  attendance_exceptions: AttendanceExceptionsTable;
   daily_reports: DailyReportsTable;
   tasks: TasksTable;
   audit_logs: AuditLogsTable;
