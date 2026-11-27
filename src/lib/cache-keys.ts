@@ -64,6 +64,7 @@ export const cacheKeys = {
     [`resources:list:${session.id}`, session.role, category, search] as const,
   adminAnalytics: (session: CacheSession, from: string, to: string) =>
     [`admin:analytics:${session.id}`, session.role, from || "default", to || "default"] as const,
+  liveTelemetry: (session: CacheSession) => [`admin:live-telemetry:${session.id}`, session.role] as const,
   auditLogs: (session: CacheSession, scope: string, search: string, page: number) =>
     [`admin:audit-logs:${session.id}`, session.role, scope, search, String(page)] as const,
 };

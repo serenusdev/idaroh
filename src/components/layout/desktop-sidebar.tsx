@@ -79,6 +79,7 @@ export function DesktopSidebar({ user }: DesktopSidebarProps) {
 
   const adminNav = [
     { label: "Analitik Operasional", href: "/admin/analytics", icon: "monitoring" },
+    ...((user.role === "pengurus" || user.role === "super_admin") ? [{ label: "Telemetry Langsung", href: "/admin/live-telemetry", icon: "monitoring" }] : []),
     { label: "Anggota & Reviewer", href: "/admin/people", icon: "groups" },
     { label: "Backup & Pemulihan", href: "/admin/backup", icon: "backup" },
     { label: "Uji Notifikasi", href: "/admin/notifications", icon: "notifications_active" },
