@@ -1,0 +1,10 @@
+BEGIN;
+DROP FUNCTION IF EXISTS public.verify_report_card_public(text);
+DROP FUNCTION IF EXISTS public.sync_term_activity_to_report_cards(uuid);
+DROP FUNCTION IF EXISTS public.upsert_wave5_report_card(uuid,uuid,jsonb,jsonb,jsonb,jsonb,text);
+DROP TABLE IF EXISTS public.batch_jobs;
+DROP TABLE IF EXISTS public.report_cards;
+DROP TABLE IF EXISTS public.academic_terms;
+DROP TABLE IF EXISTS public.students;
+COMMIT;
+NOTIFY pgrst, 'reload schema';

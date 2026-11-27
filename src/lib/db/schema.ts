@@ -218,6 +218,62 @@ export interface BackgroundJobRunsTable {
   updated_at: string;
 }
 
+export interface StudentsTable {
+  id: string;
+  nis: string;
+  full_name: string;
+  gender: "L" | "P";
+  dorm_room: string | null;
+  halaqah_group: string | null;
+  profile_id: string | null;
+  guardian_profile_id: string | null;
+  is_active: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface AcademicTermsTable {
+  id: string;
+  code: string;
+  name: string;
+  start_date: string;
+  end_date: string;
+  is_locked: boolean;
+  rubric_schema: unknown;
+  created_at: string;
+}
+
+export interface ReportCardsTable {
+  id: string;
+  student_id: string;
+  term_id: string;
+  tahfidz_data: unknown;
+  diniyah_scores: unknown;
+  adab_scores: unknown;
+  attendance_summary: unknown;
+  status: "draft" | "verified" | "published";
+  verification_hash: string;
+  gdrive_file_id: string | null;
+  published_at: string | null;
+  updated_by: string | null;
+  updated_at: string;
+}
+
+export interface BatchJobsTable {
+  id: string;
+  job_type: "REPORT_CARD_BATCH_PDF" | "REPORT_RAW_IMPORT";
+  term_id: string | null;
+  status: "queued" | "running" | "completed" | "failed";
+  total_items: number;
+  processed_items: number;
+  failed_items: number;
+  zip_gdrive_file_id: string | null;
+  error_summary: unknown;
+  created_by: string;
+  created_at: string;
+  completed_at: string | null;
+}
+
 /**
  * Only the relations the read-only path queries. A table absent from this map cannot be named in
  * a Kysely query, so the surface the reader can reach stays as small as the audited read paths.
@@ -234,4 +290,8 @@ export interface Database {
   cron_job_runs: CronJobRunsTable;
   account_requests: AccountRequestsTable;
   background_job_runs: BackgroundJobRunsTable;
+  students: StudentsTable;
+  academic_terms: AcademicTermsTable;
+  report_cards: ReportCardsTable;
+  batch_jobs: BatchJobsTable;
 }
