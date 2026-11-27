@@ -145,26 +145,21 @@ describe("CACHE-01 Batch 1 — query keys carry the session and the active role"
     expect(client.getQueryState(cacheKeys.tasks(other))?.isInvalidated).toBe(false);
   });
 
-  it("resets the legacy data-cache only where a legacy reader is still left", async () => {
-    // Batch 1 needed the bridge because `/` still read the agenda lists out of data-cache. Batch 2
-    // migrated `/` as well, so an agenda write no longer touches the old map; the policy row is the
-    // reader that survives into Batch 3 (/admin/audit), and that is what stays bridged here.
+  it("carries the reset through TanStack only, now that no legacy reader is left", async () => {
+    // Batch 1 needed the bridge because `/` still read the agenda lists out of data-cache, and Batch
+    // 2 kept it for /admin/audit's policy read. Batch 3 migrated that last reader and deleted the
+    // module, so the reset is a single TanStack invalidation now.
     const { QueryClient } = await import("@tanstack/react-query");
     const { cacheKeys, invalidateEvents, invalidatePolicy } = await import("@/lib/cache-keys");
-    const { readCache, writeCache } = await import("@/lib/data-cache");
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     const session = { id: "pengurus-2", role: "pengurus" } as const;
 
-    writeCache("events:pengurus-2", ["stale"]);
     await client.fetchQuery({ queryKey: cacheKeys.events(session), queryFn: async () => [] });
-    await invalidateEvents(client, session);
-    expect(readCache("events:pengurus-2")).toEqual(["stale"]);
-    expect(client.getQueryState(cacheKeys.events(session))?.isInvalidated).toBe(true);
-
-    writeCache("policy:active", { late_grace_minutes: 15 });
     await client.fetchQuery({ queryKey: cacheKeys.policy(session), queryFn: async () => null });
+    await invalidateEvents(client, session);
     await invalidatePolicy(client, session);
-    expect(readCache("policy:active")).toBeUndefined();
+
+    expect(client.getQueryState(cacheKeys.events(session))?.isInvalidated).toBe(true);
     expect(client.getQueryState(cacheKeys.policy(session))?.isInvalidated).toBe(true);
   });
 
@@ -176,14 +171,14 @@ describe("CACHE-01 Batch 1 — query keys carry the session and the active role"
       expect(page).toContain("useQuery({");
       expect(page).toContain("cacheKeys.");
     }
-    // Batch 2 took the daily operational surfaces, so the legacy primitives now only serve the
-    // Batch 3 modules (/admin/*, /tim, /resources) — which is why they must stay intact.
-    expect(readOrEmpty("src/lib/data-cache.ts")).toContain("export function invalidateCache");
-    expect(readOrEmpty("src/hooks/use-cached-data.ts")).toContain("export function useCachedData");
+    // Batch 3 took the last surfaces that needed the legacy primitives and removed them, so nothing
+    // in src may reference them any more — see cache-01-tanstack-batch3.test.ts for the sweep.
+    expect(existsSync(resolve(root, "src/lib/data-cache.ts"))).toBe(false);
+    expect(existsSync(resolve(root, "src/hooks/use-cached-data.ts"))).toBe(false);
     expect(readOrEmpty("src/app/(app)/page.tsx")).not.toContain("useCachedData");
     expect(readOrEmpty("src/app/(app)/laporan/page.tsx")).not.toContain("useCachedData");
-    expect(readOrEmpty("src/app/(app)/tim/page.tsx")).toContain("useCachedData");
-    expect(readOrEmpty("src/app/(app)/admin/audit/page.tsx")).toContain("useCachedData");
+    expect(readOrEmpty("src/app/(app)/tim/page.tsx")).not.toContain("useCachedData");
+    expect(readOrEmpty("src/app/(app)/admin/audit/page.tsx")).not.toContain("useCachedData");
   });
 });
 

@@ -9,16 +9,22 @@ import {
   getPeopleAction,
   getTeamsAction,
 } from "@/modules/people/actions";
-import { useCachedData } from "@/hooks/use-cached-data";
+import { useIdentity } from "@/components/auth/identity-context";
+import { cacheKeys } from "@/lib/cache-keys";
+import { useQuery } from "@tanstack/react-query";
 
 type ViewTab = "anggota" | "tim";
 
 export default function TimPage() {
+  const { user } = useIdentity();
   const [activeTab, setActiveTab] = React.useState<ViewTab>("anggota");
   const [roleFilter, setRoleFilter] = React.useState<string>("all");
   const [searchQuery, setSearchQuery] = React.useState("");
-  const peopleQuery = useCachedData("people:list", getPeopleAction);
-  const teamsQuery = useCachedData("teams:structure", getTeamsAction);
+  // CACHE-01 Batch 3: the directory was one global entry (`people:list`) for the whole browser, so
+  // an admin who opened /tim after /admin/people could be served rows read under another account's
+  // RLS scope. The key now carries this session and its active role, shared with /admin/people.
+  const peopleQuery = useQuery({ queryKey: cacheKeys.people(user), queryFn: getPeopleAction });
+  const teamsQuery = useQuery({ queryKey: cacheKeys.teams(user), queryFn: getTeamsAction });
   const profiles: PersonProfile[] = React.useMemo(() => peopleQuery.data ?? [], [peopleQuery.data]);
   const teams: TeamStructureItem[] = teamsQuery.data ?? [];
   const loadError = peopleQuery.error?.message || teamsQuery.error?.message || null;

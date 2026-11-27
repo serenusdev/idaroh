@@ -3,7 +3,8 @@
 import * as React from "react";
 import { createBackupManifestAction, getBackupRunsAction } from "@/modules/operations/actions";
 import { useIdentity } from "@/components/auth/identity-context";
-import { useCachedData } from "@/hooks/use-cached-data";
+import { cacheKeys } from "@/lib/cache-keys";
+import { useQuery } from "@tanstack/react-query";
 import { UnauthorizedState } from "@/components/ui/unauthorized-state";
 import { LoadingSpinner } from "@/components/ui/loading-spinner";
 
@@ -27,11 +28,13 @@ const statusLabels: Record<string, string> = {
 export default function AdminBackupPage() {
   const { user } = useIdentity();
   const [notice, setNotice] = React.useState<string | null>(null);
-  const runsQuery = useCachedData("admin:backup-runs", getBackupRunsAction);
+  // CACHE-01 Batch 3: the manifest list was keyed `admin:backup-runs` for the whole browser, so an
+  // operator who shared a machine could be shown another account's run history.
+  const runsQuery = useQuery({ queryKey: cacheKeys.backupRuns(user), queryFn: getBackupRunsAction });
   const runs: BackupRun[] = runsQuery.data ?? [];
   if (runsQuery.isLoading) return <div className="min-h-[360px] grid place-items-center"><LoadingSpinner size="lg" /></div>;
   if (user.role !== "super_admin") return <UnauthorizedState requiredRole="Super Admin" />;
-  const run = async () => { const result = await createBackupManifestAction("database"); setNotice(result.message); await runsQuery.refresh(); };
+  const run = async () => { const result = await createBackupManifestAction("database"); setNotice(result.message); await runsQuery.refetch(); };
   return (
     <div className="w-full max-w-5xl mx-auto space-y-6 pb-20">
       <header>

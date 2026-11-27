@@ -26,31 +26,22 @@ const MOUNT_SHELL = "<!doctype html><html><head><title>notifications fixture</ti
 const fixture = String.raw`
 import React from "react";
 import { createRoot } from "react-dom/client";
+import { QueryProvider } from "@/components/providers/query-provider";
 import AdminNotificationsPage from "@/app/(app)/admin/notifications/page";
 const config = window.__notificationConfig;
 const root = createRoot(document.getElementById("notifications-root"));
-root.render(React.createElement(AdminNotificationsPage));
+// CACHE-01 Batch 3 moved this page off the manual data-cache, so the fixture needs the same
+// provider AppShell mounts in the real app.
+root.render(React.createElement(QueryProvider, null, React.createElement(AdminNotificationsPage)));
 `;
 
 const modules: Record<string, string> = {
-  "@/components/auth/identity-context": `export const useIdentity = () => ({ user: window.__notificationConfig ? { role: window.__notificationConfig.role } : null });`,
+  "@/components/auth/identity-context": `export const useIdentity = () => ({ user: window.__notificationConfig ? { id: "operator-1", role: window.__notificationConfig.role } : null });`,
   "@/components/ui/unauthorized-state": `import React from "react"; export function UnauthorizedState({ requiredRole }) { return React.createElement("p", { role: "alert" }, "Unauthorized: " + requiredRole); }`,
   "@/modules/notifications/actions": `
     export const getNotificationDeliverySummaryAction = async () => ({ pending: 0, processing: 0, deadLetter: 0 });
     export const getEmailDeliverySummaryAction = async () => window.__notificationConfig.emailSummary || null;`,
   "@/modules/operations/actions": `export const sendTestPushAction = async () => ({ success: true, message: "ok" });`,
-  "@/hooks/use-cached-data": `
-    import React from "react";
-    export function useCachedData(key, loader) {
-      const [state, setState] = React.useState({ data: undefined, error: null });
-      React.useEffect(() => {
-        if (!key) { setState({ data: undefined, error: null }); return; }
-        let alive = true;
-        Promise.resolve(loader()).then(data => { if (alive) setState({ data, error: null }); }).catch(error => { if (alive) setState({ data: undefined, error }); });
-        return () => { alive = false; };
-      }, [key, loader]);
-      return { ...state, refresh: async () => { if (key) setState({ data: await loader(), error: null }); } };
-    }`,
 };
 
 const boundaries: Plugin = {

@@ -151,9 +151,12 @@ const host = document.getElementById("audit-ui-root");
 let reactRoot = createRoot(host);
 let generation = 0;
 function withQuery(activeMode, element) {
-  // Beranda reads through TanStack Query from CACHE-01 Batch 2 on; the other surfaces in this
-  // harness stay on the manual data-cache until Batch 3 and need no provider.
-  return activeMode === "beranda" ? React.createElement(QueryProvider, null, element) : element;
+  // Every page surface in this harness reads through TanStack Query from CACHE-01 Batch 3 on: / and
+  // /admin/backup moved in Batch 2, /admin/cron joins here. The manual data-cache they used to share
+  // is deleted, so all three need the provider; the notification inbox modes never had cached reads.
+  return activeMode === "beranda" || activeMode === "backup" || activeMode === "cron"
+    ? React.createElement(QueryProvider, null, element)
+    : element;
 }
 function render(mode, props = {}, remount = false) {
   if (remount) generation++;
@@ -268,13 +271,15 @@ test.beforeAll(async () => {
     "src/app/(app)/admin/backup/page.tsx",
     "src/app/(app)/admin/cron/page.tsx",
     "src/app/(app)/page.tsx",
-    // CACHE-01 Batch 2: / is a TanStack surface now; the three surfaces above still pull the
-    // manual cache in, which is why both modules remain in this bundle.
+    // CACHE-01 Batch 3: all three page surfaces read through TanStack, so the provider is required
+    // and the manual cache this harness used to share with them is gone from the bundle entirely.
     "src/components/providers/query-provider.tsx",
-    "src/hooks/use-cached-data.ts",
-    "src/lib/data-cache.ts",
+    "src/lib/cache-keys.ts",
     "src/lib/safe-url.ts",
   ]) expect(inputs.some(input => input.endsWith(required)), `Bundled actual ${required}`).toBe(true);
+  for (const removed of ["src/hooks/use-cached-data.ts", "src/lib/data-cache.ts"]) {
+    expect(inputs.some(input => input.endsWith(removed)), `Bundled retired ${removed}`).toBe(false);
+  }
   expect(inputs.some(input => /src\/lib\/supabase\/|src\/modules\/.*\/actions\.ts/.test(input))).toBe(false);
   bundle = result.outputFiles[0].text;
 });
@@ -754,28 +759,33 @@ test.describe("audit UI — actual components, mocked external dependencies (not
   });
 
   test("cron schedule load failure retries without reloading identity", async ({ page }) => {
-    await mount(page, { mode: "cron", schedules: cronSchedules, queues: { schedules: [rejected()] } });
+    // CACHE-01 Batch 3: the provider defaults to retry:1, so a failing read is given one automatic
+    // attempt before the page is allowed to show the error. Two rejections are queued to reach that
+    // state; the manual retry below is then the third read.
+    await mount(page, { mode: "cron", schedules: cronSchedules, queues: { schedules: [rejected(), rejected()] } });
     await expect(page.getByRole("heading", { name: "Jadwal Gagal Dimuat" })).toBeVisible();
+    expect(await callCount(page, "schedules")).toBe(2);
     await page.getByRole("button", { name: "Muat Ulang Halaman" }).click();
     await expect(page.locator("#audit-ui-root section")).toHaveCount(3);
+    // The invariant this test was written for: a failed schedule read never re-runs the identity
+    // round-trip, retry or not.
     expect(await callCount(page, "currentUser")).toBe(0);
-    expect(await callCount(page, "schedules")).toBe(2);
+    expect(await callCount(page, "schedules")).toBe(3);
   });
 
-  test("cron revisit renders cached schedules instantly while revalidation is pending", async ({ page }) => {
+  test("cron revisit renders cached schedules without a second read", async ({ page }) => {
     await mount(page, { mode: "cron", schedules: cronSchedules });
     await expect(page.locator("#audit-ui-root section")).toHaveCount(3);
     expect(await callCount(page, "schedules")).toBe(1);
     await page.evaluate(() => {
-      window.__auditUI.queue("schedules", { kind: "defer", id: "cron-revisit" });
       window.__auditUI.render("cron", {}, true);
     });
+    // CACHE-01 Batch 3: inside the 30s freshness window a remount is answered from the cache, so the
+    // rows stay on screen with no loading flash and no second read — the manual hook used to
+    // revalidate on every mount. Focus/online revalidation is what refreshes it now.
     await expect(page.locator("#audit-ui-root section")).toHaveCount(3);
     await expect(page.getByText("Memuat jadwal…")).toHaveCount(0);
-    await expect.poll(() => callCount(page, "schedules")).toBe(2);
-    expect((await snapshot(page)).pending).toContain("cron-revisit");
-    await page.evaluate(() => window.__auditUI.settle("cron-revisit", window.__auditConfig.schedules));
-    await expect(page.locator("#audit-ui-root section")).toHaveCount(3);
+    expect(await callCount(page, "schedules")).toBe(1);
     expect(await callCount(page, "currentUser")).toBe(0);
   });
 });

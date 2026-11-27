@@ -34,15 +34,18 @@ describe("Cabang 3 (TSK-02 + ADM D3 + Import/People) — Tahap B contract pins",
     expect(analytics).toMatch(/isOperationalDashboardRole|holdsRole\(user,\s*\[\s*"pengurus"\s*,\s*"yayasan"\s*\]\)/);
     expect(analytics).toContain("systemHealth");
 
-    // Per-user namespaced cache keys (no shared "admin:dashboard-stats" across roles/users). The
-    // beranda moved onto TanStack Query in CACHE-01 Batch 2, so its namespace now comes from the
-    // key builder; /admin/audit is still a data-cache reader until Batch 3 and keeps the literal.
+    // Per-user namespaced cache keys (no shared "admin:dashboard-stats" across roles/users). Both
+    // readers are on TanStack Query now — the beranda in CACHE-01 Batch 2 and /admin/audit in Batch
+    // 3 — so the namespace comes from the key builder, and the literal survives only inside it.
     const cacheKeys = read("src/lib/cache-keys.ts");
     expect(homePage).toContain("cacheKeys.dashboard(currentUser)");
     expect(cacheKeys).toContain("`admin:dashboard-stats:${");
-    expect(auditPage).toContain("`admin:dashboard-stats:${currentUser.id}`");
+    expect(auditPage).toContain("cacheKeys.dashboard(currentUser)");
     expect(homePage).not.toMatch(/useCachedData\([^)]*"admin:dashboard-stats"[^)]*\)/);
     expect(auditPage).not.toMatch(/useCachedData\([^)]*"admin:dashboard-stats"[^)]*\)/);
+    // D3: the role sits in the key next to the id, so the same account switching active role cannot
+    // be served the other role's counters.
+    expect(cacheKeys).toMatch(/dashboard: \(session: CacheSession\) => \[`admin:dashboard-stats:\$\{session\.id\}`, session\.role\]/);
   });
 
   it("Import & People: importMembersCsvAction is super_admin-only without member_type->role_requested, and getPeopleAction uses WIB valid_from/valid_to", () => {

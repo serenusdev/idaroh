@@ -4,16 +4,15 @@ import * as React from "react";
 import { getAttendanceReviewQueueAction, reviewAttendanceCorrectionAction, reviewAttendanceExceptionAction } from "@/modules/attendance/actions";
 import { useIdentity } from "@/components/auth/identity-context";
 import { UnauthorizedState } from "@/components/ui/unauthorized-state";
-import { useCachedData } from "@/hooks/use-cached-data";
-import { useQueryClient } from "@tanstack/react-query";
-import { invalidateAttendance } from "@/lib/cache-keys";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { cacheKeys, invalidateAttendance } from "@/lib/cache-keys";
 
 export default function AdminAttendanceReviewPage() {
   const { user } = useIdentity();
-  // CACHE-01 Batch 2: this page's own read stays legacy until Batch 3, but a decision here changes
-  // the santri's /kehadiran history, which is TanStack-owned from now on.
+  // CACHE-01 Batch 2/3: a decision here changes the santri's /kehadiran history, which TanStack owns,
+  // and the correction queue this page reads — both reset from the same client.
   const queryClient = useQueryClient();
-  const queueQuery = useCachedData("admin:attendance-review", getAttendanceReviewQueueAction);
+  const queueQuery = useQuery({ queryKey: cacheKeys.attendanceReview(user), queryFn: getAttendanceReviewQueueAction });
   const queue = queueQuery.data ?? { corrections: [], exceptions: [] };
   const [notice, setNotice] = React.useState<string | null>(null);
   const [approvingCorrection, setApprovingCorrection] = React.useState<{ id: string; requested: string } | null>(null);
@@ -43,7 +42,7 @@ export default function AdminAttendanceReviewPage() {
       setNotice(result.message);
       if (result.success) {
         setApprovingCorrection(null);
-        queueQuery.refresh();
+        void queueQuery.refetch();
         void invalidateAttendance(queryClient, user);
       }
     } catch {

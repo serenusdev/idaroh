@@ -28,8 +28,8 @@ import type { UserRole } from "@/lib/auth/types";
 import { getTeamsAction } from "@/modules/people/actions";
 import type { TeamStructureItem } from "@/modules/people/types";
 import { exportAuditedDataAction } from "@/modules/analytics/actions";
-import { useCachedData } from "@/hooks/use-cached-data";
-import { writeCache } from "@/lib/data-cache";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { cacheKeys, invalidateIamQueue } from "@/lib/cache-keys";
 
 const MFA_EVIDENCE_LABEL: Record<ActiveUserItem["mfaEvidence"], string> = {
   none: "MFA: belum enroll",
@@ -81,21 +81,23 @@ export default function AdminUsersPage() {
   }>({ isOpen: false, title: "", onConfirm: () => {} });
   const [adminToast, setAdminToast] = React.useState<{ type: "success" | "error"; text: string } | null>(null);
 
-  // Dynamic Data
-  const requestsQuery = useCachedData(canDecideIam ? "admin:account-requests" : null, getAccountRequestsAction);
-  const usersQuery = useCachedData("admin:active-users", getActiveUsersAction);
-  const teamsQuery = useCachedData("teams:structure", getTeamsAction);
+  // Dynamic Data — CACHE-01 Batch 3. `admin:active-users` and `teams:structure` were global Map
+  // entries, so this console (the most privileged read surface in the app) could be served rows that
+  // another account had fetched minutes earlier in the same browser. The list now also reads straight
+  // from the cache instead of a useState mirror: the mirror is what let a local patch leak into the
+  // next account's view.
+  const queryClient = useQueryClient();
+  const requestsQuery = useQuery({
+    queryKey: cacheKeys.accountRequests(currentUser),
+    queryFn: getAccountRequestsAction,
+    enabled: canDecideIam,
+  });
+  const usersQuery = useQuery({ queryKey: cacheKeys.activeUsers(currentUser), queryFn: getActiveUsersAction });
+  const teamsQuery = useQuery({ queryKey: cacheKeys.teams(currentUser), queryFn: getTeamsAction });
   const accountRequests: AccountRequestItem[] = requestsQuery.data ?? [];
-  const [activeUsers, setActiveUsers] = React.useState<ActiveUserItem[]>(usersQuery.data ?? []);
+  const activeUsers: ActiveUserItem[] = usersQuery.data ?? [];
   const teams: TeamStructureItem[] = teamsQuery.data ?? [];
   const isLoading = requestsQuery.isLoading || usersQuery.isLoading;
-
-  React.useEffect(() => {
-    if (usersQuery.data) setActiveUsers(usersQuery.data);
-  }, [usersQuery.data]);
-  React.useEffect(() => {
-    writeCache("admin:active-users", activeUsers);
-  }, [activeUsers]);
 
   // Approval state tracker for interactive tactile feedback
   const [approvedCards, setApprovedCards] = React.useState<Record<string, string>>({});
@@ -128,10 +130,9 @@ export default function AdminUsersPage() {
   const [applicantTeams, setApplicantTeams] = React.useState<Record<string, string>>({});
   const [approveErrors, setApproveErrors] = React.useState<Record<string, string>>({});
 
+  // The three reads moved together before (one prefix reset per key), so one helper does it now.
   const reload = () => {
-    requestsQuery.refresh();
-    usersQuery.refresh();
-    teamsQuery.refresh();
+    void invalidateIamQueue(queryClient, currentUser);
   };
 
   const exportUsers = async () => {
@@ -264,7 +265,20 @@ export default function AdminUsersPage() {
         const res = await revokeDeviceTokenAction(deviceId);
         if (res.success) {
           setRevokedDevices((prev) => ({ ...prev, [deviceId]: true }));
-          setActiveUsers((prev) => prev.map((user) => user.id === userId ? { ...user, devices: user.devices.filter((device) => device.id !== deviceId), devicesCount: Math.max(0, user.devicesCount - 1), deviceInfo: user.devices.length > 1 ? `${user.devices.length - 1} Perangkat Aktif` : "Belum ada perangkat terhubung" } : user));
+          // The list is cache state now, so the optimistic patch goes through setQueryData. It stays
+          // a local UI patch: the revoked device row still comes from the next read, not from here.
+          queryClient.setQueryData<ActiveUserItem[]>(cacheKeys.activeUsers(currentUser), (prev) =>
+            (prev ?? []).map((item) =>
+              item.id === userId
+                ? {
+                    ...item,
+                    devices: item.devices.filter((device) => device.id !== deviceId),
+                    devicesCount: Math.max(0, item.devicesCount - 1),
+                    deviceInfo: item.devices.length > 1 ? `${item.devices.length - 1} Perangkat Aktif` : "Belum ada perangkat terhubung",
+                  }
+                : item,
+            ),
+          );
         }
         if (!res.success) setAdminToast({ type: "error", text: res.message });
       },

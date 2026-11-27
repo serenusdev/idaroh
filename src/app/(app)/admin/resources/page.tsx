@@ -5,8 +5,8 @@ import { LoadingSpinner } from "@/components/ui/loading-spinner";
 import { UnauthorizedState } from "@/components/ui/unauthorized-state";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { useIdentity } from "@/components/auth/identity-context";
-import { useCachedData } from "@/hooks/use-cached-data";
-import { invalidateCache } from "@/lib/data-cache";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { cacheKeys, invalidateResources } from "@/lib/cache-keys";
 import {
   getResourceAdminListAction,
   getResourceCategoryOptionsAction,
@@ -40,8 +40,14 @@ const EMPTY_FORM: ResourceAdminInput = {
 
 export default function AdminResourcesPage() {
   const { user } = useIdentity();
-  const listQuery = useCachedData("admin:resources-list", getResourceAdminListAction);
-  const categoriesQuery = useCachedData("admin:resource-categories", getResourceCategoryOptionsAction);
+  // CACHE-01 Batch 3: the admin console read `admin:resources-list` from a global Map, so a second
+  // account opening this page in the same browser could be served the first one's rows.
+  const queryClient = useQueryClient();
+  const listQuery = useQuery({ queryKey: cacheKeys.adminResources(user), queryFn: getResourceAdminListAction });
+  const categoriesQuery = useQuery({
+    queryKey: cacheKeys.adminResourceCategories(user),
+    queryFn: getResourceCategoryOptionsAction,
+  });
   const resources = listQuery.data ?? [];
   const categories = categoriesQuery.data ?? [];
   const [form, setForm] = React.useState<ResourceAdminInput>(EMPTY_FORM);
@@ -66,8 +72,9 @@ export default function AdminResourcesPage() {
   }, [loadError]);
 
   const invalidateUserResources = () => {
-    invalidateCache("resources:list");
-    invalidateCache("resources:stats");
+    // Only the santri-facing keys go here: this console's own list is re-read explicitly after a
+    // save because the form re-selects the saved row out of that result.
+    void invalidateResources(queryClient, user);
   };
 
   if (loading) return <div className="min-h-[360px] grid place-items-center"><LoadingSpinner size="lg" /></div>;
@@ -119,7 +126,10 @@ export default function AdminResourcesPage() {
       const result = await saveResourceAction(editingId, { ...form, tags: form.tags });
       setNotice(result.message);
       if (result.success) {
-        const items = await listQuery.refresh();
+        // The old refresh() handed the rows back and the form re-selected from them; refetch()
+        // hands back the query result, so the dereference has to be explicit.
+        const listResult = await listQuery.refetch();
+        const items = listResult.data;
         setEditingId(result.id || editingId);
         if (result.id) {
           const saved = items?.find((item) => item.id === result.id);
@@ -167,7 +177,7 @@ export default function AdminResourcesPage() {
       const result = await setResourceArchiveAction(archiveTarget.id, archiveTarget.status !== "archived");
       setNotice(result.message);
       if (result.success) {
-        await listQuery.refresh();
+        await listQuery.refetch();
         invalidateUserResources();
       }
     } catch {
@@ -184,7 +194,8 @@ export default function AdminResourcesPage() {
       const result = await restoreResourceRevisionAction(editingId, revision.id);
       setNotice(result.message);
       if (result.success) {
-        const items = await listQuery.refresh();
+        const listResult = await listQuery.refetch();
+        const items = listResult.data;
         const saved = items?.find((item) => item.id === editingId);
         if (saved) setForm(saved);
         setRevisions(await getResourceRevisionsAction(editingId));
@@ -201,7 +212,7 @@ export default function AdminResourcesPage() {
       const result = await importResourcesCsvAction(importFileName, importCsv);
       setImportFeedback(`${result.message}${result.errors.length ? ` ${result.errors.slice(0, 3).join(" ")}` : ""}`);
       if (result.importedRows > 0) {
-        await listQuery.refresh();
+        await listQuery.refetch();
         setImportCsv("");
         invalidateUserResources();
       }

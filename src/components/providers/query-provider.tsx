@@ -10,7 +10,8 @@ const DEFAULT_OPTIONS = {
     // gave — without trusting a response from a minute ago.
     staleTime: 30_000,
     gcTime: 10 * 60_000,
-    // use-cached-data.ts refetched on window focus and on the "online" event; same recovery.
+    // The manual cache hook this replaced refetched on window focus and on the "online" event;
+    // the same recovery is a provider default so no surface has to opt in per call site.
     refetchOnWindowFocus: true,
     refetchOnReconnect: true,
     retry: 1,

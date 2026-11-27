@@ -156,27 +156,27 @@ describe("CACHE-01 Batch 2 — the invalidation graph around these pages survive
     expect(client.getQueryState(cacheKeys.reportsHistory(other, 1))?.isInvalidated).toBe(false);
   });
 
-  it("bridges the legacy prefixes that still have a reader after this batch", async () => {
+  it("resets the policy and dashboard keys that this batch had to bridge", async () => {
+    // Batch 2 shipped these two helpers as a bridge: /admin/audit still read `policy:active` and
+    // `admin:dashboard-stats` out of the legacy Map, so a write had to clear both copies. Batch 3
+    // migrated that page and deleted src/lib/data-cache.ts, so the reset is TanStack-only now and a
+    // prefix that belongs to no key must stay untouched (D3).
     const { QueryClient } = await import("@tanstack/react-query");
     const { cacheKeys, invalidatePolicy, invalidateDashboard } = await import("@/lib/cache-keys");
-    const { readCache, writeCache } = await import("@/lib/data-cache");
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     const session = { id: "pengurus-2", role: "pengurus" } as const;
+    const other = { id: "pengurus-9", role: "pengurus" } as const;
 
-    // /admin/audit still calls useCachedData for both of these, so a write from the migrated
-    // surfaces has to clear the old map next to the TanStack entry.
-    writeCache("policy:active", { late_grace_minutes: 15 });
-    writeCache("admin:dashboard-stats:pengurus-2", { pending: 3 });
     await client.fetchQuery({ queryKey: cacheKeys.policy(session), queryFn: async () => null });
     await client.fetchQuery({ queryKey: cacheKeys.dashboard(session), queryFn: async () => null });
+    await client.fetchQuery({ queryKey: cacheKeys.dashboard(other), queryFn: async () => null });
 
     await invalidatePolicy(client, session);
-    expect(readCache("policy:active")).toBeUndefined();
     expect(client.getQueryState(cacheKeys.policy(session))?.isInvalidated).toBe(true);
 
     await invalidateDashboard(client, session);
-    expect(readCache("admin:dashboard-stats:pengurus-2")).toBeUndefined();
     expect(client.getQueryState(cacheKeys.dashboard(session))?.isInvalidated).toBe(true);
+    expect(client.getQueryState(cacheKeys.dashboard(other))?.isInvalidated).toBe(false);
   });
 
   it("drops the bridges that this batch leaves with no legacy reader", async () => {
