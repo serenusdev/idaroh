@@ -1,5 +1,5 @@
 import { generateKeyPairSync } from "node:crypto";
-import * as XLSX from "xlsx";
+import { zipSync, strToU8 } from "fflate";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { googleDriveStorageAdapter } from "@/lib/storage/gdrive";
 import { parseXlsx } from "@/modules/report-cards/parser";
@@ -14,10 +14,8 @@ afterEach(() => {
 
 describe("Wave 5.2 storage and Smart Scan contracts", () => {
   it("reads XLSX rows without using a Supabase storage API", () => {
-    const workbook = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(workbook, XLSX.utils.aoa_to_sheet([["nis", "full_name"], ["NIS-9", "Ahmad"]]), "Nilai");
-    const body = XLSX.write(workbook, { type: "buffer", bookType: "xlsx" });
-    expect(parseXlsx(new Uint8Array(body))[0]).toMatchObject({ nis: "NIS-9", fullName: "Ahmad" });
+    const body = zipSync({ "xl/worksheets/sheet1.xml": strToU8('<worksheet><sheetData><row r="1"><c r="A1" t="inlineStr"><is><t>nis</t></is></c><c r="B1" t="inlineStr"><is><t>full_name</t></is></c></row><row r="2"><c r="A2" t="inlineStr"><is><t>NIS-9</t></is></c><c r="B2" t="inlineStr"><is><t>Ahmad</t></is></c></row></sheetData></worksheet>') });
+    expect(parseXlsx(body)[0]).toMatchObject({ nis: "NIS-9", fullName: "Ahmad" });
   });
 
   it("falls back to manual review when Gemini is not configured", async () => {
