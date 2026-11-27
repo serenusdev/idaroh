@@ -23,6 +23,7 @@ import React from "react";
 import { createRoot } from "react-dom/client";
 import { flushSync } from "react-dom";
 import AdminUsersPage from "@/app/(app)/admin/users/page";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { IdentityProvider } from "@/components/auth/identity-context";
 const config = window.__rejectConfig;
 const clone = value => value === undefined ? undefined : JSON.parse(JSON.stringify(value));
@@ -46,12 +47,15 @@ window.__rejectBoundaries = {
   },
 };
 const reactRoot = createRoot(document.getElementById("reject-root"));
+// CACHE-01 Batch 3: the console reads through TanStack Query now, so the fixture supplies the client
+// AppShell would give it. retry:false keeps the read counts this spec asserts deterministic.
+const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: 30_000 }, mutations: { retry: 0 } } });
 // §3.1 is a role question, so the console has to be exercised as each viewer, not only as the
 // super_admin fixture the rejection drill was written for.
 const viewer = config.viewer || { role: "super_admin", roles: ["super_admin"] };
-flushSync(() => reactRoot.render(React.createElement(IdentityProvider, {
+flushSync(() => reactRoot.render(React.createElement(QueryClientProvider, { client: queryClient }, React.createElement(IdentityProvider, {
   initialUser: { id: "admin-a", role: viewer.role, roles: viewer.roles, status: "active", full_name: "Admin Uji", email: "admin@example.test", member_type: "pengurus" },
-}, React.createElement(AdminUsersPage))));
+}, React.createElement(AdminUsersPage)))));
 `;
 const modules: Record<string, string> = {
   "@/modules/iam/actions": `

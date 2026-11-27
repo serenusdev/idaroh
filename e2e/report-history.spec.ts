@@ -118,10 +118,12 @@ test.beforeAll(async () => {
   for (const file of ["src/app/(app)/laporan/page.tsx", "src/components/auth/identity-context.tsx"]) {
     expect(inputs.some(input => input.endsWith(file)), `Bundled actual ${file}`).toBe(true);
   }
-  // CACHE-01 Batch 2: /laporan left the manual cache hook behind, so it may not be pulled into this
-  // bundle any more. src/lib/data-cache.ts still is — cache-keys.ts imports it for the policy and
-  // dashboard bridges that /admin/audit needs until Batch 3.
-  expect(inputs.some(input => input.endsWith("src/hooks/use-cached-data.ts")), "Bundled legacy use-cached-data").toBe(false);
+  // CACHE-01 Batch 3 deleted the manual cache hook and the module behind it, so neither may appear
+  // in any page bundle any more — /laporan only reaches TanStack keys through src/lib/cache-keys.ts.
+  for (const retired of ["src/hooks/use-cached-data.ts", "src/lib/data-cache.ts"]) {
+    expect(inputs.some(input => input.endsWith(retired)), `Bundled retired ${retired}`).toBe(false);
+  }
+  expect(inputs.some(input => /node_modules\/@tanstack\/react-query\//.test(input)), "Bundled TanStack Query").toBe(true);
   expect(inputs.some(input => /src\/lib\/supabase\/|src\/modules\/.*\/actions\.ts/.test(input))).toBe(false);
   bundle = result.outputFiles[0].text;
 });

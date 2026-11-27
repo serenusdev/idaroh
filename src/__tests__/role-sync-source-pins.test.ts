@@ -112,7 +112,10 @@ describe("the IAM console separates roles from categories", () => {
   });
 
   it("the queue is not fetched for a reader that §3.1 excludes", () => {
-    expect(page).toMatch(/canDecideIam\s*\?\s*"admin:account-requests"\s*:\s*null/);
+    // CACHE-01 Batch 3: the legacy "key === null means do not read" became `enabled`, on the same
+    // predicate — the migration may not widen who gets to read the IAM queue.
+    expect(page).toMatch(/enabled:\s*canDecideIam/);
+    expect(page).toMatch(/cacheKeys\.accountRequests\(currentUser\)/);
   });
 
   it("the ustadz tab counts categories, not roles", () => {

@@ -20,11 +20,15 @@ describe("Item 3 — Performance/SWR/Realtime, Font, Android/PWA & Acceptance Ma
   });
 
   it("wires SWR focus/online revalidation and scoped Realtime notification cleanup", () => {
-    const swr = read("src/hooks/use-cached-data.ts");
+    // Item 3 proved revalidation-on-focus/online on src/hooks/use-cached-data.ts. CACHE-01 moved the
+    // last reader onto TanStack in Batch 3 and deleted that hook, so the same guarantee now lives on
+    // the QueryClient defaults — and the one place that used to add its own window listeners,
+    // src/components/notifications/use-notification-changes.ts, still has to clean up after itself.
+    const query = read("src/components/providers/query-provider.tsx");
     const realtime = read("src/components/notifications/use-notification-changes.ts");
 
-    expect(swr).toContain('window.addEventListener("focus"');
-    expect(swr).toContain('window.addEventListener("online"');
+    expect(query).toContain("refetchOnWindowFocus: true");
+    expect(query).toContain("refetchOnReconnect: true");
     expect(realtime).toContain("postgres_changes");
     expect(realtime).toContain("user_id=eq.${userId}");
     expect(realtime).toContain("removeChannel");

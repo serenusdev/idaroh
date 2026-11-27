@@ -4,7 +4,8 @@ import * as React from "react";
 import { useIdentity } from "@/components/auth/identity-context";
 import { getAnalyticsDrilldownAction, getOperationalAnalyticsAction, type AnalyticsDrilldownRow, type OperationalAnalytics } from "@/modules/operations/actions";
 import { UnauthorizedState } from "@/components/ui/unauthorized-state";
-import { useCachedData } from "@/hooks/use-cached-data";
+import { cacheKeys } from "@/lib/cache-keys";
+import { useQuery } from "@tanstack/react-query";
 
 type MetricKey = "attendance_late" | "reports_backlog" | "tasks_overdue";
 
@@ -38,7 +39,13 @@ export default function AdminAnalyticsPage() {
   const [from, setFrom] = React.useState("");
   const [to, setTo] = React.useState("");
   const [drilldown, setDrilldown] = React.useState<{ metric: MetricKey; rows: AnalyticsDrilldownRow[] } | null>(null);
-  const analyticsQuery = useCachedData(`admin:analytics:${from}:${to}`, () => getOperationalAnalyticsAction(from || undefined, to || undefined));
+  // CACHE-01 Batch 3: the period is part of the key rather than a mutable global entry, so a back
+  // navigation to a range already read stays instant and an unseen one is never answered from the
+  // previous range's numbers.
+  const analyticsQuery = useQuery({
+    queryKey: cacheKeys.adminAnalytics(user, from, to),
+    queryFn: () => getOperationalAnalyticsAction(from || undefined, to || undefined),
+  });
   const data = analyticsQuery.data ?? EMPTY;
   const loading = analyticsQuery.isLoading;
 
@@ -62,7 +69,7 @@ export default function AdminAnalyticsPage() {
         <div className="flex flex-wrap items-end gap-2">
           <label className="text-xs text-muted-foreground">Dari<input type="date" value={from} onChange={(e) => setFrom(e.target.value)} className="block mt-1 h-9 rounded-lg border border-border bg-card px-2 text-sm" /></label>
           <label className="text-xs text-muted-foreground">Sampai<input type="date" value={to} onChange={(e) => setTo(e.target.value)} className="block mt-1 h-9 rounded-lg border border-border bg-card px-2 text-sm" /></label>
-          <button type="button" onClick={() => analyticsQuery.refresh()} className="h-9 px-3 rounded-lg bg-primary text-on-primary text-xs font-semibold" disabled={loading}>{loading ? "Memuat…" : "Terapkan"}</button>
+          <button type="button" onClick={() => analyticsQuery.refetch()} className="h-9 px-3 rounded-lg bg-primary text-on-primary text-xs font-semibold" disabled={loading}>{loading ? "Memuat…" : "Terapkan"}</button>
         </div>
       </header>
 
@@ -75,7 +82,7 @@ export default function AdminAnalyticsPage() {
               <p className="text-xs text-muted-foreground mt-0.5">Angka tidak ditampilkan karena data gagal diambil dari server. Ini bukan berarti nol.</p>
             </div>
           </div>
-          <button type="button" onClick={() => analyticsQuery.refresh()} className="h-9 px-3 rounded-lg bg-primary text-on-primary text-xs font-semibold shrink-0">Coba lagi</button>
+          <button type="button" onClick={() => analyticsQuery.refetch()} className="h-9 px-3 rounded-lg bg-primary text-on-primary text-xs font-semibold shrink-0">Coba lagi</button>
         </div>
       )}
 

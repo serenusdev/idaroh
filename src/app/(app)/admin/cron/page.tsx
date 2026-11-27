@@ -2,8 +2,8 @@
 
 import * as React from "react";
 import { useIdentity } from "@/components/auth/identity-context";
-import { useCachedData } from "@/hooks/use-cached-data";
-import { writeCache } from "@/lib/data-cache";
+import { cacheKeys } from "@/lib/cache-keys";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { getCronJobSchedulesAction, updateCronJobScheduleAction } from "@/modules/cron/actions";
 import type { CronJobSchedule } from "@/lib/cron-schedule";
 import { UnauthorizedState } from "@/components/ui/unauthorized-state";
@@ -18,7 +18,12 @@ const toDrafts = (rows: CronJobSchedule[]): Record<string, Draft> =>
 
 export default function AdminCronPage() {
   const { user } = useIdentity();
-  const schedulesQuery = useCachedData(user.role === "super_admin" ? "admin:cron-schedules" : null, getCronJobSchedulesAction);
+  const queryClient = useQueryClient();
+  const schedulesQuery = useQuery({
+    queryKey: cacheKeys.cronSchedules(user),
+    queryFn: getCronJobSchedulesAction,
+    enabled: user.role === "super_admin",
+  });
   const [schedules, setSchedules] = React.useState<CronJobSchedule[]>(schedulesQuery.data ?? []);
   const [drafts, setDrafts] = React.useState<Record<string, Draft>>(() => toDrafts(schedulesQuery.data ?? []));
   const [savingKey, setSavingKey] = React.useState<string | null>(null);
@@ -50,7 +55,9 @@ export default function AdminCronPage() {
       if (result.success) {
         const next = schedules.map((row) => row.jobKey === jobKey ? { ...row, ...draft } : row);
         setSchedules(next);
-        writeCache("admin:cron-schedules", next);
+        // The action already returned the committed row, so the page seeds the cache with it instead
+        // of firing a read it does not need — what the old manual write-back did.
+        queryClient.setQueryData(cacheKeys.cronSchedules(user), next);
       }
     } catch {
       setNotice({ key: jobKey, ok: false, text: "Jadwal belum tersimpan. Periksa koneksi lalu coba lagi." });
@@ -72,7 +79,7 @@ export default function AdminCronPage() {
       {loading ? (
         <div className="rounded-2xl border border-border bg-card p-8 text-sm text-muted-foreground">Memuat jadwal…</div>
       ) : loadError ? (
-        <ErrorState title="Jadwal Gagal Dimuat" description="Periksa koneksi dan migrasi database, lalu coba lagi." onRetry={() => void schedulesQuery.refresh()} />
+        <ErrorState title="Jadwal Gagal Dimuat" description="Periksa koneksi dan migrasi database, lalu coba lagi." onRetry={() => void schedulesQuery.refetch()} />
       ) : (
         <div className="space-y-4">
           {schedules.map((schedule) => {

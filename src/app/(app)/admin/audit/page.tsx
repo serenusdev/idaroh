@@ -5,9 +5,8 @@ import { UnauthorizedState } from "@/components/ui/unauthorized-state";
 import { Illustration } from "@/components/ui/illustration";
 import { Modal } from "@/components/ui/modal";
 import { useIdentity } from "@/components/auth/identity-context";
-import { useCachedData } from "@/hooks/use-cached-data";
-import { useQueryClient } from "@tanstack/react-query";
-import { invalidatePolicy } from "@/lib/cache-keys";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { cacheKeys, invalidateAudit, invalidatePolicy } from "@/lib/cache-keys";
 import { AUDIT_EXPORT_ROLES, EXPORT_ROLES } from "@/lib/export-policy";
 import {
   exportAuditedDataAction,
@@ -23,19 +22,31 @@ import {
 
 export default function AdminAuditPage() {
   const { user: currentUser } = useIdentity();
-  // CACHE-01 Batch 2: this page keeps its legacy reads until Batch 3, but a policy activation is now
-  // also read from TanStack keys by / and /kehadiran, so it resets both caches through one helper.
+  // CACHE-01 Batch 3: this console is the most sensitive read surface in the app — the audit chain,
+  // the pending policy proposals and the raw log explorer all lived in a global, unscoped Map, so a
+  // second account in the same browser was served the first one's entries until a hard reload.
   const queryClient = useQueryClient();
   const [scope, setScope] = React.useState("Semua Tim (Organisasi)");
   const [auditPage, setAuditPage] = React.useState(1);
   const [searchLogQuery, setSearchLogQuery] = React.useState("");
   const [toastMessage, setToastMessage] = React.useState<string | null>(null);
 
-  const policyQuery = useCachedData("policy:active", getActivePolicyAction);
-  const chainQuery = useCachedData("admin:audit-chain", getAuditChainStatusAction);
-  const pendingQuery = useCachedData("admin:pending-policies", getPendingPolicySettingsAction);
-  const logsQuery = useCachedData(`admin:audit-logs:${scope}:${searchLogQuery}:${auditPage}`, () => queryAuditLogsAction(searchLogQuery, scope, auditPage));
-  const statsQuery = useCachedData(`admin:dashboard-stats:${currentUser.id}`, getAdminDashboardStatsAction);
+  const policyQuery = useQuery({ queryKey: cacheKeys.policy(currentUser), queryFn: getActivePolicyAction });
+  const chainQuery = useQuery({ queryKey: cacheKeys.auditChain(currentUser), queryFn: getAuditChainStatusAction });
+  const pendingQuery = useQuery({
+    queryKey: cacheKeys.pendingPolicies(currentUser),
+    queryFn: getPendingPolicySettingsAction,
+  });
+  // scope, search term and page are key slots now, so an earlier filter that was already read stays
+  // instant instead of being overwritten by the newest one.
+  const logsQuery = useQuery({
+    queryKey: cacheKeys.auditLogs(currentUser, scope, searchLogQuery, auditPage),
+    queryFn: () => queryAuditLogsAction(searchLogQuery, scope, auditPage),
+  });
+  const statsQuery = useQuery({
+    queryKey: cacheKeys.dashboard(currentUser),
+    queryFn: getAdminDashboardStatsAction,
+  });
 
   const policy = policyQuery.data ?? null;
   const auditChain = chainQuery.data ?? null;
@@ -97,12 +108,10 @@ export default function AdminAuditPage() {
     if (loadError) setToastMessage("Data audit atau kebijakan belum dapat dimuat. Silakan coba lagi.");
   }, [loadError]);
 
+  // The reload button reset five reads at once, and a policy activation changes the active row and
+  // the dashboard counters this page shows alongside it, so one helper carries all six.
   const reload = () => {
-    void policyQuery.refresh();
-    void chainQuery.refresh();
-    void pendingQuery.refresh();
-    void logsQuery.refresh();
-    void statsQuery.refresh();
+    void invalidateAudit(queryClient, currentUser);
   };
 
   // PERMISSIONS.md §3.8: admin.audit.read is yayasan/super_admin only and names
@@ -624,7 +633,7 @@ export default function AdminAuditPage() {
             <button
               type="button"
               onClick={() => {
-                if (searchLogQuery === "" && auditPage === 1) void logsQuery.refresh();
+                if (searchLogQuery === "" && auditPage === 1) void logsQuery.refetch();
                 else handleSearchLogs("");
               }}
               className="w-full h-11 bg-secondary-container hover:bg-secondary-fixed text-on-secondary-fixed font-label-md text-xs font-semibold rounded-xl flex items-center justify-center gap-2 transition-all"

@@ -6,12 +6,17 @@ import { getPeopleAction, getTeamsAction, addTeamMemberAction, removeTeamMemberA
 import type { PersonProfile, TeamStructureItem } from "@/modules/people/types";
 import { UnauthorizedState } from "@/components/ui/unauthorized-state";
 import { LoadingSpinner } from "@/components/ui/loading-spinner";
-import { useCachedData } from "@/hooks/use-cached-data";
+import { cacheKeys, invalidateDirectory } from "@/lib/cache-keys";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 
 export default function AdminPeoplePage() {
   const { user } = useIdentity();
-  const peopleQuery = useCachedData("people:list", getPeopleAction);
-  const teamsQuery = useCachedData("teams:structure", getTeamsAction);
+  const queryClient = useQueryClient();
+  // PPL-01 / CACHE-01 Batch 3: `people:list` and `teams:structure` were global Map entries shared by
+  // every account in the browser. They now carry this session and its active role, which is what
+  // /tim reads under the same key.
+  const peopleQuery = useQuery({ queryKey: cacheKeys.people(user), queryFn: getPeopleAction });
+  const teamsQuery = useQuery({ queryKey: cacheKeys.teams(user), queryFn: getTeamsAction });
   const people: PersonProfile[] = peopleQuery.data ?? [];
   const teams: TeamStructureItem[] = teamsQuery.data ?? [];
   const loading = peopleQuery.isLoading || teamsQuery.isLoading;
@@ -31,8 +36,7 @@ export default function AdminPeoplePage() {
   }, [peopleQuery.data, teamsQuery.data]);
 
   const reload = () => {
-    peopleQuery.refresh();
-    teamsQuery.refresh();
+    void invalidateDirectory(queryClient, user);
   };
 
   if (loading) return <div className="min-h-[360px] grid place-items-center"><LoadingSpinner size="lg" /></div>;

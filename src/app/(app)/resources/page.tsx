@@ -6,21 +6,28 @@ import { Modal } from "@/components/ui/modal";
 import { CategorySummary, ResourceItem } from "@/modules/library/types";
 import { getResourcesAction, getCategoriesAction, getResourceStatsAction, getFavoriteResourceIdsAction, toggleFavoriteAction } from "@/modules/library/actions";
 import { useIdentity } from "@/components/auth/identity-context";
-import { useCachedData } from "@/hooks/use-cached-data";
-import { writeCache } from "@/lib/data-cache";
+import { cacheKeys } from "@/lib/cache-keys";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 
 export default function ResourceLibraryPage() {
   const { user } = useIdentity();
+  const queryClient = useQueryClient();
   const [selectedCategory, setSelectedCategory] = React.useState("all");
   const [searchQuery, setSearchQuery] = React.useState("");
   const [onlyFavorites, setOnlyFavorites] = React.useState(false);
   const [onlyComplete, setOnlyComplete] = React.useState(false);
   const [selectedTag, setSelectedTag] = React.useState<string | null>(null);
 
-  const resourcesQuery = useCachedData(`resources:list:${selectedCategory}:${searchQuery}`, () => getResourcesAction(searchQuery, selectedCategory));
-  const categoriesQuery = useCachedData("resources:categories", getCategoriesAction);
-  const statsQuery = useCachedData("resources:stats", getResourceStatsAction);
-  const favoritesQuery = useCachedData(`resources:favorites:${user.id}`, getFavoriteResourceIdsAction);
+  // CACHE-01 Batch 3: category and search become key slots instead of one mutable global entry, and
+  // the favorites list — the only key that already carried the user id — keeps the role too, because
+  // a multi-role account sees a different resource set under RLS (D3).
+  const resourcesQuery = useQuery({
+    queryKey: cacheKeys.resources(user, selectedCategory, searchQuery),
+    queryFn: () => getResourcesAction(searchQuery, selectedCategory),
+  });
+  const categoriesQuery = useQuery({ queryKey: cacheKeys.resourceCategories(user), queryFn: getCategoriesAction });
+  const statsQuery = useQuery({ queryKey: cacheKeys.resourceStats(user), queryFn: getResourceStatsAction });
+  const favoritesQuery = useQuery({ queryKey: cacheKeys.resourceFavorites(user), queryFn: getFavoriteResourceIdsAction });
 
   const resources: ResourceItem[] = React.useMemo(() => resourcesQuery.data ?? [], [resourcesQuery.data]);
   const categories: CategorySummary[] = categoriesQuery.data ?? [];
@@ -37,8 +44,12 @@ export default function ResourceLibraryPage() {
     }
   }, [favoritesQuery.data]);
   React.useEffect(() => {
-    writeCache(`resources:favorites:${user.id}`, Object.keys(favorites).filter((id) => favorites[id]));
-  }, [favorites, user.id]);
+    // The optimistic toggle has to land in the cache, or a remount would show the pre-toggle list.
+    queryClient.setQueryData(
+      cacheKeys.resourceFavorites(user),
+      Object.keys(favorites).filter((id) => favorites[id]),
+    );
+  }, [favorites, user, queryClient]);
 
   React.useEffect(() => {
     const resourceId = new URLSearchParams(window.location.search).get("resource");

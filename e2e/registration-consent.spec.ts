@@ -11,10 +11,14 @@ import React from "react";
 import { createRoot } from "react-dom/client";
 import Register from "@/app/(auth)/register/page";
 import AdminUsers from "@/app/(app)/admin/users/page";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { MobileNav } from "@/components/layout/mobile-nav";
 import { IdentityProvider } from "@/components/auth/identity-context";
 const state = window.__registration;
 const user = { id: "admin-fixture", role: "super_admin", full_name: "Admin Uji", email: "admin@example.test", status: "active" };
+// CACHE-01 Batch 3: the IAM console reads through TanStack Query, so the fixture supplies the client
+// AppShell mounts in the real app. retry:false keeps the read counts the assertions rely on.
+const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: 30_000 }, mutations: { retry: 0 } } });
 state.call = async (name, args) => {
   state.calls.push({ name, args });
   if (name === "submitAccountApplicationAction") {
@@ -27,7 +31,7 @@ state.call = async (name, args) => {
   if (name === "getActiveUsersAction" || name === "getTeamsAction") return [];
   return { success: true, message: "Tersimpan." };
 };
-const component = state.mode === "admin" ? React.createElement(IdentityProvider, { initialUser: user }, React.createElement(AdminUsers))
+const component = state.mode === "admin" ? React.createElement(QueryClientProvider, { client: queryClient }, React.createElement(IdentityProvider, { initialUser: user }, React.createElement(AdminUsers)))
   : state.mode === "mobile" ? React.createElement(MobileNav, { user: { ...user, role: state.role } }) : React.createElement(Register);
 createRoot(document.getElementById("registration-fixture")).render(component);
 `;
