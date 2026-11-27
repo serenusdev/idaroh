@@ -1,4 +1,5 @@
 import type { ParsedReportRow } from "./types";
+import * as XLSX from "xlsx";
 
 function parseJsonCell(value: string | undefined): unknown {
   if (!value?.trim()) return undefined;
@@ -25,6 +26,13 @@ export function parseCsv(text: string): ParsedReportRow[] {
       sourceRow: index + 2,
     };
   });
+}
+
+export function parseXlsx(body: Uint8Array): ParsedReportRow[] {
+  const workbook = XLSX.read(body, { type: "array", cellDates: false });
+  const firstSheet = workbook.Sheets[workbook.SheetNames[0]];
+  if (!firstSheet) return [];
+  return parseCsv(XLSX.utils.sheet_to_csv(firstSheet));
 }
 
 export function normalizeName(value: string): string {

@@ -39,7 +39,8 @@
     "qrcode": "^1.5.4",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
-    "tailwind-merge": "^3.0.2"
+    "tailwind-merge": "^3.0.2",
+    "xlsx": "^0.18.5"
   },
   "devDependencies": {
     "@capacitor/cli": "7.6.10",

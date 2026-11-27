@@ -274,6 +274,19 @@ export interface BatchJobsTable {
   completed_at: string | null;
 }
 
+export interface StoredFilesTable {
+  id: string;
+  gdrive_file_id: string;
+  folder_category: "avatars" | "reports" | "resources" | "raw-imports" | "rapor";
+  original_name: string;
+  mime_type: string;
+  byte_size: number;
+  visibility: "public_cached" | "private_sensitive";
+  owner_profile_id: string | null;
+  related_student_id: string | null;
+  created_at: string;
+}
+
 /**
  * Only the relations the read-only path queries. A table absent from this map cannot be named in
  * a Kysely query, so the surface the reader can reach stays as small as the audited read paths.
@@ -294,4 +307,5 @@ export interface Database {
   academic_terms: AcademicTermsTable;
   report_cards: ReportCardsTable;
   batch_jobs: BatchJobsTable;
+  stored_files: StoredFilesTable;
 }
