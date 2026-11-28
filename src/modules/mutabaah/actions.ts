@@ -21,12 +21,14 @@ function requireUuid(value: string, field: string) {
   if (!/^[0-9a-f-]{36}$/i.test(value)) throw new Error(`INVALID_${field.toUpperCase()}`);
 }
 
-export async function saveMutabaahLogAction(studentId: string, checklist: MutabaahChecklist) {
+export async function saveMutabaahLogAction(studentId: string, checklist: MutabaahChecklist, logDate?: string) {
   await requireAuthUser();
   requireUuid(studentId, "student_id");
   const sanitized = Object.fromEntries(Object.entries(checklist).map(([key, value]) => [key, Boolean(value)]));
   const supabase = await createClient();
-  const { data, error } = await supabase.rpc("save_mutabaah_log", { p_student_id: studentId, p_checklist: sanitized });
+  const effectiveDate = logDate ?? getJakartaTime().dateStr;
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(effectiveDate)) throw new Error("LOG_DATE_OUT_OF_RANGE");
+  const { data, error } = await supabase.rpc("save_mutabaah_log_for_date", { p_student_id: studentId, p_log_date: effectiveDate, p_checklist: sanitized });
   if (error) throw error;
   return data;
 }
