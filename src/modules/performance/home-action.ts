@@ -1,6 +1,5 @@
 "use server";
 
-import { requireAuthUser } from "@/lib/auth/guards";
 import { getTodayAttendanceStatusAction } from "@/modules/attendance/actions";
 import { getActivePolicyAction, getAdminDashboardStatsAction } from "@/modules/analytics/actions";
 import { getEventsAction, getAnnouncementsAction } from "@/modules/schedules/actions";
@@ -16,7 +15,9 @@ export type HomeBundle = {
 
 /** One browser request; child actions share the request-memoized identity guard. */
 export async function getHomeBundleAction(): Promise<HomeBundle> {
-  const user = await requireAuthUser();
+  // Child actions enforce the same request-memoized identity guard. Keeping the wrapper free of a
+  // direct auth import also prevents server-only auth dependencies entering browser test bundles.
+  const user = await getHomeUserForGate();
   const [todayStatus, policy, events, announcements, adminStats] = await Promise.all([
     getTodayAttendanceStatusAction(),
     getActivePolicyAction(),
@@ -27,4 +28,9 @@ export async function getHomeBundleAction(): Promise<HomeBundle> {
       : Promise.resolve(null),
   ]);
   return { todayStatus, policy, events, announcements, adminStats };
+}
+
+async function getHomeUserForGate() {
+  const { requireAuthUser } = await import("@/lib/auth/guards");
+  return requireAuthUser();
 }

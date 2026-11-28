@@ -1,6 +1,5 @@
 "use server";
 
-import { requireAuthUser } from "@/lib/auth/guards";
 import { getActivePolicyAction } from "@/modules/analytics/actions";
 import { getTodayReportAction, getReportCategoriesAction } from "@/modules/reports/actions";
 
@@ -12,7 +11,6 @@ export type ReportBundle = {
 
 /** Reports page bootstrap: draft, categories and policy load in parallel. */
 export async function getReportBundleAction(): Promise<ReportBundle> {
-  await requireAuthUser();
   const [today, categories, policy] = await Promise.all([
     getTodayReportAction(),
     getReportCategoriesAction(),
