@@ -31,7 +31,7 @@ describe("performance bundles", () => {
   });
 
   it("returns all home sections from one bundled action and evaluates multi-role access", async () => {
-    const { getHomeBundleAction } = await import("@/modules/performance/actions");
+    const { getHomeBundleAction } = await import("@/modules/performance/home-action");
     await expect(getHomeBundleAction()).resolves.toEqual({
       todayStatus: { checked_in: true, late_window: false },
       policy: { code: "active" },
@@ -44,7 +44,8 @@ describe("performance bundles", () => {
   });
 
   it("returns the complete reports and attendance bootstraps", async () => {
-    const { getReportBundleAction, getAttendanceBundleAction } = await import("@/modules/performance/actions");
+    const { getReportBundleAction } = await import("@/modules/performance/report-action");
+    const { getAttendanceBundleAction } = await import("@/modules/performance/attendance-action");
     await expect(getReportBundleAction()).resolves.toMatchObject({ today: { id: "report-1" }, categories: [{ id: "category-1" }] });
     await expect(getAttendanceBundleAction()).resolves.toMatchObject({ history: [{ id: "attendance-1" }], todayStatus: { checked_in: true } });
   });

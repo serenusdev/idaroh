@@ -8,7 +8,7 @@ import {
   submitReportAction,
   getMyReportHistoryAction,
 } from "@/modules/reports/actions";
-import { getReportBundleAction } from "@/modules/performance/actions";
+import { getReportBundleAction } from "@/modules/performance/report-action";
 import { useIdentity } from "@/components/auth/identity-context";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { cacheKeys, invalidateReports, invalidateReviewQueue } from "@/lib/cache-keys";

@@ -7,7 +7,7 @@ import {
   submitExceptionAction,
 } from "@/modules/attendance/actions";
 import { AttendanceRecordItem } from "@/modules/attendance/types";
-import { getAttendanceBundleAction } from "@/modules/performance/actions";
+import { getAttendanceBundleAction } from "@/modules/performance/attendance-action";
 import { useIdentity } from "@/components/auth/identity-context";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { cacheKeys, invalidateAttendance } from "@/lib/cache-keys";

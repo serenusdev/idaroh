@@ -6,7 +6,7 @@ import Link from "next/link";
 import { formatOperationalDateTime } from "@/lib/utils";
 import { checkInAttendanceAction } from "@/modules/attendance/actions";
 import { updatePolicySettingsAction } from "@/modules/analytics/actions";
-import { getHomeBundleAction } from "@/modules/performance/actions";
+import { getHomeBundleAction } from "@/modules/performance/home-action";
 import { useIdentity } from "@/components/auth/identity-context";
 import { holdsRole } from "@/lib/export-policy";
 import { REPORT_REVIEW_ROLES, holdsReportReviewRole } from "@/lib/report-policy";
