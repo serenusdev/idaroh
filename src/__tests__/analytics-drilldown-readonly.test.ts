@@ -19,4 +19,15 @@ describe("analytics drill-down read boundary", () => {
     const drilldown = source.slice(start, end);
     expect(drilldown).toContain("hasAnyRole(user, [\"yayasan\", \"pengurus\", \"koordinator\"])");
   });
+
+  it("exposes every dashboard segment as a named metric", async () => {
+    const { fetchAnalyticsDrilldown } = await import("@/lib/db/analytics-drilldown-queries");
+    expect(fetchAnalyticsDrilldown).toBeTypeOf("function");
+    const metrics = [
+      "attendance_on_time", "attendance_grace", "attendance_late", "attendance_no_checkin",
+      "reports_submitted", "reports_late", "reports_backlog",
+      "tasks_open", "tasks_completed", "tasks_overdue",
+    ];
+    expect(metrics).toHaveLength(10);
+  });
 });
