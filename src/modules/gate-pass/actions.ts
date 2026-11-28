@@ -2,6 +2,7 @@
 
 import { createClient } from "@/lib/supabase/server";
 import { requireAuthUser, getJakartaTime } from "@/lib/auth/guards";
+import { hasAnyRole } from "@/lib/auth/role-utils";
 
 export async function requestGatePassAction(studentId: string, reason: string, destination: string, dueBackAt: string) {
   await requireAuthUser();
@@ -31,7 +32,7 @@ export async function scanGatePassAction(qrToken: string, direction: "out" | "ba
 export async function getGatePassDashboardAction() {
   const user = await requireAuthUser();
   const supabase = await createClient();
-  if (user.roles?.some((role) => role === "pengurus" || role === "super_admin") || user.role === "pengurus" || user.role === "super_admin") await supabase.rpc("refresh_gate_pass_overdue");
+  if (hasAnyRole(user, ["pengurus", "super_admin"])) await supabase.rpc("refresh_gate_pass_overdue");
   const { data, error } = await supabase.from("gate_passes").select("id, student_id, reason, destination, out_at, due_back_at, actual_back_at, status, qr_token, created_at").in("status", ["pending", "approved", "out", "overdue"]).order("due_back_at", { ascending: true });
   return { rows: data ?? [], message: error?.message, nowWib: getJakartaTime().timeFormatted };
 }

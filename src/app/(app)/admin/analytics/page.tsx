@@ -6,6 +6,7 @@ import { getAnalyticsDrilldownAction, getOperationalAnalyticsAction, type Analyt
 import { UnauthorizedState } from "@/components/ui/unauthorized-state";
 import { cacheKeys } from "@/lib/cache-keys";
 import { useQuery } from "@tanstack/react-query";
+import { hasAnyRole } from "@/lib/auth/role-utils";
 
 type MetricKey = "attendance_late" | "reports_backlog" | "tasks_overdue";
 
@@ -49,7 +50,7 @@ export default function AdminAnalyticsPage() {
   const data = analyticsQuery.data ?? EMPTY;
   const loading = analyticsQuery.isLoading;
 
-  if (!["super_admin", "yayasan", "pengurus", "koordinator"].includes(user.role)) {
+  if (!hasAnyRole(user, ["super_admin", "yayasan", "pengurus", "koordinator"])) {
     return <UnauthorizedState requiredRole="Koordinator / Pengurus / Yayasan" />;
   }
 

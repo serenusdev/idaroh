@@ -89,7 +89,7 @@ describe("library import contract (LIB-01)", () => {
 
   it("hides the import panel from roles that cannot run it", () => {
     const page = read(resourcesPagePath);
-    expect(page).toContain('.has("super_admin");');
+    expect(page).toContain('hasAnyRole(user, ["super_admin"])');
     expect(page).toContain("{canRunImport && (");
   });
 

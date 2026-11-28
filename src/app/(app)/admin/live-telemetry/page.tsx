@@ -7,6 +7,7 @@ import { UnauthorizedState } from "@/components/ui/unauthorized-state";
 import { cacheKeys } from "@/lib/cache-keys";
 import { getLiveTelemetryAction, type LiveTelemetry } from "@/modules/live-telemetry/actions";
 import { useLiveTelemetryRealtime } from "@/modules/live-telemetry/realtime";
+import { hasAnyRole } from "@/lib/auth/role-utils";
 
 const EMPTY: LiveTelemetry = {
   timezone: "Asia/Jakarta",
@@ -43,7 +44,7 @@ function TrendChart({ data }: { data: LiveTelemetry["attendanceTrend"] }) {
 
 export default function LiveTelemetryPage() {
   const { user } = useIdentity();
-  const allowed = user.role === "pengurus" || user.role === "super_admin" || user.roles?.some((role) => role === "pengurus" || role === "super_admin");
+  const allowed = hasAnyRole(user, ["pengurus", "super_admin"]);
   const query = useQuery({
     queryKey: cacheKeys.liveTelemetry(user),
     queryFn: getLiveTelemetryAction,

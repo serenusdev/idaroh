@@ -7,6 +7,7 @@ import { useIdentity } from "@/components/auth/identity-context";
 import { cacheKeys } from "@/lib/cache-keys";
 import { useQuery } from "@tanstack/react-query";
 import { UnauthorizedState } from "@/components/ui/unauthorized-state";
+import { hasAnyRole } from "@/lib/auth/role-utils";
 
 export default function AdminNotificationsPage() {
   const { user } = useIdentity();
@@ -17,18 +18,18 @@ export default function AdminNotificationsPage() {
   const summaryQuery = useQuery({
     queryKey: cacheKeys.notificationsSummary(user),
     queryFn: getNotificationDeliverySummaryAction,
-    enabled: user.role === "super_admin",
+    enabled: hasAnyRole(user, ["super_admin"]),
   });
   const summary = summaryQuery.data ?? null;
   const summaryError = Boolean(summaryQuery.error);
   const emailQuery = useQuery({
     queryKey: cacheKeys.emailSummary(user),
     queryFn: getEmailDeliverySummaryAction,
-    enabled: user.role === "super_admin",
+    enabled: hasAnyRole(user, ["super_admin"]),
   });
   const emailSummary = emailQuery.data ?? null;
   const emailError = Boolean(emailQuery.error);
-  if (!["super_admin", "yayasan", "pengurus"].includes(user.role)) return <UnauthorizedState requiredRole="Pengurus / Yayasan / Super Admin" />;
+  if (!hasAnyRole(user, ["super_admin", "yayasan", "pengurus"])) return <UnauthorizedState requiredRole="Pengurus / Yayasan / Super Admin" />;
   const send = async () => {
     setSending(true);
     try {
@@ -51,7 +52,7 @@ export default function AdminNotificationsPage() {
         <button type="button" onClick={send} disabled={sending} className="h-11 px-5 rounded-xl bg-primary text-on-primary text-sm font-semibold disabled:opacity-50">{sending ? "Memproses…" : "Kirim push uji"}</button>
         <div className="rounded-xl bg-surface-container-low p-3 text-sm" aria-live="polite">{notice}</div>
       </section>
-      {user.role === "super_admin" && (
+      {hasAnyRole(user, ["super_admin"]) && (
         <section className="rounded-2xl border border-border bg-card p-6 space-y-3">
           <div className="flex items-center justify-between gap-3"><h2 className="font-semibold">Antrean pengiriman</h2><button type="button" onClick={() => void summaryQuery.refetch()} className="text-sm text-primary underline">Perbarui</button></div>
           {summaryError ? <p role="alert" className="text-sm text-destructive">Antrean belum dapat dimuat. Periksa migrasi dan koneksi database.</p> : summary ? (
@@ -64,7 +65,7 @@ export default function AdminNotificationsPage() {
           <p className="text-xs text-muted-foreground">Retry memerlukan scheduler aktif. Kegagalan permanen memerlukan pemeriksaan operator; token dan isi pesan tidak ditampilkan.</p>
         </section>
       )}
-      {user.role === "super_admin" && (
+      {hasAnyRole(user, ["super_admin"]) && (
         <section className="rounded-2xl border border-border bg-card p-6 space-y-3">
           <div className="flex items-center justify-between gap-3"><h2 className="font-semibold">Antrean email</h2><button type="button" onClick={() => void emailQuery.refetch()} className="text-sm text-primary underline">Perbarui</button></div>
           {emailError ? <p role="alert" className="text-sm text-destructive">Antrean email belum dapat dimuat. Periksa migrasi dan koneksi database.</p> : emailSummary ? (

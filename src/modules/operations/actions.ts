@@ -6,6 +6,7 @@ import { randomUUID } from "node:crypto";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { createClient } from "@/lib/supabase/server";
 import { requireAuthUser, requireRole } from "@/lib/auth/guards";
+import { hasAnyRole } from "@/lib/auth/role-utils";
 import { sendPushToUsers } from "@/lib/fcm";
 import { isNonEmptyString } from "@/lib/input-validation";
 import { parseMentionUsernames } from "./mentions";
@@ -115,7 +116,7 @@ export async function getOperationalAnalyticsAction(
   const admin = createAdminClient();
   const effectiveTeamId = teamId || null;
   let coordinatorTeamIds: string[] = [];
-  if (user.role === "koordinator") {
+  if (hasAnyRole(user, ["koordinator"])) {
     const { data: memberships, error: membershipError } = await admin
       .from("team_members")
       .select("team_id")
@@ -133,7 +134,7 @@ export async function getOperationalAnalyticsAction(
     }
   }
   const supabase = await createClient();
-  const rpcTeamIds = user.role === "koordinator" ? coordinatorTeamIds : [effectiveTeamId];
+  const rpcTeamIds = hasAnyRole(user, ["koordinator"]) ? coordinatorTeamIds : [effectiveTeamId];
   const results = await Promise.all(rpcTeamIds.map((scopeTeamId) => supabase.rpc("analytics_operational_summary", {
     p_from: period.from,
     p_to: period.to,
@@ -184,7 +185,7 @@ export async function getAnalyticsDrilldownAction(
 
   const supabase = createAdminClient();
   let allowedUserIds: Set<string> | null = null;
-  if (user.role === "koordinator") {
+  if (hasAnyRole(user, ["koordinator"])) {
     const { data: memberships, error: membershipError } = await supabase.from("team_members").select("team_id").eq("user_id", user.id).is("valid_to", null);
     if (membershipError) throw membershipError;
     const teamIds = (memberships || []).map((membership: any) => membership.team_id);

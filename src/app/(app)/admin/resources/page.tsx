@@ -20,6 +20,7 @@ import {
   setResourceVisibilityRulesAction,
 } from "@/modules/library/actions";
 import type { ResourceAdminInput, ResourceRevisionItem, ResourceRuleOptions } from "@/modules/library/types";
+import { hasAnyRole } from "@/lib/auth/role-utils";
 
 const EMPTY_FORM: ResourceAdminInput = {
   name: "",
@@ -78,13 +79,13 @@ export default function AdminResourcesPage() {
   };
 
   if (loading) return <div className="min-h-[360px] grid place-items-center"><LoadingSpinner size="lg" /></div>;
-  if (!["super_admin", "yayasan", "pengurus"].includes(user.role)) {
+  if (!hasAnyRole(user, ["super_admin", "yayasan", "pengurus"])) {
     return <UnauthorizedState requiredRole="Super Admin / Yayasan / Pengurus" />;
   }
 
   // PERMISSIONS.md §3.2: library.import.run is exclusive to super_admin, while
   // the rest of this admin surface stays shared with yayasan and pengurus.
-  const canRunImport = new Set<string>([user.role, ...(user.roles || [])].filter(Boolean) as string[]).has("super_admin");
+  const canRunImport = hasAnyRole(user, ["super_admin"]);
 
   const loadRules = async (resourceId: string) => {
     try {

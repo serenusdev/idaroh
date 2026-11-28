@@ -8,6 +8,7 @@ import { MoreSheet } from "./more-sheet";
 import { UserProfile } from "@/lib/auth/types";
 import { AUDIT_READ_ROLES, holdsRole } from "@/lib/export-policy";
 import { holdsReportReviewRole, REPORT_REVIEW_ROLES } from "@/lib/report-policy";
+import { hasAnyRole } from "@/lib/auth/role-utils";
 
 interface MobileNavProps {
   user: UserProfile;
@@ -24,12 +25,9 @@ export function MobileNav({ user }: MobileNavProps) {
     return pathname.startsWith(path);
   };
 
-  const isAdminOrPengurus =
-    user.role === "super_admin" ||
-    user.role === "yayasan" ||
-    user.role === "pengurus";
+  const isAdminOrPengurus = hasAnyRole(user, ["super_admin", "yayasan", "pengurus"]);
 
-  const isKoordinator = user.role === "koordinator";
+  const isKoordinator = hasAnyRole(user, ["koordinator"]);
 
   // RVS-01: the manager sheet used to assume the review queue belonged to every manager. §3.4 says
   // otherwise — yayasan and super_admin are `—` for report.review — so the entry follows the same

@@ -2,12 +2,13 @@ import { createClient } from "@/lib/supabase/server";
 import { requireAuthUser } from "@/lib/auth/guards";
 import MutabaahForm from "@/modules/mutabaah/mutabaah-form";
 import { todayWibDate } from "@/modules/mutabaah/actions";
+import { hasAnyRole } from "@/lib/auth/role-utils";
 
 export const dynamic = "force-dynamic";
 
 export default async function MutabaahPage() {
   const user = await requireAuthUser();
-  const canRecordCollectively = user.role === "pengurus" || user.role === "super_admin" || user.roles?.some((role) => role === "pengurus" || role === "super_admin");
+  const canRecordCollectively = hasAnyRole(user, ["pengurus", "super_admin"]);
   const supabase = await createClient();
   const query = canRecordCollectively
     ? supabase.from("students").select("id,full_name,nis").eq("is_active", true).order("full_name")

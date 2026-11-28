@@ -5,6 +5,7 @@ import Image from "next/image";
 import { approveGatePassAction, getGatePassDashboardAction, requestGatePassAction, scanGatePassAction } from "@/modules/gate-pass/actions";
 import { useIdentity } from "@/components/auth/identity-context";
 import QRCode from "qrcode";
+import { hasAnyRole } from "@/lib/auth/role-utils";
 
 interface GatePassRow {
   id: string;
@@ -30,7 +31,7 @@ export default function TasrihPage() {
   const [dueBackAt, setDueBackAt] = React.useState("");
   const [qrToken, setQrToken] = React.useState("");
   const [message, setMessage] = React.useState("");
-  const isOperator = user?.roles?.some((role) => role === "pengurus" || role === "super_admin") || user?.role === "pengurus" || user?.role === "super_admin";
+  const isOperator = user ? hasAnyRole(user, ["pengurus", "super_admin"]) : false;
   const refresh = React.useCallback(async () => setRows((await getGatePassDashboardAction()).rows), []);
   React.useEffect(() => { void refresh(); }, [refresh]);
   async function submitRequest(event: React.FormEvent) { event.preventDefault(); const result = await requestGatePassAction(studentId, reason, destination, new Date(dueBackAt).toISOString()); setMessage(result.success ? "Pengajuan izin tersimpan." : result.message || "Pengajuan gagal."); if (result.success) { setReason(""); setDestination(""); void refresh(); } }
