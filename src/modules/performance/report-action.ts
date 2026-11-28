@@ -1,7 +1,7 @@
 "use server";
 
-import { getActivePolicyAction } from "@/modules/analytics/actions";
-import { getTodayReportAction, getReportCategoriesAction } from "@/modules/reports/actions";
+import type { getActivePolicyAction } from "@/modules/analytics/actions";
+import type { getTodayReportAction, getReportCategoriesAction } from "@/modules/reports/actions";
 
 export type ReportBundle = {
   today: Awaited<ReturnType<typeof getTodayReportAction>>;
@@ -11,10 +11,14 @@ export type ReportBundle = {
 
 /** Reports page bootstrap: draft, categories and policy load in parallel. */
 export async function getReportBundleAction(): Promise<ReportBundle> {
+  const [analytics, reports] = await Promise.all([
+    import("@/modules/analytics/actions"),
+    import("@/modules/reports/actions"),
+  ]);
   const [today, categories, policy] = await Promise.all([
-    getTodayReportAction(),
-    getReportCategoriesAction(),
-    getActivePolicyAction(),
+    reports.getTodayReportAction(),
+    reports.getReportCategoriesAction(),
+    analytics.getActivePolicyAction(),
   ]);
   return { today, categories, policy };
 }

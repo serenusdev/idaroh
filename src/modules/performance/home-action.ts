@@ -1,9 +1,9 @@
 "use server";
 
-import { getTodayAttendanceStatusAction } from "@/modules/attendance/actions";
-import { getActivePolicyAction, getAdminDashboardStatsAction } from "@/modules/analytics/actions";
-import { getEventsAction, getAnnouncementsAction } from "@/modules/schedules/actions";
 import { holdsRole } from "@/lib/export-policy";
+import type { getTodayAttendanceStatusAction } from "@/modules/attendance/actions";
+import type { getActivePolicyAction, getAdminDashboardStatsAction } from "@/modules/analytics/actions";
+import type { getEventsAction, getAnnouncementsAction } from "@/modules/schedules/actions";
 
 export type HomeBundle = {
   todayStatus: Awaited<ReturnType<typeof getTodayAttendanceStatusAction>>;
@@ -18,13 +18,18 @@ export async function getHomeBundleAction(): Promise<HomeBundle> {
   // Child actions enforce the same request-memoized identity guard. Keeping the wrapper free of a
   // direct auth import also prevents server-only auth dependencies entering browser test bundles.
   const user = await getHomeUserForGate();
+  const [attendance, analytics, schedules] = await Promise.all([
+    import("@/modules/attendance/actions"),
+    import("@/modules/analytics/actions"),
+    import("@/modules/schedules/actions"),
+  ]);
   const [todayStatus, policy, events, announcements, adminStats] = await Promise.all([
-    getTodayAttendanceStatusAction(),
-    getActivePolicyAction(),
-    getEventsAction(),
-    getAnnouncementsAction(),
+    attendance.getTodayAttendanceStatusAction(),
+    analytics.getActivePolicyAction(),
+    schedules.getEventsAction(),
+    schedules.getAnnouncementsAction(),
     holdsRole(user, ["super_admin", "yayasan", "pengurus"])
-      ? getAdminDashboardStatsAction()
+      ? analytics.getAdminDashboardStatsAction()
       : Promise.resolve(null),
   ]);
   return { todayStatus, policy, events, announcements, adminStats };

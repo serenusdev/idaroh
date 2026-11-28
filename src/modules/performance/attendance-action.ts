@@ -1,7 +1,7 @@
 "use server";
 
-import { getActivePolicyAction } from "@/modules/analytics/actions";
-import { getAttendanceHistoryAction, getTodayAttendanceStatusAction } from "@/modules/attendance/actions";
+import type { getActivePolicyAction } from "@/modules/analytics/actions";
+import type { getAttendanceHistoryAction, getTodayAttendanceStatusAction } from "@/modules/attendance/actions";
 
 export type AttendanceBundle = {
   history: Awaited<ReturnType<typeof getAttendanceHistoryAction>>;
@@ -11,10 +11,14 @@ export type AttendanceBundle = {
 
 /** Attendance page bootstrap: history, policy and today's status load in parallel. */
 export async function getAttendanceBundleAction(): Promise<AttendanceBundle> {
+  const [analytics, attendance] = await Promise.all([
+    import("@/modules/analytics/actions"),
+    import("@/modules/attendance/actions"),
+  ]);
   const [history, policy, todayStatus] = await Promise.all([
-    getAttendanceHistoryAction(),
-    getActivePolicyAction(),
-    getTodayAttendanceStatusAction(),
+    attendance.getAttendanceHistoryAction(),
+    analytics.getActivePolicyAction(),
+    attendance.getTodayAttendanceStatusAction(),
   ]);
   return { history, policy, todayStatus };
 }
