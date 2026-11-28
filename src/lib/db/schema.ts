@@ -278,7 +278,7 @@ export interface StudentsTable {
   id: string;
   nis: string;
   full_name: string;
-  gender: "L" | "P";
+  gender: "L" | "P" | null;
   dorm_room: string | null;
   halaqah_group: string | null;
   profile_id: string | null;
