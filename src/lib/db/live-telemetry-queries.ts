@@ -1,6 +1,7 @@
 import { sql } from "kysely";
 import { countInt } from "@/lib/db/expressions";
 import type { ReadOnlyDb } from "@/lib/db/reader";
+import { wibDateString } from "@/lib/time/wib";
 
 export interface TelemetryDay {
   date: string;
@@ -56,6 +57,12 @@ function dateDaysAgo(today: string, days: number) {
   return isoDate(date);
 }
 
+export function toDateKey(value: unknown): string {
+  if (value instanceof Date) return wibDateString(value);
+  if (typeof value === "string") return value.slice(0, 10);
+  return "";
+}
+
 export async function fetchLiveTelemetry(db: ReadOnlyDb, today: string): Promise<LiveTelemetry> {
   const from30 = dateDaysAgo(today, 29);
   const from7 = dateDaysAgo(today, 6);
@@ -83,18 +90,18 @@ export async function fetchLiveTelemetry(db: ReadOnlyDb, today: string): Promise
     db.selectFrom("tasks").where("deleted_at", "is", null).where("status", "=", "done").where("completed_at", ">=", `${from7}T00:00:00+07:00`).where("completed_at", "<", `${tomorrow}T00:00:00+07:00`).select(countInt().as("count")).executeTakeFirstOrThrow(),
     db.selectFrom("tasks").where("deleted_at", "is", null).where("status", "=", "done").where("completed_at", ">=", `${from30}T00:00:00+07:00`).where("completed_at", "<", `${tomorrow}T00:00:00+07:00`).select(countInt().as("count")).executeTakeFirstOrThrow(),
     db.selectFrom("attendance_records").where("attendance_date", ">=", from30).where("attendance_date", "<=", today).select([
-      "attendance_date",
+      sql<string>`to_char(${sql.ref("attendance_date")}, 'YYYY-MM-DD')`.as("attendance_date"),
       "classification",
       countInt().as("count"),
     ]).groupBy(["attendance_date", "classification"]).execute(),
     db.selectFrom("daily_reports").where("report_date", ">=", from30).where("report_date", "<=", today).where("submission_status", "=", "submitted").select([
-      "report_date",
+      sql<string>`to_char(${sql.ref("report_date")}, 'YYYY-MM-DD')`.as("report_date"),
       countInt().as("count"),
-    ]).groupBy("report_date").execute(),
+    ]).groupBy(sql<string>`to_char(${sql.ref("report_date")}, 'YYYY-MM-DD')`).execute(),
     db.selectFrom("tasks").where("deleted_at", "is", null).where("status", "=", "done").where("completed_at", ">=", `${from30}T00:00:00+07:00`).select([
-      sql<string>`(${sql.ref("completed_at")} AT TIME ZONE 'Asia/Jakarta')::date`.as("date"),
+      sql<string>`to_char(${sql.ref("completed_at")} AT TIME ZONE 'Asia/Jakarta', 'YYYY-MM-DD')`.as("date"),
       countInt().as("count"),
-    ]).groupBy(sql<string>`(${sql.ref("completed_at")} AT TIME ZONE 'Asia/Jakarta')::date`).execute(),
+    ]).groupBy(sql<string>`to_char(${sql.ref("completed_at")} AT TIME ZONE 'Asia/Jakarta', 'YYYY-MM-DD')`).execute(),
   ]);
 
   const attendance = new Map<string, number>();
@@ -110,14 +117,20 @@ export async function fetchLiveTelemetry(db: ReadOnlyDb, today: string): Promise
     trend.set(date, { date, present: 0, grace: 0, late: 0, excused: 0, sick: 0, noCheckin: 0, reportsSubmitted: 0, reportsExpected: totalPopulation, tasksCompleted: 0 });
   }
   for (const row of attendanceTrend) {
-    const day = trend.get(row.attendance_date);
+    const day = trend.get(toDateKey(row.attendance_date));
     if (!day) continue;
     if (row.classification === "on_time") day.present += asNumber(row.count);
     if (row.classification === "grace") day.grace += asNumber(row.count);
     if (row.classification === "late") day.late += asNumber(row.count);
   }
-  for (const row of reportTrend) trend.get(row.report_date)!.reportsSubmitted = asNumber(row.count);
-  for (const row of taskTrend) trend.get(row.date)!.tasksCompleted = asNumber(row.count);
+  for (const row of reportTrend) {
+    const day = trend.get(toDateKey(row.report_date));
+    if (day) day.reportsSubmitted = asNumber(row.count);
+  }
+  for (const row of taskTrend) {
+    const day = trend.get(toDateKey(row.date));
+    if (day) day.tasksCompleted = asNumber(row.count);
+  }
   for (const day of trend.values()) day.noCheckin = Math.max(0, day.reportsExpected - day.present - day.grace - day.late - day.excused - day.sick);
 
   const reportsSubmittedToday = reportsToday.filter((row) => row.submission_status === "submitted").reduce((sum, row) => sum + asNumber(row.count), 0);

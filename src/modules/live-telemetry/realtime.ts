@@ -17,6 +17,7 @@ export function useLiveTelemetryRealtime(onChange: () => void) {
     let supabase: ReturnType<typeof createClient> | null = null;
     let channel: ReturnType<ReturnType<typeof createClient>["channel"]> | null = null;
     const debouncedChange = () => {
+      if (document.visibilityState === "hidden") return;
       if (timer) clearTimeout(timer);
       timer = setTimeout(() => callbackRef.current(), 400);
     };
