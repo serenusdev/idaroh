@@ -8,7 +8,7 @@ import { parseWibLocal } from "@/lib/time/wib";
 
 export async function requestGatePassAction(studentId: string, reason: string, destination: string, dueBackAt: string) {
   const user = await requireAuthUser();
-  if (!studentId || reason.trim().length < 3 || destination.trim().length < 2 || !dueBackAt) return { success: false, message: "Data izin keluar belum lengkap." };
+  if ((hasAnyRole(user, ["pengurus", "super_admin"]) && !studentId) || reason.trim().length < 3 || destination.trim().length < 2 || !dueBackAt) return { success: false, message: "Data izin keluar belum lengkap." };
   const supabase = await createClient();
   try {
     const operator = hasAnyRole(user, ["pengurus", "super_admin"]);
