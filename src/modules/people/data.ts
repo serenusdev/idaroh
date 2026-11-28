@@ -105,7 +105,7 @@ export const INITIAL_TEAMS: TeamStructureItem[] = [
     id: "team-1",
     name: "Tim Sentra Digital",
     slug: "sentra-digital",
-    description: "Pengembangan software, otomasi presensi, dan pengelolaan database Pondok OS.",
+    description: "Pengembangan software, otomasi presensi, dan pengelolaan database IDAROH.",
     coordinatorName: "Salman Al-Farisi",
     memberCount: 12,
     icon: "laptop_mac",

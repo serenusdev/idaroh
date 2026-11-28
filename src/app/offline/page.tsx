@@ -25,7 +25,7 @@ export default function OfflinePage() {
       </h1>
 
       <p className="text-sm text-muted-foreground max-w-sm mb-8 leading-relaxed">
-        Pondok OS tidak dapat terhubung ke server. Periksa jaringan internet Anda atau coba muat ulang halaman ini.
+        IDAROH tidak dapat terhubung ke server. Periksa jaringan internet Anda atau coba muat ulang halaman ini.
       </p>
 
       <button

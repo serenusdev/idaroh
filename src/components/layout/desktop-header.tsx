@@ -10,6 +10,8 @@ import { Avatar } from "@/components/ui/avatar";
 import { DarkModeToggle } from "@/components/ui/dark-mode-toggle";
 import { getUnreadNotificationCountAction } from "@/modules/notifications/actions";
 import { useNotificationChanges } from "@/components/notifications/use-notification-changes";
+import { getRoleLabels } from "@/lib/auth/role-utils";
+import { getRouteTitle } from "@/components/layout/route-titles";
 
 interface DesktopHeaderProps {
   user: UserProfile;
@@ -45,25 +47,7 @@ export function DesktopHeader({ user }: DesktopHeaderProps) {
 
   useNotificationChanges(user.id, refreshUnread);
 
-  const getPageTitle = () => {
-    if (pathname === "/" || pathname === "/beranda") return "Beranda Santri";
-    if (pathname.startsWith("/kehadiran")) return "Presensi Operasional";
-    if (pathname.startsWith("/laporan")) return "Laporan Aktivitas Harian";
-    if (pathname.startsWith("/review")) return "Antrean Review Laporan";
-    if (pathname.startsWith("/tugas")) return "Tugas & Proyek";
-    if (pathname.startsWith("/jadwal")) return "Jadwal & Pengumuman";
-    if (pathname.startsWith("/resources")) return "Resource Library";
-    if (pathname.startsWith("/tim")) return "Direktori Tim & Orang";
-    if (pathname.startsWith("/admin/users")) return "Kelola Pengguna IAM";
-    if (pathname.startsWith("/admin/people")) return "Anggota & Reviewer";
-    if (pathname.startsWith("/admin/analytics")) return "Analitik Operasional";
-    if (pathname.startsWith("/admin/backup")) return "Backup & Pemulihan";
-    if (pathname.startsWith("/admin/kehadiran")) return "Review Presensi";
-    if (pathname.startsWith("/admin/notifications")) return "Uji Notifikasi";
-    if (pathname.startsWith("/admin/cron")) return "Jadwal Otomatis";
-    if (pathname.startsWith("/admin/audit")) return "Dasbor Analitik & Audit";
-    return "Pondok OS";
-  };
+  const roleLabels = getRoleLabels(user);
 
   return (
     <header className="hidden md:flex h-16 fixed top-0 right-0 left-64 bg-card border-b border-border z-30 px-6 items-center justify-between">
@@ -79,7 +63,7 @@ export function DesktopHeader({ user }: DesktopHeaderProps) {
         />
         <span className="h-7 w-px bg-border shrink-0" aria-hidden="true" />
         <h1 className="font-headline-sm text-headline-sm text-on-surface">
-          {getPageTitle()}
+          {getRouteTitle(pathname)}
         </h1>
       </div>
 
@@ -130,9 +114,13 @@ export function DesktopHeader({ user }: DesktopHeaderProps) {
             <span className="font-label-md text-[13px] text-on-surface leading-tight font-medium hover:text-primary">
               {user.full_name}
             </span>
-            <span className="font-body-sm text-[11px] text-muted-foreground leading-tight">
-              {user.team_name || "Santri"}
+            <span
+              className="font-body-sm text-[11px] text-muted-foreground leading-tight"
+              title={roleLabels.join(", ")}
+            >
+              {roleLabels[0] ?? "Tanpa peran"}{roleLabels.length > 1 ? ` +${roleLabels.length - 1}` : ""}
             </span>
+            {user.team_name && <span className="font-body-sm text-[10px] text-muted-foreground/80 leading-tight">{user.team_name}</span>}
           </div>
         </Link>
       </div>

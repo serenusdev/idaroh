@@ -611,7 +611,7 @@ export default function TimPage() {
         <Modal isOpen onClose={() => setSelectedPerson(null)} title={selectedPerson.name} backdropClassName="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-xs" className="bg-card rounded-2xl w-full max-w-md p-5 sm:p-6 shadow-xl border border-border space-y-4">
             <div className="flex items-center justify-between pb-2 border-b border-border">
               <span className="font-label-sm text-xs text-primary font-semibold uppercase">
-                Profil Anggota Pondok OS
+                Profil Anggota IDAROH
               </span>
               <button
                 type="button"
