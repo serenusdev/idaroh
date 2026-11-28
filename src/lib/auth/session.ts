@@ -1,5 +1,4 @@
 import { cache } from 'react';
-import { randomUUID } from 'node:crypto';
 import { createClient } from '@/lib/supabase/server';
 import { createAdminClient } from '@/lib/supabase/admin';
 import { mfaStateFromUser } from '@/lib/supabase/assurance';
@@ -52,10 +51,15 @@ export type IdentityState =
   | { state: 'mfa_error'; profile: UserProfile; traceId: string };
 
 function identityError(stage: string, cause: unknown): IdentityState {
-  const traceId = randomUUID();
+  const traceId = createTraceId();
   const errorType = cause instanceof Error ? cause.name : 'DatabaseError';
   console.error(`[identity] ${stage} failed (trace ${traceId}, ${errorType})`);
   return { state: 'identity_error', traceId };
+}
+
+function createTraceId(): string {
+  if (typeof globalThis.crypto?.randomUUID === 'function') return globalThis.crypto.randomUUID();
+  return `trace-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
 }
 
 function isSessionRevoked(accessToken: string | undefined, revokedAt: string): boolean {
@@ -193,7 +197,7 @@ export const resolveIdentity = cache(async (): Promise<IdentityState> => {
 
     const mfa = mfaStateFromUser(user, localSession?.access_token, rolesList);
     if (mfa.requirement === 'mfa_error') {
-      return { state: 'mfa_error', profile: userProfile, traceId: randomUUID() };
+      return { state: 'mfa_error', profile: userProfile, traceId: createTraceId() };
     }
     if (mfa.requirement !== 'ok') {
       return { state: 'mfa_required', profile: userProfile, mfa };
