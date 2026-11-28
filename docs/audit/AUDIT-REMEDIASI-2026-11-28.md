@@ -4,7 +4,7 @@
 
 Branch `fix/comprehensive-audit-nis-etasrih-and-polish` dibuat dari `main` pada commit `4120946`, yaitu baseline setelah PR #25. Baseline `main` terverifikasi: `tsc` lulus, lint lulus dengan warning yang sudah ada, test lulus (1308 passed, 6 skipped), dan build terblokir validasi environment karena `NEXT_PUBLIC_SUPABASE_URL` tidak tersedia di worktree baseline. Pada branch remediasi, suite terakhir lulus 103 file / 1402 test passed / 6 skipped.
 
-Perbaikan terverifikasi melalui tes sumber/unit: telemetry, multi-role, NIS, E-Tasrih, mutabaah, rapor, analytics drilldown, branding, dan serialisasi error. Verifikasi runtime DB/RLS/E2E kamera belum dilakukan karena tidak ada database staging disposable atau akun uji yang tersedia; tidak ada akses produksi digunakan.
+Perbaikan terverifikasi melalui tes sumber/unit: telemetry, multi-role, NIS, E-Tasrih, mutabaah, rapor, analytics drilldown, branding, dan serialisasi error. Verifikasi runtime lokal CI kini juga lulus untuk migrasi, RLS matrix, browser E2E, dan DX-01 parity; tidak ada akses produksi digunakan.
 
 ## Status temuan F-01–F-21
 
@@ -34,7 +34,7 @@ Perbaikan terverifikasi melalui tes sumber/unit: telemetry, multi-role, NIS, E-T
 
 ## Perubahan database
 
-Migrasi baru: `202612040001_students_auto_nis_and_sync.sql` (+down), `202612040003_gate_pass_hardening.sql` (+down), `202612040004_mutabaah_date_scope.sql` (+down), `202612040005_academic_terms_command.sql`. Semuanya dibuat setelah migrasi lama, idempoten sesuai cakupan, dan berakhir dengan reload schema. Tidak ada migrasi diterapkan ke produksi. Rollback gate pass mempertahankan kolom lifecycle untuk mencegah kehilangan data dependen; operator harus meninjau rollback sebelum penerapan.
+Migrasi baru: `202612040001_students_auto_nis_and_sync.sql` (+down), `202612040003_gate_pass_hardening.sql` (+down), `202612040004_mutabaah_date_scope.sql` (+down), `202612040005_academic_terms_command.sql`, dan `202612040006_fix_student_audit_actor.sql` (+down). Semuanya dibuat setelah migrasi lama, idempoten sesuai cakupan, dan berakhir dengan reload schema. Tidak ada migrasi diterapkan ke produksi. Rollback gate pass mempertahankan kolom lifecycle untuk mencegah kehilangan data dependen; operator harus meninjau rollback sebelum penerapan.
 
 ## Keputusan K1–K8
 
@@ -47,6 +47,6 @@ Default prompt digunakan: K1 `returned` + penanda terlambat; K2 gender nullable;
 ## Tes terakhir
 
 - `npx tsc --noEmit`: lulus pada setiap commit remediasi terakhir.
-- `npm test`: 103 file, 1402 passed, 6 skipped.
+- `npm test`: 103 file, 1404 passed, 6 skipped.
 - `npm run lint`: gate akhir exit 0 dengan warning existing.
 - `npm run build`: gagal pada baseline dan gate akhir karena validasi environment (`NEXT_PUBLIC_SUPABASE_URL`/`NEXT_PUBLIC_TURNSTILE_SITE_KEY`) tidak tersedia atau placeholder; perlu diulang dengan env non-produksi lengkap.

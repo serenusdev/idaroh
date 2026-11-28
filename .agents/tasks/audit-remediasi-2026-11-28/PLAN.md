@@ -40,5 +40,5 @@ Status menggunakan istilah `TERVERIFIKASI` hanya setelah perintah/tes benar-bena
 
 - Baseline `main`: terverifikasi di worktree disposable: tsc/lint/test lulus; build gagal karena environment Supabase placeholder/missing.
 - Hash artefak terlarang: dicatat di `docs/audit/INVENTORY-2026-11-28.md`; final hash check masih harus dijalankan.
-- Suite terakhir: 103 file, 1402 passed, 6 skipped; lint final exit 0 dengan warning existing; build final terblokir env non-produksi yang belum lengkap.
+- Suite terakhir lokal: 103 file, 1404 passed, 6 skipped; lint final exit 0 dengan warning existing; build lokal terblokir env non-produksi yang belum lengkap. CI database-integration lulus termasuk RLS, E2E, dan DX-01 parity.
 
