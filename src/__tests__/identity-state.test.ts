@@ -15,7 +15,11 @@ vi.mock("@/lib/supabase/server", () => ({
         state.authError
           ? { data: { user: null }, error: state.authError }
           : { data: { user: { id: "u-1", email: "u1@pondok.id", created_at: "2026-01-01T00:00:00Z", factors: state.factors ?? [] } }, error: null },
-      getSession: async () => ({ data: { session: state.accessToken ? { access_token: state.accessToken } : null } }),
+      getClaims: async () =>
+        state.authError
+          ? { data: { claims: null }, error: state.authError }
+          : { data: { claims: { sub: "u-1", email: "u1@pondok.id" } }, error: null },
+      getSession: async () => ({ data: { session: { access_token: state.accessToken, user: { factors: state.factors ?? [] } } } }),
     },
   }),
 }));

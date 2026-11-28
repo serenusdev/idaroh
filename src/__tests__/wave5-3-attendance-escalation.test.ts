@@ -40,7 +40,7 @@ describe("Wave 5.3 strict attendance window", () => {
 
   it("keeps the Beranda card on the same server status and late-window labels", () => {
     const home = read("src/app/(app)/page.tsx");
-    expect(home).toContain("getTodayAttendanceStatusAction");
+    expect(home).toContain("getHomeBundleAction");
     expect(home).toContain("late_window");
     expect(home).toContain("Presensi Terlambat (> 08:15)");
     expect(home).toContain("bg-red-600");

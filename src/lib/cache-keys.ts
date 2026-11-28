@@ -65,6 +65,9 @@ export const cacheKeys = {
   adminAnalytics: (session: CacheSession, from: string, to: string) =>
     [`admin:analytics:${session.id}`, session.role, from || "default", to || "default"] as const,
   liveTelemetry: (session: CacheSession) => [`admin:live-telemetry:${session.id}`, session.role] as const,
+  homeBundle: (session: CacheSession) => [`home:bundle:${session.id}`, session.role] as const,
+  reportsBundle: (session: CacheSession) => [`reports:bundle:${session.id}`, session.role] as const,
+  attendanceBundle: (session: CacheSession) => [`attendance:bundle:${session.id}`, session.role] as const,
   auditLogs: (session: CacheSession, scope: string, search: string, page: number) =>
     [`admin:audit-logs:${session.id}`, session.role, scope, search, String(page)] as const,
 };
@@ -99,7 +102,7 @@ function invalidateAnnouncements(client: QueryClient, session: CacheSession): Pr
  * caller routes through this one helper.
  */
 function invalidateAttendance(client: QueryClient, session: CacheSession): Promise<void> {
-  return invalidateAll(client, [cacheKeys.attendance(session)]);
+  return invalidateAll(client, [cacheKeys.attendance(session), cacheKeys.attendanceBundle(session), cacheKeys.homeBundle(session)]);
 }
 
 /**
@@ -110,6 +113,7 @@ function invalidateAttendance(client: QueryClient, session: CacheSession): Promi
 function invalidateReports(client: QueryClient, session: CacheSession): Promise<void> {
   return invalidateAll(client, [
     cacheKeys.reportsToday(session),
+    cacheKeys.reportsBundle(session),
     [`reports:history:${session.id}`, session.role],
   ]);
 }
@@ -133,7 +137,7 @@ function invalidateDashboard(client: QueryClient, session: CacheSession): Promis
  * after Batch 3 the TanStack entry is the only copy.
  */
 function invalidatePolicy(client: QueryClient, session: CacheSession): Promise<void> {
-  return invalidateAll(client, [cacheKeys.policy(session)]);
+  return invalidateAll(client, [cacheKeys.policy(session), cacheKeys.homeBundle(session), cacheKeys.reportsBundle(session), cacheKeys.attendanceBundle(session)]);
 }
 
 /**

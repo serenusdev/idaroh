@@ -228,6 +228,14 @@ const boundaryModules: Record<string, string> = {
   "@/modules/schedules/actions": `
     export const getEventsAction = (...args) => window.__auditBoundaries.events(...args);
     export const getAnnouncementsAction = (...args) => window.__auditBoundaries.announcements(...args);`,
+  "@/modules/performance/home-action": `
+    export const getHomeBundleAction = async () => ({
+      todayStatus: { checked_in: false, late_window: false },
+      policy: await window.__auditBoundaries.policy(),
+      events: await window.__auditBoundaries.events(),
+      announcements: await window.__auditBoundaries.announcements(),
+      adminStats: await window.__auditBoundaries.adminStats(),
+    });`,
   "@/lib/supabase/client": `export const createClient = () => window.__auditBoundaries.client();`,
   "@/lib/notifications": `export const cleanupPushNotifications = () => window.__auditBoundaries.pushCleanup();`,
   "next/navigation": `export const useRouter = () => window.__auditBoundaries.router;`,

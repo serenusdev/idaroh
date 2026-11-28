@@ -4,13 +4,9 @@ import * as React from "react";
 import Image from "next/image";
 import Link from "next/link";
 import { formatOperationalDateTime } from "@/lib/utils";
-import { checkInAttendanceAction, getTodayAttendanceStatusAction } from "@/modules/attendance/actions";
-import {
-  getActivePolicyAction,
-  updatePolicySettingsAction,
-  getAdminDashboardStatsAction,
-} from "@/modules/analytics/actions";
-import { getEventsAction, getAnnouncementsAction } from "@/modules/schedules/actions";
+import { checkInAttendanceAction } from "@/modules/attendance/actions";
+import { updatePolicySettingsAction } from "@/modules/analytics/actions";
+import { getHomeBundleAction } from "@/modules/performance/home-action";
 import { useIdentity } from "@/components/auth/identity-context";
 import { holdsRole } from "@/lib/export-policy";
 import { REPORT_REVIEW_ROLES, holdsReportReviewRole } from "@/lib/report-policy";
@@ -32,7 +28,6 @@ export default function BerandaPage() {
   // Live configs & data — stale-while-revalidate: kunjungan ulang langsung
   // menampilkan data terakhir sambil menyegarkan di latar belakang.
   const isOperationalSupervisor = holdsRole(currentUser, ["yayasan", "pengurus"]);
-  const isSupervisor = holdsRole(currentUser, ["super_admin", "yayasan", "pengurus"]);
   // §3.1: only super_admin may read the registration queue or decide on it, so the approval
   // shortcut stays out of the yayasan/pengurus dashboard instead of ending in "Unauthorized".
   const canDecideIam = holdsRole(currentUser, IAM_MUTATION_ROLES);
@@ -42,35 +37,16 @@ export default function BerandaPage() {
   // CACHE-01 Batch 2: one QueryClient per session mount (the shell remounts it on user.id:role), and
   // the supervisor gate is a key/enabled decision — a santri never fetches the management metrics.
   const queryClient = useQueryClient();
-  const todayStatusQuery = useQuery({
-    queryKey: ["attendance:today-status", currentUser?.id],
-    queryFn: getTodayAttendanceStatusAction,
-  });
-  const serverCheckedIn = todayStatusQuery.data?.checked_in === true;
-  const serverLateWindow = todayStatusQuery.data?.late_window === true;
+  const homeBundleQuery = useQuery({ queryKey: cacheKeys.homeBundle(currentUser), queryFn: getHomeBundleAction });
+  const serverCheckedIn = homeBundleQuery.data?.todayStatus?.checked_in === true;
+  const serverLateWindow = homeBundleQuery.data?.todayStatus?.late_window === true;
   const isCheckedInToday = checkedIn || serverCheckedIn;
-  const policyQuery = useQuery({ queryKey: cacheKeys.policy(currentUser), queryFn: getActivePolicyAction });
-  const eventsQuery = useQuery({
-    queryKey: cacheKeys.events(currentUser),
-    queryFn: () => getEventsAction(),
-  });
-  const announcementsQuery = useQuery({
-    queryKey: cacheKeys.announcements(currentUser),
-    queryFn: getAnnouncementsAction,
-  });
-  const statsQuery = useQuery({
-    queryKey: cacheKeys.dashboard(currentUser),
-    queryFn: getAdminDashboardStatsAction,
-    enabled: isSupervisor,
-  });
-
-  const policy = policyQuery.data ?? null;
-  const events: ScheduleEventItem[] = eventsQuery.data ?? [];
-  const announcements: AnnouncementItem[] = announcementsQuery.data ?? [];
-  const adminStats = statsQuery.data ?? null;
-  const isLoadingData = policyQuery.isLoading || eventsQuery.isLoading || announcementsQuery.isLoading || statsQuery.isLoading;
-  const loadError =
-    [policyQuery.error, eventsQuery.error, announcementsQuery.error, statsQuery.error].find(Boolean)?.message ?? null;
+  const policy = homeBundleQuery.data?.policy ?? null;
+  const events: ScheduleEventItem[] = homeBundleQuery.data?.events ?? [];
+  const announcements: AnnouncementItem[] = homeBundleQuery.data?.announcements ?? [];
+  const adminStats = homeBundleQuery.data?.adminStats ?? null;
+  const isLoadingData = homeBundleQuery.isLoading;
+  const loadError = homeBundleQuery.error instanceof Error ? homeBundleQuery.error.message : null;
 
   // Time clocks
   const [currentDateTime, setCurrentDateTime] = React.useState(formatOperationalDateTime());
@@ -119,7 +95,7 @@ export default function BerandaPage() {
       }
       setCheckedIn(true);
       void invalidateAttendance(queryClient, currentUser);
-      void queryClient.invalidateQueries({ queryKey: ["attendance:today-status", currentUser.id] });
+      void queryClient.invalidateQueries({ queryKey: cacheKeys.homeBundle(currentUser) });
     },
     onError: (error) => {
       setCheckinError(error instanceof Error ? error.message : "Terjadi kesalahan saat mencatat presensi. Silakan coba lagi.");
