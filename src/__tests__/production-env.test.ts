@@ -15,6 +15,8 @@ const valid = {
   CRON_SECRET: "a".repeat(32),
   NEXT_PUBLIC_TURNSTILE_SITE_KEY: "0x4AAAAAAA_valid_turnstile_site",
   TURNSTILE_SECRET_KEY: "0x4AAAAAAA_valid_turnstile_secret",
+  GDRIVE_SERVICE_ACCOUNT_JSON: '{"client_email":"drive@example.iam.gserviceaccount.com","private_key":"private-key"}',
+  GDRIVE_ROOT_FOLDER_ID: "drive-root-folder",
   RESEND_API_KEY: "re_valid_resend_key",
   EMAIL_FROM: "IDAROH <no-reply@idaroh.sch.id>",
   // DX-01: the direct read-only connection the typed analytics path needs.
@@ -39,6 +41,10 @@ describe("production environment", () => {
     expect(() => validateProductionEnvironment({ ...valid, TURNSTILE_SECRET_KEY: "" })).toThrow("TURNSTILE_SECRET_KEY");
     expect(() => validateProductionEnvironment({ ...valid, RESEND_API_KEY: "" })).toThrow("RESEND_API_KEY");
     expect(() => validateProductionEnvironment({ ...valid, EMAIL_FROM: "" })).toThrow("EMAIL_FROM");
+  });
+  it("requires Google Drive storage configuration", () => {
+    expect(() => validateProductionEnvironment({ ...valid, GDRIVE_SERVICE_ACCOUNT_JSON: "" })).toThrow("GDRIVE_SERVICE_ACCOUNT_JSON");
+    expect(() => validateProductionEnvironment({ ...valid, GDRIVE_ROOT_FOLDER_ID: "" })).toThrow("GDRIVE_ROOT_FOLDER_ID");
   });
   it("requires the Turnstile site key alongside the secret so the widget can render", () => {
     // Secret without site key would fail-closed every login/registration (no token).

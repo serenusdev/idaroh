@@ -109,6 +109,10 @@ export const googleDriveStorageAdapter: StorageAdapter = {
     if (!response.ok) throw new Error(`Google Drive download gagal (${response.status})`);
     return response;
   },
+  async delete(id) {
+    const response = await driveFetch(`${DRIVE_API}/files/${encodeURIComponent(id)}`, { method: "DELETE" });
+    if (!response.ok) throw new Error(`Google Drive delete gagal (${response.status})`);
+  },
 };
 
 export const storageAdapter: StorageAdapter = googleDriveStorageAdapter;

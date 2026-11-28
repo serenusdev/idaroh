@@ -52,6 +52,7 @@ export function DesktopSidebar({ user }: DesktopSidebarProps) {
   // admin.audit.read with yayasan/super_admin only. A link the database would
   // reject must not be offered here.
   const canViewTasks = holdsTaskRole(user, TASK_READ_ROLES);
+  const canManageReportCards = user.role === "pengurus" || user.role === "super_admin" || user.roles?.some((role) => role === "pengurus" || role === "super_admin");
 
   // RVS-01: §3.4 keeps report.review with pengurus and koordinator only, so the queue entry follows
   // the same pair the Server Action guards. A yayasan or super_admin account would otherwise be
@@ -64,6 +65,7 @@ export function DesktopSidebar({ user }: DesktopSidebarProps) {
     { label: "Laporan Aktivitas", href: "/laporan", icon: "edit_document" },
     { label: "Mutaba'ah & Halaqah", href: "/mutabaah", icon: "menu_book" },
     { label: "E-Tasrih / Gate Pass", href: "/tasrih", icon: "fact_check" },
+    ...(canManageReportCards ? [{ label: "Rapor Digital", href: "/rapor", icon: "description" }] : []),
     ...(canReview ? [{ label: "Review Laporan", href: "/review", icon: "fact_check" }] : []),
     ...(canViewTasks ? [{ label: "Tugas & Proyek", href: "/tugas", icon: "task_alt" }] : []),
     { label: "Jadwal & Agenda", href: "/jadwal", icon: "calendar_month" },

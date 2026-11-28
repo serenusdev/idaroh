@@ -26,6 +26,8 @@ export function validateProductionEnvironment(env = process.env) {
     'TURNSTILE_SECRET_KEY',
     'RESEND_API_KEY',
     'EMAIL_FROM',
+    'GDRIVE_SERVICE_ACCOUNT_JSON',
+    'GDRIVE_ROOT_FOLDER_ID',
     // DX-01: the typed read path (analytics, audit explorer, export datasets) connects directly. It
     // fails closed without this secret rather than falling back to the service-role HTTP client.
     'SUPABASE_DB_URL',
@@ -66,6 +68,9 @@ export function validateProductionEnvironment(env = process.env) {
   }
   if (env.TURNSTILE_SECRET_KEY && placeholder.test(env.TURNSTILE_SECRET_KEY)) {
     throw new Error('Production TURNSTILE_SECRET_KEY contains a placeholder.');
+  }
+  if (placeholder.test(env.GDRIVE_SERVICE_ACCOUNT_JSON) || placeholder.test(env.GDRIVE_ROOT_FOLDER_ID)) {
+    throw new Error('Production Google Drive configuration contains a placeholder.');
   }
   if (env.FIREBASE_SERVICE_ACCOUNT_KEY) {
     let credentials;

@@ -105,10 +105,11 @@ CREATE OR REPLACE FUNCTION public.save_halaqah_log(
   p_tajwid_errors text DEFAULT '', p_notes text DEFAULT ''
 ) RETURNS public.halaqah_logs
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, app, pg_temp AS $$
-DECLARE v_row public.halaqah_logs; v_ustadz_id uuid;
+DECLARE v_row public.halaqah_logs; v_ustadz_id uuid; v_today_wib date := (timezone('Asia/Jakarta', now()))::date;
 BEGIN
   IF auth.uid() IS NULL OR NOT app.is_active_member() THEN RAISE EXCEPTION 'UNAUTHORIZED'; END IF;
   IF NOT app.has_any_role('pengurus', 'super_admin') AND NOT EXISTS (SELECT 1 FROM public.students WHERE id = p_student_id AND profile_id = auth.uid()) THEN RAISE EXCEPTION 'FORBIDDEN'; END IF;
+  IF p_session_date IS NULL OR p_session_date > v_today_wib OR p_session_date < (v_today_wib - 365) THEN RAISE EXCEPTION 'INVALID_HALAQAH_SESSION_DATE'; END IF;
   IF p_entry_type NOT IN ('ziyadah', 'murojaah') OR p_quality_grade NOT IN ('mumtaz', 'jayyid_jiddan', 'jayyid', 'maqbul', 'needs_review') THEN RAISE EXCEPTION 'INVALID_HALAQAH_VALUE'; END IF;
   v_ustadz_id := CASE WHEN app.has_any_role('pengurus', 'super_admin') THEN auth.uid() ELSE NULL END;
   INSERT INTO public.halaqah_logs(student_id, session_date, entry_type, surah_name, ayah_from, ayah_to, quality_grade, tajwid_errors, notes, ustadz_id)

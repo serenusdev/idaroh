@@ -10,30 +10,34 @@ export function cn(...inputs: ClassValue[]) {
  * Example: "Senin, 18 Nov 2026 • 07:42 WIB"
  */
 export function formatOperationalDateTime(date: Date = new Date()): string {
-  const days = ["Minggu", "Senin", "Selasa", "Rabu", "Kamis", "Jumat", "Sabtu"];
-  const months = [
-    "Jan", "Feb", "Mar", "Apr", "Mei", "Jun",
-    "Jul", "Agu", "Sep", "Okt", "Nov", "Des"
-  ];
-
-  const dayName = days[date.getDay()];
-  const day = date.getDate();
-  const monthName = months[date.getMonth()];
-  const year = date.getFullYear();
-
-  const hours = String(date.getHours()).padStart(2, "0");
-  const minutes = String(date.getMinutes()).padStart(2, "0");
-
-  return `${dayName}, ${day} ${monthName} ${year} • ${hours}:${minutes} WIB`;
+  const parts = new Intl.DateTimeFormat("id-ID", {
+    timeZone: "Asia/Jakarta",
+    weekday: "long",
+    day: "numeric",
+    month: "short",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+    hourCycle: "h23",
+  }).formatToParts(date);
+  const get = (type: string) => parts.find((part) => part.type === type)?.value ?? "";
+  return `${get("weekday")}, ${get("day")} ${get("month")} ${get("year")} • ${get("hour")}:${get("minute")} WIB`;
 }
 
 /**
  * Format time only (HH:mm WIB)
  */
 export function formatTimeWIB(date: Date = new Date()): string {
-  const hours = String(date.getHours()).padStart(2, "0");
-  const minutes = String(date.getMinutes()).padStart(2, "0");
-  return `${hours}:${minutes} WIB`;
+  const parts = new Intl.DateTimeFormat("id-ID", {
+    timeZone: "Asia/Jakarta",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+    hourCycle: "h23",
+  }).formatToParts(date);
+  const get = (type: string) => parts.find((part) => part.type === type)?.value ?? "";
+  return `${get("hour")}:${get("minute")} WIB`;
 }
 
 /**
