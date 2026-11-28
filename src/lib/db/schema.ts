@@ -171,6 +171,13 @@ export interface TasksTable {
   visibility: string;
 }
 
+export interface TeamMembersTable {
+  team_id: string;
+  user_id: string;
+  valid_from: string;
+  valid_to: string | null;
+}
+
 export interface AuditLogsTable {
   id: string;
   event_name: string;
@@ -356,6 +363,7 @@ export interface Database {
   gate_passes: GatePassesTable;
   daily_reports: DailyReportsTable;
   tasks: TasksTable;
+  team_members: TeamMembersTable;
   audit_logs: AuditLogsTable;
   export_logs: ExportLogsTable;
   email_outbox: EmailOutboxTable;
