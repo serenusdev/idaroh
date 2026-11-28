@@ -35,6 +35,13 @@ export async function saveHalaqahLogAction(input: HalaqahInput) {
   await requireAuthUser();
   requireUuid(input.studentId, "student_id");
   if (!/^\d{4}-\d{2}-\d{2}$/.test(input.sessionDate)) throw new Error("INVALID_SESSION_DATE");
+  const todayWib = getJakartaTime().dateStr;
+  const parsedDate = new Date(`${input.sessionDate}T00:00:00+07:00`);
+  const normalizedDate = Number.isNaN(parsedDate.getTime())
+    ? ""
+    : new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Jakarta" }).format(parsedDate);
+  if (normalizedDate !== input.sessionDate) throw new Error("INVALID_SESSION_DATE");
+  if (input.sessionDate > todayWib) throw new Error("SESSION_DATE_CANNOT_BE_FUTURE");
   if (!input.surahName.trim() || input.ayahFrom < 1 || input.ayahTo < input.ayahFrom) throw new Error("INVALID_HALAQAH_RANGE");
   const supabase = await createClient();
   const { data, error } = await supabase.rpc("save_halaqah_log", {

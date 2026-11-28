@@ -16,6 +16,7 @@ import { throwQueryError } from "@/lib/query-error";
 import { friendlyActionError } from "@/lib/action-error";
 import { withMfaAuditRetry } from "@/lib/auth/mfa-audit";
 import { resolveEmailRedirectOrigin } from "@/lib/auth/email-redirect-origin";
+import { storageAdapter } from "@/lib/storage/gdrive";
 import { MEMBER_CATEGORIES, REGISTRATION_PRIVACY_VERSION, type ClaimedMemberType } from "./registration";
 
 const VALID_ROLES = ["super_admin", "yayasan", "pengurus", "koordinator", "santri"] as const;
@@ -1090,8 +1091,9 @@ export async function updateProfileAction(payload: {
         if (!trimmedUrl) {
           avatarUrl = "";
         } else {
-          const expectedPrefix = `/storage/v1/object/public/avatars/${user.id}/`;
-          const isValid = trimmedUrl.includes(expectedPrefix) && !trimmedUrl.includes("..");
+          const expectedLegacyPrefix = `/storage/v1/object/public/avatars/${user.id}/`;
+          const expectedDriveProxy = /^\/api\/files\/[0-9a-f-]{36}$/i.test(trimmedUrl);
+          const isValid = (trimmedUrl.includes(expectedLegacyPrefix) || expectedDriveProxy) && !trimmedUrl.includes("..");
           if (!isValid) {
             return {
               success: false,
@@ -1141,7 +1143,7 @@ export async function updateProfileAction(payload: {
 }
 
 /**
- * Server Action: Upload avatar to Supabase Storage (Issue 4).
+ * Server Action: Upload avatar to the Google Drive StorageAdapter.
  * Validates file type and size before uploading.
  */
 export async function uploadAvatarAction(
@@ -1168,19 +1170,34 @@ export async function uploadAvatarAction(
     const ext = file.type.split("/")[1];
     const path = `${user.id}/${Date.now()}.${ext}`;
     const supabase = createAdminClient();
-
-    const { error: uploadError } = await supabase.storage
-      .from("avatars")
-      .upload(path, file, { contentType: file.type, upsert: false });
-
-    if (uploadError) throw uploadError;
-
-    const { data: urlData } = supabase.storage.from("avatars").getPublicUrl(path);
+    const stored = await storageAdapter.upload({
+      category: "avatars",
+      path,
+      body: new Uint8Array(await file.arrayBuffer()),
+      mimeType: file.type,
+    });
+    const { data: metadata, error: metadataError } = await supabase
+      .from("stored_files")
+      .insert({
+        gdrive_file_id: stored.id,
+        folder_category: "avatars",
+        original_name: file.name || `avatar.${ext}`,
+        mime_type: file.type,
+        byte_size: stored.byteSize,
+        visibility: "private_sensitive",
+        owner_profile_id: user.id,
+      })
+      .select("id")
+      .single();
+    if (metadataError || !metadata) {
+      await storageAdapter.delete(stored.id);
+      throw metadataError ?? new Error("Metadata avatar tidak dapat disimpan.");
+    }
 
     return {
       success: true,
       message: "Foto profil berhasil diunggah.",
-      data: { avatarUrl: urlData.publicUrl, storagePath: path },
+      data: { avatarUrl: `/api/files/${metadata.id}`, storagePath: metadata.id },
     };
   } catch (err: any) {
     console.error("uploadAvatarAction error:", err);
@@ -1192,13 +1209,21 @@ export async function deleteAvatarAction(storagePath: string): Promise<ActionRes
   if (!storagePath) return { success: true, message: "Tidak ada avatar sementara yang perlu dibersihkan." };
   try {
     const user = await requireAuthUser();
-    // Validate path ownership: path must be strictly within user's folder (<userId>/...)
-    // and must not contain directory traversal attempts (F-03)
-    if (!storagePath.startsWith(`${user.id}/`) || storagePath.includes("..")) {
+    if (!/^[0-9a-f-]{36}$/i.test(storagePath)) {
       return { success: false, message: "Akses ditolak: path avatar tidak valid atau bukan milik akun Anda." };
     }
     const supabase = createAdminClient();
-    const { error } = await supabase.storage.from("avatars").remove([storagePath]);
+    const { data: metadata, error: lookupError } = await supabase
+      .from("stored_files")
+      .select("id,gdrive_file_id")
+      .eq("id", storagePath)
+      .eq("folder_category", "avatars")
+      .eq("owner_profile_id", user.id)
+      .maybeSingle();
+    if (lookupError) throw lookupError;
+    if (!metadata) return { success: false, message: "Akses ditolak: avatar bukan milik akun Anda." };
+    await storageAdapter.delete(metadata.gdrive_file_id);
+    const { error } = await supabase.from("stored_files").delete().eq("id", metadata.id);
     if (error) throw error;
     return { success: true, message: "Avatar sementara dibersihkan." };
   } catch (err: any) {

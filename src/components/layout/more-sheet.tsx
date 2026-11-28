@@ -77,6 +77,7 @@ export function MoreSheet({ isOpen, onClose, user }: MoreSheetProps) {
 
   // §3.5: every role except super_admin has a task read scope.
   const canViewTasks = holdsTaskRole(user, TASK_READ_ROLES);
+  const canManageReportCards = user.role === "pengurus" || user.role === "super_admin" || user.roles?.some((role) => role === "pengurus" || role === "super_admin");
 
   return (
     <div className="fixed inset-0 z-50 md:hidden flex flex-col justify-end">
@@ -191,6 +192,21 @@ export function MoreSheet({ isOpen, onClose, user }: MoreSheetProps) {
               </span>
             </div>
           </Link>
+
+          <Link href="/mutabaah" onClick={onClose} className="flex items-center gap-3 px-3 py-2.5 rounded-xl text-on-surface hover:bg-accent/40 active:bg-accent transition-colors">
+            <span className="material-symbols-outlined text-primary text-[22px]">menu_book</span>
+            <div className="flex-1"><span className="font-label-md text-label-md block">Mutaba&apos;ah &amp; Halaqah</span><span className="font-body-sm text-[11px] text-muted-foreground block">Catatan ibadah dan setoran Al-Qur&apos;an</span></div>
+          </Link>
+
+          <Link href="/tasrih" onClick={onClose} className="flex items-center gap-3 px-3 py-2.5 rounded-xl text-on-surface hover:bg-accent/40 active:bg-accent transition-colors">
+            <span className="material-symbols-outlined text-primary text-[22px]">fact_check</span>
+            <div className="flex-1"><span className="font-label-md text-label-md block">E-Tasrih / Gate Pass</span><span className="font-body-sm text-[11px] text-muted-foreground block">Pengajuan dan pemindaian izin keluar</span></div>
+          </Link>
+
+          {canManageReportCards && <Link href="/rapor" onClick={onClose} className="flex items-center gap-3 px-3 py-2.5 rounded-xl text-on-surface hover:bg-accent/40 active:bg-accent transition-colors">
+            <span className="material-symbols-outlined text-primary text-[22px]">description</span>
+            <div className="flex-1"><span className="font-label-md text-label-md block">Rapor Digital</span><span className="font-body-sm text-[11px] text-muted-foreground block">Koreksi rapor dan ringkasan tahfidz</span></div>
+          </Link>}
 
           {/* §3.6: a koordinator runs the agenda page for its own teams but holds none of
               the other administrative links, so it sits outside the admin group. */}

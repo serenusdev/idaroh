@@ -9,6 +9,8 @@ import { requireAuthUser, requireRole } from "@/lib/auth/guards";
 import { sendPushToUsers } from "@/lib/fcm";
 import { isNonEmptyString } from "@/lib/input-validation";
 import { parseMentionUsernames } from "./mentions";
+import { storageAdapter } from "@/lib/storage/gdrive";
+import { BACKUP_TABLES, buildBackupFiles, verifyBackupArtifactStructure } from "@/lib/backup-artifact";
 
 async function canAccessTask(
   supabase: ReturnType<typeof createAdminClient>,
@@ -38,6 +40,36 @@ async function canAccessTask(
   return (memberships || []).some((item: any) =>
     task.team_id === item.team_id || task.team_id === item.teams?.id || task.team_id === item.teams?.name || task.team_id === item.teams?.slug
   );
+}
+
+async function createDatabaseBackupArtifact(supabase: ReturnType<typeof createAdminClient>, dateStr: string) {
+  const rowsByTable: Record<string, unknown[]> = {};
+  for (const table of BACKUP_TABLES) {
+    const rows: unknown[] = [];
+    for (let offset = 0; ; offset += 1000) {
+      const { data, error } = await supabase.from(table).select("*").range(offset, offset + 999);
+      if (error) throw error;
+      rows.push(...(data ?? []));
+      if (!data || data.length < 1000) break;
+    }
+    rowsByTable[table] = rows;
+  }
+  const { files, manifest } = buildBackupFiles(rowsByTable, new Date().toISOString());
+  if (!verifyBackupArtifactStructure(files)) throw new Error("Struktur artifact backup tidak lengkap");
+  const archive = await storageAdapter.createArchive({ category: "backups", path: `database/${dateStr}/idaroh-${dateStr}.zip`, files });
+  const { data: storedFile, error } = await supabase.from("stored_files").insert({
+    gdrive_file_id: archive.id,
+    folder_category: "backups",
+    original_name: `idaroh-${dateStr}.zip`,
+    mime_type: "application/zip",
+    byte_size: archive.byteSize,
+    visibility: "private_sensitive",
+  }).select("id").single();
+  if (error || !storedFile) {
+    await storageAdapter.delete(archive.id);
+    throw error ?? new Error("Metadata artifact backup tidak dapat disimpan");
+  }
+  return { storedFileId: storedFile.id, manifest };
 }
 
 export interface OperationalAnalytics {
@@ -391,9 +423,14 @@ export async function getTaskDiscussionAction(taskId: string): Promise<{ comment
   const profileIds = Array.from(new Set((comments || []).flatMap((item: any) => [item.author_id, ...(item.task_mentions || []).map((mention: any) => mention.mentioned_user_id)]).filter(Boolean)));
   const { data: profiles } = profileIds.length ? await supabase.from("profiles").select("id, full_name").in("id", profileIds) : { data: [] as any[] };
   const profileMap = new Map((profiles || []).map((profile: any) => [profile.id, profile.full_name]));
-  const signed = await Promise.all((attachments || []).map(async (item: any) => {
-    const result = await supabase.storage.from("task-attachments").createSignedUrl(item.storage_path, 900);
-    return { id: item.id, uploadedBy: item.uploaded_by, fileName: item.file_name, mimeType: item.mime_type, sizeBytes: Number(item.size_bytes), signedUrl: result.data?.signedUrl, createdAt: item.created_at };
+  const signed = (attachments || []).map((item: any) => ({
+    id: item.id,
+    uploadedBy: item.uploaded_by,
+    fileName: item.file_name,
+    mimeType: item.mime_type,
+    sizeBytes: Number(item.size_bytes),
+    signedUrl: `/api/files/${encodeURIComponent(item.storage_path)}`,
+    createdAt: item.created_at,
   }));
   return {
     comments: (comments || []).map((item: any) => ({
@@ -470,16 +507,36 @@ export async function uploadTaskAttachmentAction(formData: FormData): Promise<{ 
   const supabase = createAdminClient();
   if (!(await canAccessTask(supabase, user, taskId))) return { success: false, message: "Anda tidak memiliki akses ke tugas ini." };
   const path = `${taskId}/${user.id}/${randomUUID()}-${file.name.replace(/[^a-zA-Z0-9._-]/g, "_")}`;
-  // Note: Content-Disposition: attachment should be configured at Storage policy/CDN level
-  // if the Supabase JS SDK version in use does not support contentDisposition in upload options.
-  const upload = await supabase.storage.from("task-attachments").upload(path, Buffer.from(await file.arrayBuffer()), { contentType: file.type || "application/octet-stream", upsert: false });
-  if (upload.error) throw upload.error;
-  const { data, error } = await supabase.from("task_attachments").insert({ task_id: taskId, uploaded_by: user.id, storage_path: path, file_name: file.name, mime_type: file.type || "application/octet-stream", size_bytes: file.size }).select("id, file_name, mime_type, size_bytes, created_at").single();
+  const stored = await storageAdapter.upload({
+    category: "resources",
+    path: `task-attachments/${path}`,
+    body: new Uint8Array(await file.arrayBuffer()),
+    mimeType: file.type || "application/octet-stream",
+  });
+  const { data: storedFile, error: metadataError } = await supabase
+    .from("stored_files")
+    .insert({
+      gdrive_file_id: stored.id,
+      folder_category: "resources",
+      original_name: file.name,
+      mime_type: file.type || "application/octet-stream",
+      byte_size: stored.byteSize,
+      visibility: "private_sensitive",
+      owner_profile_id: user.id,
+    })
+    .select("id")
+    .single();
+  if (metadataError || !storedFile) {
+    await storageAdapter.delete(stored.id);
+    throw metadataError ?? new Error("Metadata lampiran tidak dapat disimpan.");
+  }
+  const { data, error } = await supabase.from("task_attachments").insert({ task_id: taskId, uploaded_by: user.id, storage_path: storedFile.id, file_name: file.name, mime_type: file.type || "application/octet-stream", size_bytes: file.size }).select("id, file_name, mime_type, size_bytes, created_at").single();
   if (error) {
-    await supabase.storage.from("task-attachments").remove([path]);
+    await storageAdapter.delete(stored.id);
+    await supabase.from("stored_files").delete().eq("id", storedFile.id);
     throw error;
   }
-  return { success: true, message: "Lampiran berhasil diunggah.", attachment: { id: data.id, fileName: data.file_name, mimeType: data.mime_type, sizeBytes: Number(data.size_bytes), createdAt: data.created_at } };
+  return { success: true, message: "Lampiran berhasil diunggah.", attachment: { id: data.id, fileName: data.file_name, mimeType: data.mime_type, sizeBytes: Number(data.size_bytes), signedUrl: `/api/files/${storedFile.id}`, createdAt: data.created_at } };
 }
 
 export async function deleteTaskAttachmentAction(attachmentId: string): Promise<{ success: boolean; message: string }> {
@@ -500,8 +557,17 @@ export async function deleteTaskAttachmentAction(attachmentId: string): Promise<
     if (attachment.uploaded_by !== user.id && !roles.some((role) => ["super_admin", "pengurus"].includes(role))) {
       return { success: false, message: "Hanya pengunggah atau pengurus yang dapat menghapus lampiran." };
     }
-    const { error: storageError } = await supabase.storage.from("task-attachments").remove([attachment.storage_path]);
-    if (storageError) throw storageError;
+    const { data: storedFile, error: storedFileError } = await supabase
+      .from("stored_files")
+      .select("id,gdrive_file_id")
+      .eq("id", attachment.storage_path)
+      .eq("folder_category", "resources")
+      .maybeSingle();
+    if (storedFileError) throw storedFileError;
+    if (!storedFile) return { success: false, message: "Metadata lampiran tidak ditemukan." };
+    await storageAdapter.delete(storedFile.gdrive_file_id);
+    const { error: metadataDeleteError } = await supabase.from("stored_files").delete().eq("id", storedFile.id);
+    if (metadataDeleteError) throw metadataDeleteError;
     const { error } = await supabase.from("task_attachments").delete().eq("id", attachmentId);
     if (error) throw error;
     const { error: auditError } = await supabase.from("audit_logs").insert({ event_name: "task.attachment_deleted", actor_id: user.id, actor_name: user.full_name, target_id: attachment.task_id, target_label: attachment.file_name, action_detail: "Lampiran tugas dihapus bersama objek storage." });
@@ -535,20 +601,15 @@ export async function createBackupManifestAction(runType: "database" | "storage"
   if (runType !== "database") {
     return { success: false, message: "Backup storage dan uji restore belum didukung. Tidak ada backup atau pemulihan yang dijalankan; hanya manifest database yang dapat dicatat." };
   }
-  const message = "Manifest database berhasil dicatat. Ini bukan backup; backup dan pemulihan belum dijalankan atau diverifikasi. Verifikasi backup dan uji restore melalui provider masih diperlukan.";
+  const message = "Artifact backup database terstruktur berhasil dibuat dan diverifikasi sebelum diunggah ke Google Drive.";
   if (process.env.VITEST) return { success: true, message, runId: "backup-test" };
   const supabase = createAdminClient();
   const { data: run, error: insertError } = await supabase.from("backup_runs").insert({ run_type: "database", status: "started", requested_by: user.id, artifact_ref: null }).select("id").single();
   if (insertError) throw insertError;
   try {
-    const tables = ["profiles", "attendance_records", "daily_reports", "tasks", "events", "announcements"];
-    const rowCounts: Record<string, number> = {};
-    for (const table of tables) {
-      const { count, error } = await supabase.from(table).select("*", { count: "exact", head: true });
-      if (error) throw error;
-      rowCounts[table] = count || 0;
-    }
-    const { error } = await supabase.from("backup_runs").update({ status: "manifest_only", row_counts: rowCounts, artifact_ref: null, completed_at: new Date().toISOString() }).eq("id", run.id);
+    const { storedFileId, manifest } = await createDatabaseBackupArtifact(supabase, new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Jakarta" }).format(new Date()));
+    const rowCounts = Object.fromEntries(Object.entries(manifest.tables).map(([table, value]) => [table, value.row_count]));
+    const { error } = await supabase.from("backup_runs").update({ status: "backup_verified", row_counts: rowCounts, artifact_ref: storedFileId, completed_at: new Date().toISOString() }).eq("id", run.id);
     if (error) throw error;
     return { success: true, message, runId: run.id };
   } catch (error: any) {

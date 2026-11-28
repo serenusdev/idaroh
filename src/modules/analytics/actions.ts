@@ -3,7 +3,7 @@
 
 import { createAdminClient } from "@/lib/supabase/admin";
 import { createClient } from "@/lib/supabase/server";
-import { requireAuthUser, requireRole } from "@/lib/auth/guards";
+import { getJakartaTime, requireAuthUser, requireRole } from "@/lib/auth/guards";
 import { createHash, randomUUID } from "node:crypto";
 import { formatRelativeTimeId } from "@/lib/utils";
 import { INITIAL_AUDIT_LOGS } from "./data";
@@ -280,7 +280,7 @@ export async function updatePolicySettingsAction(payload: {
       attendance_grace_cutoff_time: `${payload.attendanceGraceCutoffTime}:00`,
       report_deadline_time: `${payload.reportDeadlineTime}:00`,
       status: "proposed",
-      effective_from: payload.effectiveFrom || new Date().toISOString().split("T")[0],
+      effective_from: payload.effectiveFrom || getJakartaTime().dateStr,
       proposed_by: admin.id,
       change_reason: payload.changeReason || "Pembaruan kebijakan operasional",
     });
