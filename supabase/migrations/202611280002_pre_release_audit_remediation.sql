@@ -1,11 +1,17 @@
 BEGIN;
 
-ALTER TABLE public.stored_files
-  DROP CONSTRAINT IF EXISTS stored_files_folder_category_check;
+DO $$
+BEGIN
+  IF to_regclass('public.stored_files') IS NOT NULL THEN
+    ALTER TABLE public.stored_files
+      DROP CONSTRAINT IF EXISTS stored_files_folder_category_check;
 
-ALTER TABLE public.stored_files
-  ADD CONSTRAINT stored_files_folder_category_check
-  CHECK (folder_category IN ('avatars','reports','resources','raw-imports','rapor','backups'));
+    ALTER TABLE public.stored_files
+      ADD CONSTRAINT stored_files_folder_category_check
+      CHECK (folder_category IN ('avatars','reports','resources','raw-imports','rapor','backups'));
+  END IF;
+END
+$$;
 
 CREATE OR REPLACE FUNCTION app.update_own_profile(
   p_full_name text,

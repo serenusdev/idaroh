@@ -2,6 +2,8 @@ import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 import { requireRole } from "@/lib/auth/guards";
 
+export const dynamic = "force-dynamic";
+
 export default async function ReportCardIndexPage() {
   await requireRole(["pengurus", "super_admin"]);
   const supabase = await createClient();

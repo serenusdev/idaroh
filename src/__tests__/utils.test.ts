@@ -8,14 +8,14 @@ describe("Utility functions", () => {
   });
 
   it("formats operational date time in Indonesian WIB format", () => {
-    const testDate = new Date(2026, 10, 18, 7, 42, 0); // Month is 0-indexed: 10 = Nov
+    const testDate = new Date("2026-11-18T00:42:00.000Z"); // 07:42 Asia/Jakarta
     const formatted = formatOperationalDateTime(testDate);
     expect(formatted).toContain("Nov 2026");
     expect(formatted).toContain("07:42 WIB");
   });
 
   it("formats time in WIB format", () => {
-    const testDate = new Date(2026, 10, 18, 8, 15, 0);
+    const testDate = new Date("2026-11-18T01:15:00.000Z"); // 08:15 Asia/Jakarta
     const formatted = formatTimeWIB(testDate);
     expect(formatted).toBe("08:15 WIB");
   });
