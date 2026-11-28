@@ -1,6 +1,6 @@
 BEGIN;
 
-SELECT plan(20);
+SELECT plan(23);
 
 -- ROLE-SYNC (PERMISSIONS.md §3.1, decided by the operator on 2026-11-25): the IAM mutation
 -- path belongs to super_admin alone, and the checks that get there are explicit pairs
@@ -178,6 +178,22 @@ SELECT is(public.admin_update_user(
             '00000000-0000-0000-0000-000000000744', '00000000-0000-0000-0000-000000000744',
             NULL, NULL, 'suspended', NULL, NULL, NULL)->>'success', 'false',
   'the last active super admin cannot suspend themselves out of the platform');
+
+-- 21-23: a super_admin may retain its protected role while adding an operational role, but
+-- the same RPC cannot mint super_admin for a normal account.
+SELECT is(public.admin_set_user_roles(
+            '00000000-0000-0000-0000-000000000744', '00000000-0000-0000-0000-000000000744',
+            ARRAY['super_admin', 'pengurus'], NULL)->>'success', 'true',
+  'an existing super_admin can add pengurus without losing the protected role');
+SELECT is((SELECT count(*)::int FROM public.user_roles ur
+           JOIN public.roles r ON r.id = ur.role_id
+           WHERE ur.user_id = '00000000-0000-0000-0000-000000000744'
+             AND ur.revoked_at IS NULL AND r.key IN ('super_admin', 'pengurus')), 2,
+  'the multi-role set is active in user_roles');
+SELECT is(public.admin_set_user_roles(
+            '00000000-0000-0000-0000-000000000741', '00000000-0000-0000-0000-000000000744',
+            ARRAY['super_admin', 'pengurus'], NULL)->>'success', 'false',
+  'the multi-role RPC cannot mint super_admin for a non-admin account');
 
 RESET ROLE;
 

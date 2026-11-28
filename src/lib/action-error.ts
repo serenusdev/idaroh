@@ -16,12 +16,29 @@ const TECHNICAL_MARKER =
 // so MFA_REQUIRED is not mistaken for an invalid TOTP code by the patterns below.
 const GUARD_PREFIX = /^(UNAUTHORIZED|FORBIDDEN|UNAVAILABLE|MFA_REQUIRED):/;
 
+function readableErrorMessage(error: unknown): string {
+  if (error instanceof Error) return error.message;
+  if (typeof error === "string") return error;
+  if (!error || typeof error !== "object") return "";
+
+  const record = error as Record<string, unknown>;
+  const nested = record.error;
+  if (nested && typeof nested === "object") {
+    const nestedMessage = readableErrorMessage(nested);
+    if (nestedMessage) return nestedMessage;
+  }
+  for (const key of ["message", "details", "hint", "code"]) {
+    if (typeof record[key] === "string" && record[key].trim()) return record[key].trim();
+  }
+  return "";
+}
+
 export function friendlyActionError(error: unknown, fallback: string): string {
   if (error === null || error === undefined) {
     console.error("[action-error]", fallback);
     return fallback;
   }
-  const raw = (error instanceof Error ? error.message : String(error)).trim();
+  const raw = readableErrorMessage(error).trim();
   console.error("[action-error]", raw);
   if (!raw) return fallback;
   if (GUARD_PREFIX.test(raw)) return raw;

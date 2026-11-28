@@ -30,4 +30,19 @@ describe("Wave 5.3 strict attendance window", () => {
     expect(page).toContain("Presensi Terlambat (> 08:15)");
     expect(page).toContain("bg-red-600");
   });
+
+  it("extracts the classification fields from the classifier object", () => {
+    const migration = read("supabase/migrations/202612030001_attendance_checkin_and_multi_role.sql");
+    expect(migration).toContain("app.wave5_3_classify_time(v_now_wib::time)->>'classification'");
+    expect(migration).toContain("app.wave5_3_classify_time(v_now_wib::time)->>'status'");
+    expect(migration).not.toContain("FROM jsonb_each(app.wave5_3_classify_time(v_now_wib::time))");
+  });
+
+  it("keeps the Beranda card on the same server status and late-window labels", () => {
+    const home = read("src/app/(app)/page.tsx");
+    expect(home).toContain("getTodayAttendanceStatusAction");
+    expect(home).toContain("late_window");
+    expect(home).toContain("Presensi Terlambat (> 08:15)");
+    expect(home).toContain("bg-red-600");
+  });
 });

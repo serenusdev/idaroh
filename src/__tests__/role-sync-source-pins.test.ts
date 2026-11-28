@@ -69,7 +69,7 @@ describe("iam actions authorise by role set, not by rank", () => {
   it("every IAM mutation guard asks for super_admin only", () => {
     const guards = [...actions.matchAll(/requireRole\(\s*\[([^\]]*)\]/g)].map((m) => m[1]);
     expect(guards.length).toBeGreaterThanOrEqual(7);
-    expect(guards.filter((list) => list.replace(/["\s]/g, "") === "super_admin").length).toBe(7);
+    expect(guards.filter((list) => list.replace(/["\s]/g, "") === "super_admin").length).toBe(8);
   });
 });
 
@@ -120,5 +120,22 @@ describe("the IAM console separates roles from categories", () => {
 
   it("the ustadz tab counts categories, not roles", () => {
     expect(page).not.toMatch(/u\.role\.toLowerCase\(\)\.includes\("ustadz"\)/);
+  });
+});
+
+describe("multi-role administration remains explicit and fail-closed", () => {
+  it("offers a dedicated server action and RPC for replacing the active role set", () => {
+    const actions = read("src/modules/iam/actions.ts");
+    const migration = read("supabase/migrations/202612030001_attendance_checkin_and_multi_role.sql");
+    expect(actions).toContain("adminSetUserRolesAction");
+    expect(actions).toContain("requireRole([\"super_admin\"])");
+    expect(migration).toContain("admin_set_user_roles");
+    expect(migration).toContain("super_admin tidak dapat ditambahkan dari jalur ini");
+  });
+
+  it("keeps pending role applicants behind approval", () => {
+    const migration = read("supabase/migrations/20261122000010_role_sync_ustadz_and_matrix.sql");
+    expect(migration).toContain("Approver bukan super_admin aktif.");
+    expect(migration).toContain("Peran super_admin tidak dapat ditetapkan dari antrean pendaftaran.");
   });
 });
