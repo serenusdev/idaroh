@@ -217,8 +217,9 @@ const boundaryModules: Record<string, string> = {
   "@/modules/cron/actions": `
     export const getCronJobSchedulesAction = (...args) => window.__auditBoundaries.schedules(...args);
     export const updateCronJobScheduleAction = (...args) => window.__auditBoundaries.saveSchedule(...args);`,
-  "@/modules/iam/actions": `export const getCurrentUserAction = () => window.__auditBoundaries.currentUser();`,
+  "@/modules/iam/actions": `export const getCurrentUserAction = () => window.__auditBoundaries.currentUser(); export const adminSetUserRolesAction = async () => ({ success: true, message: "ok" });`,
   "@/modules/attendance/actions": `
+    export const getTodayAttendanceStatusAction = async () => ({ checked_in: false, late_window: false, status: null, classification: null, late_minutes: 0, today_wib: "2026-11-27", time_wib: "07:30:00" });
     export const checkInAttendanceAction = (...args) => window.__auditBoundaries.checkIn(...args);`,
   "@/modules/analytics/actions": `
     export const getActivePolicyAction = (...args) => window.__auditBoundaries.policy(...args);

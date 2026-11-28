@@ -67,6 +67,7 @@ const modules: Record<string, string> = {
     export const resetUserSessionAction = (id) => window.__rejectBoundaries.reset(id);
     export const revokeDeviceTokenAction = async () => ({ success: true, message: "ok" });
     export const adminUpdateUserAction = async () => ({ success: true, message: "ok" });
+    export const adminSetUserRolesAction = async () => ({ success: true, message: "ok" });
     export const getCurrentUserAction = async () => ({ id: "admin-a", role: "super_admin", status: "active", full_name: "Admin Uji" });`,
   "@/modules/operations/actions": `export const importMembersCsvAction = async () => ({ success: true, message: "ok", errors: [] });`,
   "@/modules/people/actions": `export const getTeamsAction = () => window.__rejectBoundaries.teams();`,
