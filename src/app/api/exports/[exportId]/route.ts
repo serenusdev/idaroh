@@ -4,6 +4,7 @@ import { requireRole } from "@/lib/auth/guards";
 import { buildPdf } from "@/lib/pdf";
 import { jsonText, jsonTextOrNull } from "@/lib/db/expressions";
 import { getReadOnlyDb } from "@/lib/db/reader";
+import { errorToMessage } from "@/lib/action-error";
 import {
   EXPORT_ROLES,
   exportRolesFor,
@@ -277,7 +278,7 @@ export async function GET(
       },
     });
   } catch (error) {
-    console.error("Export download failed:", error);
+    console.error("Export download failed:", errorToMessage(error));
     return NextResponse.json({ error: "Gagal menghasilkan ekspor." }, { status: 500 });
   }
 }
