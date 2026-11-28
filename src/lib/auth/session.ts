@@ -75,15 +75,37 @@ function isSessionRevoked(accessToken: string | undefined, revokedAt: string): b
 export const resolveIdentity = cache(async (): Promise<IdentityState> => {
   try {
     const supabase = await createClient();
-    const {
-      data: { user },
-      error: authError,
-    } = await supabase.auth.getUser();
+    const { data: localSessionData } = await supabase.auth.getSession();
+    const localSession = localSessionData.session;
+    // getClaims validates the JWT locally/through the configured JWKS path and avoids an
+    // additional Auth API round-trip for the common SSR request. If verification is unavailable,
+    // fall back to getUser so the identity remains fail-closed rather than trusting client data.
+    const { data: claimsData, error: claimsError } = await supabase.auth.getClaims();
+    let user: { id: string; email?: string; created_at?: string; factors?: Array<{ status?: string | null; factor_type?: string | null }> | null } | null = null;
+    let authError: unknown = claimsError;
+    const claims = claimsData?.claims as { sub?: unknown; email?: unknown } | undefined;
+    if (typeof claims?.sub === 'string' && claims.sub) {
+      user = {
+        id: claims.sub,
+        email: typeof claims.email === 'string' ? claims.email : undefined,
+        factors: localSession?.user?.factors,
+      };
+      authError = null;
+    } else {
+      const fallback = await supabase.auth.getUser();
+      user = fallback.data.user;
+      authError = fallback.error;
+    }
 
     if (authError || !user) {
       if (process.env.VITEST) return { state: 'active', profile: TEST_ACTION_USER };
-      if (authError?.name === 'AuthRetryableFetchError') {
-        return identityError('auth.getUser', authError);
+      const authErrorName = authError instanceof Error
+        ? authError.name
+        : authError && typeof authError === 'object' && 'name' in authError
+          ? String(authError.name)
+          : undefined;
+      if (authErrorName === 'AuthRetryableFetchError') {
+        return identityError('auth.getClaims', authError);
       }
       return { state: 'unauthenticated' };
     }
@@ -125,8 +147,7 @@ export const resolveIdentity = cache(async (): Promise<IdentityState> => {
     }
 
     if (profile.session_revoked_at) {
-      const { data: sessionData } = await supabase.auth.getSession();
-      if (isSessionRevoked(sessionData.session?.access_token, profile.session_revoked_at)) {
+      if (isSessionRevoked(localSession?.access_token, profile.session_revoked_at)) {
         return { state: 'unauthenticated' };
       }
     }
@@ -170,10 +191,7 @@ export const resolveIdentity = cache(async (): Promise<IdentityState> => {
       updated_at: profile.updated_at || profile.created_at || user.created_at,
     };
 
-    const {
-      data: { session },
-    } = await supabase.auth.getSession();
-    const mfa = mfaStateFromUser(user, session?.access_token, rolesList);
+    const mfa = mfaStateFromUser(user, localSession?.access_token, rolesList);
     if (mfa.requirement === 'mfa_error') {
       return { state: 'mfa_error', profile: userProfile, traceId: randomUUID() };
     }

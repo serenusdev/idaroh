@@ -6,11 +6,9 @@ import { DailyReport, ReportCategory, ReportItem, ReviewStatus } from "@/modules
 import {
   saveReportDraftAction,
   submitReportAction,
-  getTodayReportAction,
   getMyReportHistoryAction,
-  getReportCategoriesAction,
 } from "@/modules/reports/actions";
-import { getActivePolicyAction } from "@/modules/analytics/actions";
+import { getReportBundleAction } from "@/modules/performance/actions";
 import { useIdentity } from "@/components/auth/identity-context";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { cacheKeys, invalidateReports, invalidateReviewQueue } from "@/lib/cache-keys";
@@ -56,13 +54,11 @@ export default function LaporanPage() {
   // CACHE-01 Batch 2: every read is a Server Action behind a session+role key, so a second account
   // or a role switch on the same browser cannot be handed this santri's draft (D3).
   const queryClient = useQueryClient();
-  const todayQuery = useQuery({ queryKey: cacheKeys.reportsToday(user), queryFn: getTodayReportAction });
-  const categoriesQuery = useQuery({ queryKey: cacheKeys.reportCategories(user), queryFn: getReportCategoriesAction });
-  const policyQuery = useQuery({ queryKey: cacheKeys.policy(user), queryFn: getActivePolicyAction });
-  const reportCategories: ReportCategory[] = React.useMemo(() => categoriesQuery.data ?? [], [categoriesQuery.data]);
-  const policy = policyQuery.data ?? null;
+  const reportBundleQuery = useQuery({ queryKey: cacheKeys.reportsBundle(user), queryFn: getReportBundleAction });
+  const reportCategories: ReportCategory[] = React.useMemo(() => reportBundleQuery.data?.categories ?? [], [reportBundleQuery.data?.categories]);
+  const policy = reportBundleQuery.data?.policy ?? null;
 
-  const [report, setReport] = React.useState<DailyReport>(todayQuery.data ?? BLANK_REPORT);
+  const [report, setReport] = React.useState<DailyReport>(reportBundleQuery.data?.today ?? BLANK_REPORT);
   const [feedback, setFeedback] = React.useState<{
     type: "success" | "error" | "info";
     message: string;
@@ -83,8 +79,8 @@ export default function LaporanPage() {
   };
 
   React.useEffect(() => {
-    if (todayQuery.data) setReport(todayQuery.data);
-  }, [todayQuery.data]);
+    if (reportBundleQuery.data?.today) setReport(reportBundleQuery.data.today);
+  }, [reportBundleQuery.data?.today]);
 
   React.useEffect(() => {
     if (reportCategories.length) {
@@ -260,7 +256,7 @@ export default function LaporanPage() {
   return (
     <div className="w-full max-w-7xl mx-auto space-y-6 pb-24">
       {/* Load Error — bedakan gagal muat vs formulir kosong (UX-08) */}
-      {(todayQuery.error || categoriesQuery.error || policyQuery.error) && (
+      {reportBundleQuery.error && (
         <div
           role="alert"
           className="p-4 rounded-xl flex items-center justify-between gap-3 text-sm font-medium bg-error/15 text-error border border-error/30"
@@ -271,7 +267,7 @@ export default function LaporanPage() {
           </div>
           <button
             type="button"
-            onClick={() => { void todayQuery.refetch(); void categoriesQuery.refetch(); void policyQuery.refetch(); }}
+            onClick={() => { void reportBundleQuery.refetch(); }}
             className="underline shrink-0"
           >
             Coba lagi

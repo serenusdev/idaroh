@@ -38,7 +38,8 @@ describe("Cabang 3 (TSK-02 + ADM D3 + Import/People) — Tahap B contract pins",
     // readers are on TanStack Query now — the beranda in CACHE-01 Batch 2 and /admin/audit in Batch
     // 3 — so the namespace comes from the key builder, and the literal survives only inside it.
     const cacheKeys = read("src/lib/cache-keys.ts");
-    expect(homePage).toContain("cacheKeys.dashboard(currentUser)");
+    expect(homePage).toContain("cacheKeys.homeBundle(currentUser)");
+    expect(homePage).toContain("getHomeBundleAction");
     expect(cacheKeys).toContain("`admin:dashboard-stats:${");
     expect(auditPage).toContain("cacheKeys.dashboard(currentUser)");
     expect(homePage).not.toMatch(/useCachedData\([^)]*"admin:dashboard-stats"[^)]*\)/);

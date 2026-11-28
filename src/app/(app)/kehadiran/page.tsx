@@ -3,13 +3,11 @@
 import * as React from "react";
 import {
   checkInAttendanceAction,
-  getTodayAttendanceStatusAction,
-  getAttendanceHistoryAction,
   submitCorrectionAction,
   submitExceptionAction,
 } from "@/modules/attendance/actions";
 import { AttendanceRecordItem } from "@/modules/attendance/types";
-import { getActivePolicyAction } from "@/modules/analytics/actions";
+import { getAttendanceBundleAction } from "@/modules/performance/actions";
 import { useIdentity } from "@/components/auth/identity-context";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { cacheKeys, invalidateAttendance } from "@/lib/cache-keys";
@@ -30,18 +28,13 @@ export default function KehadiranPage() {
   // CACHE-01 Batch 2: both reads are Server Actions behind a session-scoped key, so another
   // account or a different active role can never be handed these rows (D3).
   const queryClient = useQueryClient();
-  const historyQuery = useQuery({
-    queryKey: cacheKeys.attendance(user),
-    queryFn: () => getAttendanceHistoryAction(),
-  });
-  const policyQuery = useQuery({ queryKey: cacheKeys.policy(user), queryFn: getActivePolicyAction });
-  const todayStatusQuery = useQuery({ queryKey: ["attendance:today-status", user?.id], queryFn: getTodayAttendanceStatusAction });
-  const serverCheckedIn = todayStatusQuery.data?.checked_in === true;
-  const serverLateWindow = todayStatusQuery.data?.late_window === true;
+  const attendanceBundleQuery = useQuery({ queryKey: cacheKeys.attendanceBundle(user), queryFn: getAttendanceBundleAction });
+  const serverCheckedIn = attendanceBundleQuery.data?.todayStatus?.checked_in === true;
+  const serverLateWindow = attendanceBundleQuery.data?.todayStatus?.late_window === true;
   const isCheckedInToday = checkedIn || serverCheckedIn;
-  const historyItems: AttendanceRecordItem[] = historyQuery.data ?? [];
-  const policy = policyQuery.data ?? null;
-  const loadError = historyQuery.error?.message || policyQuery.error?.message || null;
+  const historyItems: AttendanceRecordItem[] = attendanceBundleQuery.data?.history ?? [];
+  const policy = attendanceBundleQuery.data?.policy ?? null;
+  const loadError = attendanceBundleQuery.error?.message || null;
   // Filter/sort state for attendance history (UX-08)
   const [attFilter, setAttFilter] = React.useState<"all" | "on_time" | "grace" | "late" | "excused">("all");
   const [attSort, setAttSort] = React.useState<"desc" | "asc">("desc");

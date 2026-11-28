@@ -196,12 +196,10 @@ describe("CACHE-01 Batch 2 — the invalidation graph around these pages survive
       expect(page, name).toContain("useQuery({");
       expect(page, name).toContain("cacheKeys.");
     }
-    // getAttendanceHistoryAction takes an optional targetUserId, so the queryFn must not be handed
-    // TanStack's QueryFunctionContext.
-    expect(kehadiranPage).toContain("queryFn: () => getAttendanceHistoryAction()");
+    expect(kehadiranPage).toContain("queryFn: getAttendanceBundleAction");
     expect(laporanPage).toContain("queryFn: () => getMyReportHistoryAction({ before, limit: 20 })");
     expect(reviewPage).toContain("queryFn: getReviewQueueAction");
-    expect(homePage).toContain("queryFn: getAdminDashboardStatsAction");
+    expect(homePage).toContain("queryFn: getHomeBundleAction");
   });
 });
 
@@ -270,12 +268,10 @@ describe("CACHE-01 Batch 2 — writes stay Server Actions and their guards stay 
   });
 
   it("the beranda reads the agenda lists through the Batch 1 keys", () => {
-    expect(homePage).toContain("cacheKeys.events(currentUser)");
-    expect(homePage).toContain("cacheKeys.announcements(currentUser)");
-    expect(homePage).toContain("cacheKeys.policy(currentUser)");
-    expect(homePage).toContain("cacheKeys.dashboard(currentUser)");
-    // The supervisor gate stays a key decision, not a fetch that returns someone else's metrics.
-    expect(homePage).toMatch(/dashboard\(currentUser\)[\s\S]{0,160}enabled: isSupervisor/);
+    // The agenda, policy and optional dashboard reads now share one request while their original
+    // keys remain invalidated by cache-keys.ts.
+    expect(homePage).toContain("cacheKeys.homeBundle(currentUser)");
+    expect(homePage).toContain("getHomeBundleAction");
   });
 
   it("the attendance and policy writers that stay legacy reach the migrated cache too", () => {
