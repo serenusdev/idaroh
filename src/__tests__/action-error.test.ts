@@ -65,4 +65,11 @@ describe("friendlyActionError (UX-07)", () => {
     expect(friendlyActionError(null, "Fallback.")).toBe("Fallback.");
     expect(friendlyActionError(new Error(""), "Fallback.")).toBe("Fallback.");
   });
+
+  it("mengekstrak pesan dari objek error Supabase tanpa menghasilkan [object Object]", () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    expect(friendlyActionError({ message: "ALREADY_CHECKED_IN_TODAY" }, "Fallback.")).toBe("ALREADY_CHECKED_IN_TODAY");
+    expect(friendlyActionError({ error: { message: "Sesi tidak valid." } }, "Fallback.")).toBe("Sesi tidak valid.");
+    expect(friendlyActionError({ code: "23514", details: "attendance_records constraint" }, "Fallback.")).toBe("Fallback.");
+  });
 });

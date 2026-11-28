@@ -37,7 +37,7 @@ createRoot(document.getElementById("registration-fixture")).render(component);
 `;
 
 const boundaries: Record<string, string> = {
-  "@/modules/iam/actions": ["getCurrentUserAction", "submitAccountApplicationAction", "getAccountRequestsAction", "getActiveUsersAction", "approveAccountApplicationAction", "rejectAccountApplicationAction", "createManualAccountAction", "resetUserSessionAction", "revokeDeviceTokenAction", "adminUpdateUserAction"].map(name => `export const ${name} = (...args) => window.__registration.call('${name}', args);`).join("\n"),
+  "@/modules/iam/actions": ["getCurrentUserAction", "submitAccountApplicationAction", "getAccountRequestsAction", "getActiveUsersAction", "approveAccountApplicationAction", "rejectAccountApplicationAction", "createManualAccountAction", "resetUserSessionAction", "revokeDeviceTokenAction", "adminUpdateUserAction", "adminSetUserRolesAction"].map(name => `export const ${name} = (...args) => window.__registration.call('${name}', args);`).join("\n"),
   "@/modules/operations/actions": "export const importMembersCsvAction = (...args) => window.__registration.call('importMembersCsvAction', args);",
   "@/modules/people/actions": "export const getTeamsAction = (...args) => window.__registration.call('getTeamsAction', args);",
   "@/modules/analytics/actions": "export const exportAuditedDataAction = (...args) => window.__registration.call('exportAuditedDataAction', args);",

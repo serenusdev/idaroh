@@ -18,6 +18,7 @@ import {
   resetUserSessionAction,
   revokeDeviceTokenAction,
   adminUpdateUserAction,
+  adminSetUserRolesAction,
   type AccountRequestItem,
   type ActiveUserItem,
 } from "@/modules/iam/actions";
@@ -70,7 +71,7 @@ export default function AdminUsersPage() {
     teamName: "",
     // Two independent fields: the granted role (user_roles) and the descriptive category
     // (profiles.member_type). §2 rule 1 forbids one overwriting the other.
-    roleKey: "",
+    roleKeys: [] as string[],
     memberType: "",
   });
   const [editUserMsg, setEditUserMsg] = React.useState<{ type: "success" | "error"; text: string } | null>(null);
@@ -292,7 +293,7 @@ export default function AdminUsersPage() {
       phoneNumber: "",
       status: user.status,
       teamName: user.teamName,
-      roleKey: user.roles.find((held) => roleOptions.some((option) => option.value === held)) || user.role,
+      roleKeys: user.roles.length ? [...user.roles] : [user.role],
       memberType: user.memberType || "",
     });
     setEditUserMsg(null);
@@ -303,19 +304,20 @@ export default function AdminUsersPage() {
     setIsEditingUser(true);
     setEditUserMsg(null);
     try {
-      const res = await adminUpdateUserAction(editUserTarget.id, {
+      const originalRoles = [...editUserTarget.roles].sort();
+      const nextRoles = [...editUserForm.roleKeys].sort();
+      const profileResult = await adminUpdateUserAction(editUserTarget.id, {
         fullName: editUserForm.fullName,
         phoneNumber: editUserForm.phoneNumber,
         status: editUserForm.status,
         teamName: editUserForm.teamName,
-        // The RPC rotates the entire active role set, so an untouched select must not be sent as
-        // a change; the category is a separate column and always travels on its own.
-        roleKey:
-          editUserForm.roleKey && !editUserTarget.roles.includes(editUserForm.roleKey)
-            ? editUserForm.roleKey
-            : undefined,
         memberType: editUserForm.memberType || undefined,
       });
+      const res = !profileResult.success
+        ? profileResult
+        : JSON.stringify(originalRoles) === JSON.stringify(nextRoles)
+          ? profileResult
+          : await adminSetUserRolesAction(editUserTarget.id, editUserForm.roleKeys);
       setEditUserMsg({ type: res.success ? "success" : "error", text: res.message });
       if (res.success) {
         reload();
@@ -1299,24 +1301,33 @@ export default function AdminUsersPage() {
                 />
               </div>
               <div>
-                <label htmlFor="edit-role" className="font-label-sm text-label-sm text-on-surface font-semibold block mb-1">
-                  Peran (user_roles)
-                </label>
-                <select
-                  id="edit-role"
-                  value={editUserForm.roleKey}
-                  onChange={(e) => setEditUserForm({ ...editUserForm, roleKey: e.target.value })}
-                  className="w-full h-11 px-3 rounded-xl bg-surface-container border border-border text-[14px] focus:outline-none focus:ring-2 focus:ring-primary"
-                >
-                  {roleOptions.map((option) => (
-                    <option key={option.value} value={option.value}>{option.label}</option>
+                <span className="font-label-sm text-label-sm text-on-surface font-semibold block mb-1">
+                  Peran aktif (user_roles)
+                </span>
+                <div className="grid grid-cols-2 gap-2 rounded-xl bg-surface-container p-3 border border-border">
+                  {(editUserTarget?.roles.includes("super_admin")
+                    ? [{ value: "super_admin" as UserRole, label: "Super Admin" }, ...roleOptions]
+                    : roleOptions
+                  ).map((option) => (
+                    <label key={option.value} className="flex items-center gap-2 text-[13px] text-on-surface">
+                      <input
+                        type="checkbox"
+                        checked={editUserForm.roleKeys.includes(option.value)}
+                        onChange={(e) => setEditUserForm({
+                          ...editUserForm,
+                          roleKeys: e.target.checked
+                            ? [...new Set([...editUserForm.roleKeys, option.value])]
+                            : editUserForm.roleKeys.filter((role) => role !== option.value),
+                        })}
+                        className="h-4 w-4 accent-primary"
+                      />
+                      {option.label}
+                    </label>
                   ))}
-                  {!roleOptions.some((option) => option.value === editUserForm.roleKey) && (
-                    <option value={editUserForm.roleKey}>
-                      {editUserForm.roleKey} (tidak dapat ditetapkan dari layar ini)
-                    </option>
-                  )}
-                </select>
+                </div>
+                <p className="text-[11px] text-muted-foreground mt-1">
+                  Super Admin hanya dapat dipertahankan oleh akun yang sudah memilikinya; akun baru tidak dapat dinaikkan menjadi Super Admin dari antrean.
+                </p>
               </div>
               <div>
                 <label htmlFor="edit-member-type" className="font-label-sm text-label-sm text-on-surface font-semibold block mb-1">

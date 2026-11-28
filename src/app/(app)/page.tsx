@@ -4,7 +4,7 @@ import * as React from "react";
 import Image from "next/image";
 import Link from "next/link";
 import { formatOperationalDateTime } from "@/lib/utils";
-import { checkInAttendanceAction } from "@/modules/attendance/actions";
+import { checkInAttendanceAction, getTodayAttendanceStatusAction } from "@/modules/attendance/actions";
 import {
   getActivePolicyAction,
   updatePolicySettingsAction,
@@ -42,6 +42,13 @@ export default function BerandaPage() {
   // CACHE-01 Batch 2: one QueryClient per session mount (the shell remounts it on user.id:role), and
   // the supervisor gate is a key/enabled decision — a santri never fetches the management metrics.
   const queryClient = useQueryClient();
+  const todayStatusQuery = useQuery({
+    queryKey: ["attendance:today-status", currentUser?.id],
+    queryFn: getTodayAttendanceStatusAction,
+  });
+  const serverCheckedIn = todayStatusQuery.data?.checked_in === true;
+  const serverLateWindow = todayStatusQuery.data?.late_window === true;
+  const isCheckedInToday = checkedIn || serverCheckedIn;
   const policyQuery = useQuery({ queryKey: cacheKeys.policy(currentUser), queryFn: getActivePolicyAction });
   const eventsQuery = useQuery({
     queryKey: cacheKeys.events(currentUser),
@@ -112,6 +119,10 @@ export default function BerandaPage() {
       }
       setCheckedIn(true);
       void invalidateAttendance(queryClient, currentUser);
+      void queryClient.invalidateQueries({ queryKey: ["attendance:today-status", currentUser.id] });
+    },
+    onError: (error) => {
+      setCheckinError(error instanceof Error ? error.message : "Terjadi kesalahan saat mencatat presensi. Silakan coba lagi.");
     },
     onSettled: () => setIsProcessing(false),
   });
@@ -881,7 +892,7 @@ export default function BerandaPage() {
               </h3>
             </div>
           </div>
-          {checkedIn ? (
+          {isCheckedInToday ? (
             <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-surface-container-low text-success font-label-sm text-label-sm border border-success/30">
               <span className="material-symbols-outlined text-[14px]">check_circle</span>
               Tercatat (<LiveClock suffix="WIB" />)
@@ -914,14 +925,14 @@ export default function BerandaPage() {
         </div>
 
         {/* Primary Touch CTA Button */}
-        {checkedIn ? (
+        {isCheckedInToday ? (
           <div className="w-full h-[52px] bg-success text-white font-label-md text-body-md rounded-xl flex items-center justify-center gap-2.5 shadow-sm">
             <span className="material-symbols-outlined text-[24px]">check_circle</span>
             <span>Berhasil Presensi Hari Ini (<LiveClock suffix="WIB" />)</span>
           </div>
         ) : (
           <button
-            className="w-full h-[52px] bg-primary text-on-primary font-label-md text-body-md rounded-xl flex items-center justify-center gap-2.5 shadow-sm active:scale-[0.98] transition-all disabled:opacity-90"
+            className={`w-full h-[52px] ${serverLateWindow ? "bg-red-600 hover:bg-red-700" : "bg-primary hover:bg-primary-container"} text-on-primary font-label-md text-body-md rounded-xl flex items-center justify-center gap-2.5 shadow-sm active:scale-[0.98] transition-all disabled:opacity-90`}
             id="btn-checkin"
             type="button"
             onClick={handleCheckin}
@@ -937,7 +948,7 @@ export default function BerandaPage() {
             ) : (
               <>
                 <span className="material-symbols-outlined text-[24px]">touch_app</span>
-                <span>Check-in Sekarang (<LiveClock suffix="WIB" />)</span>
+                <span>{serverLateWindow ? "Presensi Terlambat (> 08:15)" : <>Check-in Sekarang (<LiveClock suffix="WIB" />)</>}</span>
               </>
             )}
           </button>

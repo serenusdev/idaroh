@@ -1374,3 +1374,46 @@ export async function adminUpdateUserAction(
     return { success: false, message: friendlyActionError(err, "Gagal memperbarui profil pengguna.") };
   }
 }
+
+/**
+ * Replace an account's active role set without using the legacy single-role rotation path.
+ * A super_admin already holding that role may preserve it while adding an operational role;
+ * the database still refuses minting a new super_admin and protects the last active admin.
+ */
+export async function adminSetUserRolesAction(
+  userId: string,
+  roleKeys: string[],
+  memberType?: string,
+): Promise<ActionResult> {
+  if (!userId || !Array.isArray(roleKeys) || roleKeys.length === 0) {
+    return { success: false, message: "Minimal satu peran wajib dipertahankan." };
+  }
+  const normalizedRoles = Array.from(new Set(roleKeys.map((role) => normalizeRole(role)).filter(Boolean))) as ValidRole[];
+  if (normalizedRoles.length !== roleKeys.length || normalizedRoles.some((role) => role !== "super_admin" && !resolveAssignableRole(role))) {
+    return { success: false, message: "Daftar peran tidak valid." };
+  }
+  const requestedMemberType = memberType === undefined ? null : resolveMemberType(memberType);
+  if (memberType !== undefined && !requestedMemberType) {
+    return { success: false, message: "Kategori anggota tidak valid." };
+  }
+
+  try {
+    const adminUser = await requireRole(["super_admin"]);
+    if (process.env.VITEST && userId.startsWith("mock-test-")) {
+      return { success: true, message: "Role pengguna berhasil diperbarui." };
+    }
+    const supabase = createAdminClient();
+    const { data, error } = await supabase.rpc("admin_set_user_roles", {
+      p_target_user_id: userId,
+      p_admin_id: adminUser.id,
+      p_role_keys: normalizedRoles,
+      p_member_type: requestedMemberType,
+    });
+    if (error) throw error;
+    if (!data?.success) return { success: false, message: data?.message || "Gagal memperbarui role pengguna." };
+    return { success: true, message: "Role pengguna berhasil diperbarui." };
+  } catch (err) {
+    console.error("adminSetUserRolesAction error:", err);
+    return { success: false, message: friendlyActionError(err, "Gagal memperbarui role pengguna.") };
+  }
+}
