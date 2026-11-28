@@ -59,6 +59,12 @@ export default function AdminAnalyticsPage() {
   const data = analyticsQuery.data ?? EMPTY;
   const loading = analyticsQuery.isLoading;
 
+  React.useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => { if (event.key === "Escape") setDrilldown(null); };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, []);
+
   if (!hasAnyRole(user, ["super_admin", "yayasan", "pengurus", "koordinator"])) {
     return <UnauthorizedState requiredRole="Koordinator / Pengurus / Yayasan" />;
   }
@@ -75,11 +81,6 @@ export default function AdminAnalyticsPage() {
       setDrilldownLoading(false);
     }
   };
-  React.useEffect(() => {
-    const onKeyDown = (event: KeyboardEvent) => { if (event.key === "Escape") setDrilldown(null); };
-    window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
-  }, []);
 
   return (
     <div className="w-full max-w-6xl mx-auto space-y-6 pb-20" data-ui="analytics-screen">
