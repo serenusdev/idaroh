@@ -255,7 +255,7 @@ export async function GET(
       rows = result.map((row) => [row.id, row.event_name, row.actor_id, row.target_id, row.created_at]);
     }
 
-    const title = `Pondok OS - Ekspor ${log.category}`;
+    const title = `IDAROH - Ekspor ${log.category}`;
     const { error: rowCountError } = await supabase.from("export_logs").update({ row_count: rows.length }).eq("id", id);
     if (rowCountError) throw rowCountError;
     if (exportType === "pdf") {
@@ -264,7 +264,7 @@ export async function GET(
         status: 200,
         headers: {
           "Content-Type": "application/pdf",
-          "Content-Disposition": `attachment; filename="pondok-os-${log.category}.pdf"`,
+          "Content-Disposition": `attachment; filename="idaroh-${log.category}.pdf"`,
         },
       });
     }
@@ -273,7 +273,7 @@ export async function GET(
       status: 200,
       headers: {
         "Content-Type": "text/csv; charset=utf-8",
-        "Content-Disposition": `attachment; filename="pondok-os-${log.category}.csv"`,
+        "Content-Disposition": `attachment; filename="idaroh-${log.category}.csv"`,
       },
     });
   } catch (error) {

@@ -1,7 +1,7 @@
 <?xml version='1.0' encoding='utf-8'?>
 <resources>
-    <string name="app_name">Pondok OS</string>
-    <string name="title_activity_main">Pondok OS</string>
+    <string name="app_name">IDAROH</string>
+    <string name="title_activity_main">IDAROH</string>
     <string name="package_name">id.web.pondokabdurrahmanbinauf.app</string>
     <string name="custom_url_scheme">id.web.pondokabdurrahmanbinauf.app</string>
 </resources>
