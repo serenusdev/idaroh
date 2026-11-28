@@ -7,6 +7,7 @@ import { cacheKeys } from "@/lib/cache-keys";
 import { useQuery } from "@tanstack/react-query";
 import { UnauthorizedState } from "@/components/ui/unauthorized-state";
 import { LoadingSpinner } from "@/components/ui/loading-spinner";
+import { hasAnyRole } from "@/lib/auth/role-utils";
 
 interface BackupRun {
   id: string;
@@ -33,7 +34,7 @@ export default function AdminBackupPage() {
   const runsQuery = useQuery({ queryKey: cacheKeys.backupRuns(user), queryFn: getBackupRunsAction });
   const runs: BackupRun[] = runsQuery.data ?? [];
   if (runsQuery.isLoading) return <div className="min-h-[360px] grid place-items-center"><LoadingSpinner size="lg" /></div>;
-  if (user.role !== "super_admin") return <UnauthorizedState requiredRole="Super Admin" />;
+  if (!hasAnyRole(user, ["super_admin"])) return <UnauthorizedState requiredRole="Super Admin" />;
   const run = async () => { const result = await createBackupManifestAction("database"); setNotice(result.message); await runsQuery.refetch(); };
   return (
     <div className="w-full max-w-5xl mx-auto space-y-6 pb-20">

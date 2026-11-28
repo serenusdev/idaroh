@@ -6,11 +6,14 @@ import { randomUUID } from "node:crypto";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { createClient } from "@/lib/supabase/server";
 import { requireAuthUser, requireRole } from "@/lib/auth/guards";
+import { hasAnyRole } from "@/lib/auth/role-utils";
 import { sendPushToUsers } from "@/lib/fcm";
 import { isNonEmptyString } from "@/lib/input-validation";
 import { parseMentionUsernames } from "./mentions";
 import { storageAdapter } from "@/lib/storage/gdrive";
 import { BACKUP_TABLES, buildBackupFiles, verifyBackupArtifactStructure } from "@/lib/backup-artifact";
+import { getReadOnlyDb } from "@/lib/db/reader";
+import { fetchAnalyticsDrilldown, type DrilldownMetric } from "@/lib/db/analytics-drilldown-queries";
 
 async function canAccessTask(
   supabase: ReturnType<typeof createAdminClient>,
@@ -115,7 +118,7 @@ export async function getOperationalAnalyticsAction(
   const admin = createAdminClient();
   const effectiveTeamId = teamId || null;
   let coordinatorTeamIds: string[] = [];
-  if (user.role === "koordinator") {
+  if (hasAnyRole(user, ["koordinator"])) {
     const { data: memberships, error: membershipError } = await admin
       .from("team_members")
       .select("team_id")
@@ -133,7 +136,7 @@ export async function getOperationalAnalyticsAction(
     }
   }
   const supabase = await createClient();
-  const rpcTeamIds = user.role === "koordinator" ? coordinatorTeamIds : [effectiveTeamId];
+  const rpcTeamIds = hasAnyRole(user, ["koordinator"]) ? coordinatorTeamIds : [effectiveTeamId];
   const results = await Promise.all(rpcTeamIds.map((scopeTeamId) => supabase.rpc("analytics_operational_summary", {
     p_from: period.from,
     p_to: period.to,
@@ -172,7 +175,7 @@ export async function getOperationalAnalyticsAction(
 }
 
 export async function getAnalyticsDrilldownAction(
-  metric: "attendance_late" | "reports_backlog" | "tasks_overdue",
+  metric: DrilldownMetric,
   from?: string,
   to?: string
 ): Promise<AnalyticsDrilldownRow[]> {
@@ -182,71 +185,16 @@ export async function getAnalyticsDrilldownAction(
     return [{ id: "sample-1", label: "Contoh data operasional", detail: "Data drill-down siap ditampilkan", date: period.to, status: metric }];
   }
 
-  const supabase = createAdminClient();
-  let allowedUserIds: Set<string> | null = null;
-  if (user.role === "koordinator") {
-    const { data: memberships, error: membershipError } = await supabase.from("team_members").select("team_id").eq("user_id", user.id).is("valid_to", null);
-    if (membershipError) throw membershipError;
-    const teamIds = (memberships || []).map((membership: any) => membership.team_id);
-    const { data: teamMembers, error: teamMemberError } = teamIds.length
-      ? await supabase.from("team_members").select("user_id").in("team_id", teamIds).is("valid_to", null)
-      : { data: [], error: null };
-    if (teamMemberError) throw teamMemberError;
-    allowedUserIds = new Set((teamMembers || []).map((member: any) => member.user_id));
-  }
-  if (metric === "attendance_late") {
-    const { data, error } = await supabase
-      .from("attendance_records")
-      .select("id, user_id, attendance_date, classification, profiles(full_name)")
-      .eq("classification", "late")
-      .gte("attendance_date", period.from)
-      .lte("attendance_date", period.to)
-      .order("attendance_date", { ascending: false })
-      .limit(100);
-    if (error) throw error;
-    return (data || []).filter((row: any) => !allowedUserIds || allowedUserIds.has(row.user_id)).map((row: any) => ({
-      id: row.id,
-      label: row.profiles?.full_name || "Anggota",
-      detail: "Presensi melewati batas toleransi",
-      date: row.attendance_date,
-      status: row.classification,
-    }));
-  }
-  if (metric === "reports_backlog") {
-    const { data, error } = await supabase
-      .from("daily_reports")
-      .select("id, user_id, report_date, review_status, profiles(full_name)")
-      .eq("submission_status", "submitted")
-      .in("review_status", ["not_reviewed", "under_review"])
-      .gte("report_date", period.from)
-      .lte("report_date", period.to)
-      .order("report_date", { ascending: false })
-      .limit(100);
-    if (error) throw error;
-    return (data || []).filter((row: any) => !allowedUserIds || allowedUserIds.has(row.user_id)).map((row: any) => ({
-      id: row.id,
-      label: row.profiles?.full_name || "Anggota",
-      detail: "Laporan menunggu review",
-      date: row.report_date,
-      status: row.review_status,
-    }));
-  }
-  const { data, error } = await supabase
-    .from("tasks")
-    .select("id, title, due_date, status, task_assignees(user_id)")
-    .is("deleted_at", null)
-    .in("status", ["todo", "in_progress", "in_review"])
-    .lt("due_date", new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Jakarta" }).format(new Date()))
-    .order("due_date", { ascending: true })
-    .limit(100);
-  if (error) throw error;
-  return (data || []).filter((row: any) => !allowedUserIds || (row.task_assignees || []).some((assignment: any) => allowedUserIds?.has(assignment.user_id))).map((row: any) => ({
-    id: row.id,
-    label: row.title,
-    detail: "Tugas terbuka melewati tenggat",
-    date: row.due_date || "-",
-    status: row.status,
-  }));
+  const canUseNamedDrilldown = hasAnyRole(user, ["yayasan", "pengurus", "koordinator"]);
+  if (!canUseNamedDrilldown) throw new Error("FORBIDDEN: drill-down operasional memerlukan peran operasional");
+  return fetchAnalyticsDrilldown(
+    getReadOnlyDb(),
+    metric,
+    period.from,
+    period.to,
+    user.id,
+    hasAnyRole(user, ["koordinator"]),
+  );
 }
 
 function parseCsv(csv: string): string[][] {

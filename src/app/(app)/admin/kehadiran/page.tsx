@@ -6,6 +6,7 @@ import { useIdentity } from "@/components/auth/identity-context";
 import { UnauthorizedState } from "@/components/ui/unauthorized-state";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { cacheKeys, invalidateAttendance } from "@/lib/cache-keys";
+import { hasAnyRole } from "@/lib/auth/role-utils";
 
 export default function AdminAttendanceReviewPage() {
   const { user } = useIdentity();
@@ -24,7 +25,7 @@ export default function AdminAttendanceReviewPage() {
     if (queueQuery.error) setNotice(queueQuery.error.message);
   }, [queueQuery.error]);
 
-  if (!["super_admin", "yayasan", "pengurus"].includes(user.role)) return <UnauthorizedState requiredRole="Super Admin / Pengurus / Yayasan" />;
+  if (!hasAnyRole(user, ["super_admin", "yayasan", "pengurus"])) return <UnauthorizedState requiredRole="Super Admin / Pengurus / Yayasan" />;
 
   const decide = async (kind: "correction" | "exception", id: string, decision: "approved" | "rejected", effectiveClassification?: string, noteOverride?: string) => {
     let note = noteOverride;

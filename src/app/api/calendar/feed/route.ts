@@ -83,10 +83,10 @@ export async function GET(request: Request) {
     const now = new Date();
     const prologue: Array<[string, string]> = [
       ["VERSION", "2.0"],
-      ["PRODID", "-//Pondok Quran Abdurrahman bin Auf//Pondok OS//ID"],
+      ["PRODID", "-//Pondok Quran Abdurrahman bin Auf//IDAROH//ID"],
       ["CALSCALE", "GREGORIAN"],
       ["METHOD", "PUBLISH"],
-      ["X-WR-CALNAME", "Agenda & Kajian Pondok OS"],
+      ["X-WR-CALNAME", "Agenda & Kajian IDAROH"],
       ["X-WR-TIMEZONE", "Asia/Jakarta"],
       ["X-WR-CALDESC", "Jadwal kegiatan santri, kajian kitab, dan operasional Pondok Quran Abdurrahman bin Auf"],
     ];

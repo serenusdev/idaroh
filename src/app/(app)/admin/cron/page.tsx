@@ -8,6 +8,7 @@ import { getCronJobSchedulesAction, updateCronJobScheduleAction } from "@/module
 import type { CronJobSchedule } from "@/lib/cron-schedule";
 import { UnauthorizedState } from "@/components/ui/unauthorized-state";
 import { ErrorState } from "@/components/ui/error-state";
+import { hasAnyRole } from "@/lib/auth/role-utils";
 
 const DAY_LABELS = ["Min", "Sen", "Sel", "Rab", "Kam", "Jum", "Sab"];
 
@@ -22,7 +23,7 @@ export default function AdminCronPage() {
   const schedulesQuery = useQuery({
     queryKey: cacheKeys.cronSchedules(user),
     queryFn: getCronJobSchedulesAction,
-    enabled: user.role === "super_admin",
+    enabled: hasAnyRole(user, ["super_admin"]),
   });
   const [schedules, setSchedules] = React.useState<CronJobSchedule[]>(schedulesQuery.data ?? []);
   const [drafts, setDrafts] = React.useState<Record<string, Draft>>(() => toDrafts(schedulesQuery.data ?? []));
@@ -38,7 +39,7 @@ export default function AdminCronPage() {
   const loading = schedulesQuery.isLoading;
   const loadError = Boolean(schedulesQuery.error);
 
-  if (user.role !== "super_admin") return <UnauthorizedState requiredRole="Super Admin" />;
+  if (!hasAnyRole(user, ["super_admin"])) return <UnauthorizedState requiredRole="Super Admin" />;
 
   const setDraft = (key: string, patch: Partial<Draft>) => {
     setDrafts((current) => ({ ...current, [key]: { ...current[key], ...patch } }));

@@ -819,7 +819,7 @@ export default function JadwalPage() {
         <Modal isOpen onClose={() => setActiveAnnouncement(null)} title={activeAnnouncement.title} backdropClassName="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-xs" className="bg-card rounded-2xl w-full max-w-lg p-5 sm:p-6 shadow-xl border border-border space-y-4">
             <div className="flex items-center justify-between pb-2 border-b border-border">
               <span className="px-2 py-0.5 rounded-full bg-tertiary-fixed text-on-tertiary-fixed-variant text-xs font-semibold">
-                Pengumuman Resmi Pondok OS
+                Pengumuman Resmi IDAROH
               </span>
               <button
                 type="button"

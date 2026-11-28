@@ -11,6 +11,7 @@ import { resolveCorrectionClassification } from "./classification";
 import { CORRECTABLE_STATUSES, EFFECTIVE_STATUS_LABELS } from "./labels";
 import { throwQueryError } from "@/lib/query-error";
 import { friendlyActionError } from "@/lib/action-error";
+import { hasAnyRole } from "@/lib/auth/role-utils";
 
 export interface CheckinResult {
   success: boolean;
@@ -495,7 +496,7 @@ export async function getAttendanceReviewQueueAction(): Promise<AttendanceReview
 
 async function requireRoleForAttendanceReview() {
   const user = await requireAuthUser();
-  if (!["super_admin", "yayasan", "pengurus"].includes(user.role)) {
+  if (!hasAnyRole(user, ["super_admin", "yayasan", "pengurus"])) {
     throw new Error("Anda tidak memiliki akses memproses review presensi.");
   }
   return user;

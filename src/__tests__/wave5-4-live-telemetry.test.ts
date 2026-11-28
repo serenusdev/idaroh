@@ -11,7 +11,9 @@ describe("Wave 5.4 live telemetry contract", () => {
     const queries = read("src/lib/db/live-telemetry-queries.ts");
     expect(action).toContain('requireRole(["pengurus", "super_admin"])');
     expect(action).toContain("getReadOnlyDb()");
+    expect(action).toContain("LiveTelemetryResult");
     expect(queries).toContain('Asia/Jakarta');
+    expect(queries).toContain("to_char");
     expect(queries).toContain("attendance_exceptions");
     expect(queries).toContain("daily_reports");
     expect(queries).toContain("tasks");
@@ -28,8 +30,8 @@ describe("Wave 5.4 live telemetry contract", () => {
   it("does not grant santri a telemetry navigation entry", () => {
     const page = read("src/app/(app)/admin/live-telemetry/page.tsx");
     const sidebar = read("src/components/layout/desktop-sidebar.tsx");
-    expect(page).toContain('user.role === "pengurus"');
-    expect(page).toContain('user.role === "super_admin"');
+    expect(page).toContain('hasAnyRole(user, ["pengurus", "super_admin"])');
+    expect(sidebar).toContain('hasAnyRole(user, ["pengurus", "super_admin"])');
     expect(sidebar).toContain('href: "/admin/live-telemetry"');
   });
 });

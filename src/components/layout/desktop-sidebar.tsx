@@ -18,6 +18,7 @@ import {
   AGENDA_WRITE_ROLES,
   holdsScheduleRole,
 } from "@/lib/schedule-policy";
+import { hasAnyRole, getRoleLabels } from "@/lib/auth/role-utils";
 
 interface DesktopSidebarProps {
   user: UserProfile;
@@ -52,7 +53,7 @@ export function DesktopSidebar({ user }: DesktopSidebarProps) {
   // admin.audit.read with yayasan/super_admin only. A link the database would
   // reject must not be offered here.
   const canViewTasks = holdsTaskRole(user, TASK_READ_ROLES);
-  const canManageReportCards = user.role === "pengurus" || user.role === "super_admin" || user.roles?.some((role) => role === "pengurus" || role === "super_admin");
+  const canManageReportCards = hasAnyRole(user, ["pengurus", "super_admin"]);
 
   // RVS-01: §3.4 keeps report.review with pengurus and koordinator only, so the queue entry follows
   // the same pair the Server Action guards. A yayasan or super_admin account would otherwise be
@@ -83,7 +84,7 @@ export function DesktopSidebar({ user }: DesktopSidebarProps) {
 
   const adminNav = [
     { label: "Analitik Operasional", href: "/admin/analytics", icon: "monitoring" },
-    ...((user.role === "pengurus" || user.role === "super_admin") ? [{ label: "Telemetry Langsung", href: "/admin/live-telemetry", icon: "monitoring" }] : []),
+    ...(hasAnyRole(user, ["pengurus", "super_admin"]) ? [{ label: "Telemetry Langsung", href: "/admin/live-telemetry", icon: "monitoring" }] : []),
     { label: "Anggota & Reviewer", href: "/admin/people", icon: "groups" },
     { label: "Backup & Pemulihan", href: "/admin/backup", icon: "backup" },
     { label: "Uji Notifikasi", href: "/admin/notifications", icon: "notifications_active" },
@@ -95,16 +96,7 @@ export function DesktopSidebar({ user }: DesktopSidebarProps) {
     ...(holdsRole(user, AUDIT_READ_ROLES) ? [{ label: "Analitik & Audit Log", href: "/admin/audit", icon: "monitoring" }] : []),
   ];
 
-  const roleLabel =
-    user.role === "super_admin"
-      ? "Super Admin"
-      : user.role === "yayasan"
-      ? "Yayasan"
-      : user.role === "pengurus"
-      ? "Pengurus"
-      : user.role === "koordinator"
-      ? "Koordinator"
-      : "Santri";
+  const roleLabels = getRoleLabels(user);
 
   return (
     <aside className="hidden md:flex flex-col w-64 fixed left-0 top-0 bottom-0 bg-card border-r border-border z-40">
@@ -124,7 +116,7 @@ export function DesktopSidebar({ user }: DesktopSidebarProps) {
               IDAROH
             </span>
             <span className="px-1.5 py-0.5 rounded-full bg-accent text-accent-foreground font-label-sm text-[10px] leading-tight flex-shrink-0">
-              {roleLabel}
+              {roleLabels[0] ?? "Tanpa peran"}{roleLabels.length > 1 ? ` +${roleLabels.length - 1}` : ""}
             </span>
           </div>
           <span className="font-body-sm text-[11px] text-muted-foreground truncate leading-tight mt-0.5">

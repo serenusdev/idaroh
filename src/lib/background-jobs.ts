@@ -1,6 +1,7 @@
 import { createAdminClient } from "@/lib/supabase/admin";
 import { drainNotificationOutbox } from "@/lib/fcm";
 import { drainEmailOutbox } from "@/lib/email-outbox";
+import { errorToMessage } from "@/lib/action-error";
 
 type AdminClient = ReturnType<typeof createAdminClient>;
 
@@ -46,7 +47,7 @@ export function isBackgroundJob(value: unknown): value is BackgroundJobKey {
 }
 
 function shortError(error: unknown): string {
-  const message = error instanceof Error ? error.message : String(error);
+  const message = errorToMessage(error);
   return message.slice(0, 200);
 }
 

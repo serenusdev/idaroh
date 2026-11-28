@@ -111,7 +111,7 @@ export default function RegisterPage() {
               height={125}
             />
             <p className="text-sm text-muted-foreground text-center max-w-[220px] leading-relaxed">
-              Daftarkan akun Anda dan mulai bergabung dengan komunitas Pondok OS.
+              Daftarkan akun Anda dan mulai bergabung dengan komunitas IDAROH.
             </p>
           </div>
         )}
@@ -123,7 +123,7 @@ export default function RegisterPage() {
               P
             </div>
             <h2 className="font-headline-sm text-[22px] text-on-surface font-bold">
-              Pengajuan Akun Pondok OS
+              Pengajuan Akun IDAROH
             </h2>
             <p className="font-body-sm text-[13px] text-muted-foreground mt-1">
               Semua pengajuan akun diverifikasi pengurus. Kategori yang dipilih tidak memberikan hak akses secara otomatis.

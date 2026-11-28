@@ -995,7 +995,7 @@ export default function AdminUsersPage() {
         )}
 
         <p className="text-center font-mono text-[11px] text-muted-foreground mt-1">
-          Pondok OS IAM Module v2.0 • Sesuai standar ISO/IEC 27001 Access Control
+          IDAROH IAM Module v2.0 • Sesuai standar ISO/IEC 27001 Access Control
         </p>
       </div>
 

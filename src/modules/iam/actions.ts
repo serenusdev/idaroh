@@ -625,7 +625,7 @@ export async function approveAccountApplicationAction(
         await sendPushToUsers([request.auth_user_id], {
           type: "ACCOUNT_APPROVED",
           title: "Akun Disetujui",
-          body: "Selamat, akun Anda sudah aktif. Silakan login ke Pondok OS.",
+          body: "Selamat, akun Anda sudah aktif. Silakan login ke IDAROH.",
           url: "/login",
           referenceId: request.auth_user_id,
         });
@@ -638,8 +638,8 @@ export async function approveAccountApplicationAction(
     try {
       const { error: outboxError } = await supabase.from("email_outbox").upsert({
         recipient: request.email,
-        subject: "Permohonan Akun Pondok OS Anda Telah Disetujui",
-        body_text: `Yth. ${request.full_name},\n\nPermohonan akun Pondok OS Anda telah disetujui dengan peran '${normalizeRole(assignedRole) || assignedRole}'.\n\nSilakan login ke aplikasi untuk mulai menggunakan layanan.\n\nTerima kasih.`,
+        subject: "Permohonan Akun IDAROH Anda Telah Disetujui",
+        body_text: `Yth. ${request.full_name},\n\nPermohonan akun IDAROH Anda telah disetujui dengan peran '${normalizeRole(assignedRole) || assignedRole}'.\n\nSilakan login ke aplikasi untuk mulai menggunakan layanan.\n\nTerima kasih.`,
         reference_id: applicantId,
         reference_type: "account_request_approved",
         status: "pending",
@@ -719,8 +719,8 @@ export async function rejectAccountApplicationAction(
       const rejectedRecord = rejected[0];
       const { error: outboxError } = await supabase.from("email_outbox").upsert({
         recipient: rejectedRecord.email,
-        subject: "Permohonan Akun Pondok OS Anda Belum Dapat Disetujui",
-        body_text: `Yth. ${rejectedRecord.full_name},\n\nMohon maaf, permohonan akun Pondok OS Anda belum dapat disetujui saat ini.\n\nAlasan: ${reason}\n\nJika ada pertanyaan, silakan hubungi administrator pondok.\n\nTerima kasih.`,
+        subject: "Permohonan Akun IDAROH Anda Belum Dapat Disetujui",
+        body_text: `Yth. ${rejectedRecord.full_name},\n\nMohon maaf, permohonan akun IDAROH Anda belum dapat disetujui saat ini.\n\nAlasan: ${reason}\n\nJika ada pertanyaan, silakan hubungi administrator pondok.\n\nTerima kasih.`,
         reference_id: applicantId,
         reference_type: "account_request_rejected",
         status: "pending",

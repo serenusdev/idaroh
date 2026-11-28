@@ -14,6 +14,6 @@ SELECT has_function('public','refresh_gate_pass_overdue',ARRAY[]::text[],'overdu
 SELECT ok((SELECT relrowsecurity FROM pg_class WHERE oid='public.gate_passes'::regclass),'gate pass RLS enabled');
 SELECT ok(NOT has_table_privilege('anon','public.gate_passes','SELECT'),'anon cannot select gate passes');
 SELECT ok(has_table_privilege('authenticated','public.gate_passes','SELECT'),'authenticated select is RLS-gated');
-SELECT ok(has_table_privilege('authenticated','public.gate_passes','INSERT'),'authenticated insert is RLS-gated');
+SELECT ok(NOT has_table_privilege('authenticated','public.gate_passes','INSERT'),'authenticated direct insert is revoked; requests use RPC');
 SELECT * FROM finish();
 ROLLBACK;

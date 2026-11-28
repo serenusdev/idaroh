@@ -1,4 +1,4 @@
-# Pondok OS (IDAROH)
+# IDAROH
 
 Sistem operasi internal pondok pesantren: presensi, laporan harian, tugas & proyek,
 jadwal & pengumuman, resource library, direktori tim, serta administrasi & audit trail.

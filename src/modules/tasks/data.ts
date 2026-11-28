@@ -16,7 +16,7 @@ export const INITIAL_PROJECTS: ProjectItem[] = [
   {
     id: "proj-database",
     name: "Fondasi Database & Arsitektur",
-    description: "Migrasi skema PostgreSQL dan RLS Supabase untuk seluruh modul Pondok OS.",
+    description: "Migrasi skema PostgreSQL dan RLS Supabase untuk seluruh modul IDAROH.",
     teamName: "Sentra Digital",
     status: "active",
     totalTasks: 6,

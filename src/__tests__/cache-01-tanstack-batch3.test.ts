@@ -274,8 +274,8 @@ describe("CACHE-01 Batch 3 — what the manual hook did by construction has to b
     const users = readOrEmpty("src/app/(app)/admin/users/page.tsx");
     // A `null` key meant "do not fetch"; `enabled` is the same decision, so the SA-only gates stay
     // SA-only. Widening them here would be a permission change (§3 needs its own 5-layer sync).
-    expect(notifications).toMatch(/enabled: user\.role === "super_admin"/);
-    expect(cron).toMatch(/enabled: user\.role === "super_admin"/);
+    expect(notifications).toMatch(/enabled: hasAnyRole\(user, \["super_admin"\]\)/);
+    expect(cron).toMatch(/enabled: hasAnyRole\(user, \["super_admin"\]\)/);
     expect(users).toMatch(/enabled: canDecideIam/);
   });
 

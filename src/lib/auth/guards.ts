@@ -1,5 +1,6 @@
 import { resolveIdentity } from './session';
 import { UserProfile, UserRole } from './types';
+import { hasAnyRole } from './role-utils';
 
 export interface AuthGuardOptions {
   // Permit actions that must run before AAL2: logout, MFA enroll/challenge, recovery.
@@ -41,9 +42,7 @@ export async function requireAuthUser(options?: AuthGuardOptions): Promise<UserP
 export async function requireRole(allowedRoles: UserRole[], options?: AuthGuardOptions): Promise<UserProfile> {
   const user = await requireAuthUser(options);
 
-  const hasRole = allowedRoles.some(
-    (role) => user.role === role || user.roles?.includes(role)
-  );
+  const hasRole = hasAnyRole(user, allowedRoles);
 
   if (!hasRole) {
     throw new Error(

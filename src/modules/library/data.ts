@@ -45,7 +45,7 @@ export const INITIAL_RESOURCES: ResourceItem[] = [
     name: "Next.js App Router Blueprint",
     slug: "nextjs-app-router-blueprint",
     description:
-      "Struktur folder standar Pondok OS dengan Tailwind CSS, Server Actions teroptimasi, font Hanken Grotesk, dan kepatuhan Safe Area iOS/Android.",
+      "Struktur folder standar IDAROH dengan Tailwind CSS, Server Actions teroptimasi, font Hanken Grotesk, dan kepatuhan Safe Area iOS/Android.",
     category: "Frontend & UI",
     categorySlug: "frontend-ui",
     officialUrl: "https://nextjs.org/docs",
@@ -73,7 +73,7 @@ export const INITIAL_RESOURCES: ResourceItem[] = [
     name: "Figma UI Kit Clinic Pearl",
     slug: "figma-pondok-clinic-pearl",
     description:
-      "Token desain resmi, tipografi Hanken Grotesk, spek ikon Google Material Symbols, dan komponen mobile shell Pondok OS.",
+      "Token desain resmi, tipografi Hanken Grotesk, spek ikon Google Material Symbols, dan komponen mobile shell IDAROH.",
     category: "Media & Desain",
     categorySlug: "media-desain",
     officialUrl: "https://figma.com/@pondok-os",
@@ -89,7 +89,7 @@ export const INITIAL_RESOURCES: ResourceItem[] = [
     howToUse: "Gunakan token warna Clinic Pearl & Teal (#005451, #f2fbff) untuk semua mock-up operasional.",
     workflowExamples: "Komponen button 44px–52px untuk touch target ramah smartphone.",
     limitationsCautions: "Jangan memakai warna gradien mencolok di latar belakang tabel data atau form operasional.",
-    officialSources: "Spesifikasi design.md repositori Pondok OS.",
+    officialSources: "Spesifikasi docs/design/design.md repositori IDAROH.",
     documentationStatus: "Disetujui Dewan Desain Yayasan",
   },
   {

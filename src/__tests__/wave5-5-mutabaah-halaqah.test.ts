@@ -16,7 +16,7 @@ describe("Wave 5.5 dual-track mutabaah and halaqah", () => {
 
   it("uses server actions and never accepts recorded_by or ustadz_id from the client", () => {
     const actions = read("src/modules/mutabaah/actions.ts");
-    expect(actions).toContain('supabase.rpc("save_mutabaah_log"');
+    expect(actions).toContain('supabase.rpc("save_mutabaah_log_for_date"');
     expect(actions).toContain('supabase.rpc("save_halaqah_log"');
     expect(actions).not.toContain("recorded_by:");
     expect(actions).not.toContain("ustadz_id:");

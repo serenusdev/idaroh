@@ -18,7 +18,7 @@ function forwardToDrain(scope: string, correlationId: string, error: unknown): v
     kind: "query_error",
     scope,
     correlationId,
-    message: error instanceof Error ? error.message : String(error),
+    message: errorToMessage(error),
     at: new Date().toISOString(),
   });
   void fetch(url, {
@@ -35,3 +35,5 @@ export function throwQueryError(scope: string, error: unknown): never {
   forwardToDrain(scope, correlationId, error);
   throw new QueryError("Data gagal dimuat. Coba lagi atau hubungi administrator", correlationId);
 }
+import { errorToMessage } from "@/lib/action-error";
+

@@ -6,7 +6,9 @@ import { useIdentity } from "@/components/auth/identity-context";
 import { UnauthorizedState } from "@/components/ui/unauthorized-state";
 import { cacheKeys } from "@/lib/cache-keys";
 import { getLiveTelemetryAction, type LiveTelemetry } from "@/modules/live-telemetry/actions";
+import { wibDateString } from "@/lib/time/wib";
 import { useLiveTelemetryRealtime } from "@/modules/live-telemetry/realtime";
+import { hasAnyRole } from "@/lib/auth/role-utils";
 
 const EMPTY: LiveTelemetry = {
   timezone: "Asia/Jakarta",
@@ -43,15 +45,17 @@ function TrendChart({ data }: { data: LiveTelemetry["attendanceTrend"] }) {
 
 export default function LiveTelemetryPage() {
   const { user } = useIdentity();
-  const allowed = user.role === "pengurus" || user.role === "super_admin" || user.roles?.some((role) => role === "pengurus" || role === "super_admin");
+  const allowed = hasAnyRole(user, ["pengurus", "super_admin"]);
   const query = useQuery({
     queryKey: cacheKeys.liveTelemetry(user),
     queryFn: getLiveTelemetryAction,
     enabled: allowed,
     staleTime: 15_000,
+    retry: 1,
   });
   useLiveTelemetryRealtime(() => { void query.refetch(); });
-  const data = query.data ?? EMPTY;
+  const data = query.data?.ok ? query.data.data : EMPTY;
+  const failure = query.data && !query.data.ok ? query.data : null;
   const attendance = data.attendanceToday;
   const reportRate = data.reports.expectedToday ? Math.round((data.reports.submittedToday / data.reports.expectedToday) * 100) : 0;
 
@@ -61,13 +65,13 @@ export default function LiveTelemetryPage() {
     <main className="w-full max-w-6xl mx-auto space-y-6 pb-20" data-ui="live-telemetry-screen">
       <header className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
         <div><h1 className="text-2xl sm:text-3xl font-semibold tracking-tight text-on-surface">Telemetry operasional langsung</h1><p className="text-base text-muted-foreground mt-2">Presensi, tugas, dan kepatuhan laporan diperbarui otomatis. Semua waktu mengikuti {data.timezone}.</p></div>
-        <div className="text-sm text-muted-foreground tabular-nums">Hari server: {data.today || "memuat…"}</div>
+        <div className="text-sm text-muted-foreground tabular-nums">Hari server: {data.today || `${wibDateString()} (dari perangkat)`}</div>
       </header>
 
-      {query.error && <div role="alert" className="rounded-xl border border-error/30 bg-error-container/30 p-4 text-sm text-on-surface">Telemetry gagal dimuat. Periksa koneksi lalu coba lagi.</div>}
+      {(query.error || failure) && <div role="alert" aria-live="polite" className="rounded-xl border border-error/30 bg-error-container/30 p-4 text-sm text-on-surface">{failure?.message ?? "Telemetry gagal dimuat. Periksa koneksi lalu coba lagi."} <button type="button" className="ml-2 underline" onClick={() => void query.refetch()}>Coba lagi</button></div>}
       {query.isLoading && <p className="text-sm text-muted-foreground" aria-live="polite">Memuat metrik terbaru…</p>}
 
-      {!query.error && !query.isLoading && <>
+      {!query.error && !failure && !query.isLoading && <>
         <section aria-labelledby="attendance-heading" className="space-y-3"><div className="flex items-center justify-between"><h2 id="attendance-heading" className="text-xl font-semibold text-on-surface">Presensi hari ini</h2><span className="text-sm text-muted-foreground">Populasi aktif: {attendance.population}</span></div><div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3"><Metric label="Tepat waktu" value={attendance.present} /><Metric label="Masa toleransi" value={attendance.grace} tone="text-warning-foreground" /><Metric label="Terlambat" value={attendance.late} tone="text-error" /><Metric label="Izin" value={attendance.excused} /><Metric label="Sakit" value={attendance.sick} /><Metric label="Belum presensi" value={attendance.noCheckin} tone="text-muted-foreground" /></div></section>
 
         <section className="grid lg:grid-cols-[1.4fr_1fr] gap-4"><div className="rounded-xl border border-border bg-card p-5"><div className="flex items-start justify-between mb-5"><div><h2 className="text-xl font-semibold text-on-surface">Tren presensi</h2><p className="text-sm text-muted-foreground mt-1">30 hari terakhir · batang tersusun per status</p></div><span className="text-sm text-muted-foreground">Live</span></div><TrendChart data={data.attendanceTrend} /><div className="mt-6 pt-5 border-t border-border"><p className="text-sm font-semibold text-on-surface mb-3">7 hari terakhir</p><TrendChart data={data.attendanceTrend7Days} /></div></div><div className="rounded-xl border border-border bg-card p-5 space-y-4"><h2 className="text-xl font-semibold text-on-surface">Ringkasan tindak lanjut</h2><div className="flex items-end justify-between"><div><p className="text-sm text-muted-foreground">Laporan terkirim hari ini</p><p className="text-3xl font-semibold text-primary tabular-nums">{reportRate}%</p></div><p className="text-sm text-muted-foreground tabular-nums">{data.reports.submittedToday}/{data.reports.expectedToday}</p></div><div className="h-2 rounded-full bg-muted overflow-hidden"><div className="h-full bg-primary rounded-full" style={{ width: `${Math.min(100, reportRate)}%` }} /></div><div className="grid grid-cols-2 gap-3"><Metric label="Terlambat laporan" value={data.reports.lateToday} tone="text-warning-foreground" /><Metric label="Backlog review" value={data.reports.reviewBacklog} tone="text-error" /></div><p className="text-sm text-muted-foreground">Kepatuhan 7 hari: <strong className="text-on-surface">{data.reports.compliance7Days}</strong> laporan · 30 hari: <strong className="text-on-surface">{data.reports.compliance30Days}</strong> laporan</p></div></section>
